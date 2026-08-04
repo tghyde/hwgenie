@@ -190,6 +190,7 @@ def build_html(
         )
 
     title = f"{re.sub('<[^>]+>', '', heading)} — {re.sub('<[^>]+>', '', course_line)}"
+    title = re.sub(r"\$", "", title)  # <title> is plain text; drop math delimiters
     if include_solutions:
         title += " (Solutions)"
 

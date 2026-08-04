@@ -30,7 +30,7 @@ def test_problem_numbering_and_task_span():
         "\\begin{problem}\nSecond.\n\\end{problem}"
     )
     assert "Problem 3.1" in html and "Problem 3.2" in html
-    assert '<span class="task">Prove $1+1=2$.</span>' in html
+    assert '<span class="task">Prove <span class="nw">$1+1=2$.</span></span>' in html
 
 
 def test_solutions_toggle():

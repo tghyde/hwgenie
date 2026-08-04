@@ -95,3 +95,43 @@ def test_unresolved_ref_warns():
     conv, html = convert("See \\ref{nope}.")
     assert "See ??." in html
     assert any("Unresolved" in w for w in conv.warnings)
+
+
+def test_punctuation_clings_to_inline_math():
+    _c, html = convert("We know $x = 1$, so $y = 2$.")
+    assert '<span class="nw">$x = 1$,</span>' in html
+    assert '<span class="nw">$y = 2$.</span>' in html
+
+
+def test_qedhere_text_mode_suppresses_tombstone():
+    _c, html = convert(
+        "\\begin{problem}\nP.\n\\begin{solution}\n"
+        "\\begin{enumerate}\n\\item[(c)] $(q,r) = (19,14)$\\qedhere\n"
+        "\\end{enumerate}\n\\end{solution}\n\\end{problem}"
+    )
+    assert '<span class="qedbox"></span>' in html
+    assert 'class="solution-body has-qedhere"' in html
+
+
+def test_qedhere_in_display_math_becomes_tag():
+    _c, html = convert(
+        "\\begin{problem}\nP.\n\\begin{solution}\nSo\n"
+        "\\[\n(-51,-2), (42,84).\\qedhere\n\\]\n\\end{solution}\n\\end{problem}"
+    )
+    assert "\\qedhere" not in html
+    assert "\\tag*{$\\square$}" in html
+    assert 'has-qedhere' in html
+
+
+def test_qedhere_in_align_star():
+    _c, html = convert(
+        "\\begin{solution}\n\\begin{align*}\nx &= 1\\qedhere\n\\end{align*}\n"
+        "\\end{solution}"
+    )
+    assert "\\end{aligned} \\tag*{$\\square$}\\]" in html
+
+
+def test_problem_is_collapsible_details():
+    _c, html = convert("\\begin{problem}\nDo.\n\\end{problem}")
+    assert '<details class="problem" open id="problem-1.1">' in html
+    assert "<summary><h2" in html

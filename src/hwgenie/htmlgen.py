@@ -141,6 +141,7 @@ class HtmlConverter:
         self.eq_counter = 0
         self._label_ctx: List[Tuple[str, str]] = []
         self._collecting = False
+        self._saw_qedhere = False
         self.theorems = self._parse_newtheorems()
         self.eq_prefix = self._parse_eq_prefix()
 
@@ -250,7 +251,39 @@ class HtmlConverter:
             flow.inline(SPECIALS_MAP.get(n.specials_chars, esc(n.specials_chars)))
             return i + 1
         if isinstance(n, LatexMathNode):
-            flow.inline(esc(self.text[n.pos : n.pos + n.len]))
+            raw = self.text[n.pos : n.pos + n.len]
+            if "\\qedhere" in raw:
+                self._saw_qedhere = True
+                raw = raw.replace("\\qedhere", "")
+                if raw.lstrip().startswith("\\["):
+                    inner = raw[raw.find("\\[") + 2 : raw.rfind("\\]")]
+                    raw = f"\\[{inner.rstrip()} \\tag*{{$\\square$}}\\]"
+                    flow.inline(esc(raw))
+                    return i + 1
+                flow.inline(esc(raw) + '<span class="qedbox"></span>')
+                return i + 1
+            math_html = esc(raw)
+            # Keep trailing punctuation glued to inline math so it can't wrap
+            # onto its own line (KaTeX spans are inline-block).
+            nxt = nodes[i + 1] if i + 1 < len(nodes) else None
+            if (
+                n.displaytype == "inline"
+                and isinstance(nxt, LatexCharsNode)
+                and nxt.chars
+            ):
+                m = re.match(r"[.,;:!?)\]'’\"]+", nxt.chars)
+                if m:
+                    flow.inline(
+                        f'<span class="nw">{math_html}{esc(m.group(0))}</span>'
+                    )
+                    rest = nxt.chars[m.end():]
+                    parts = re.split(r"\n[ \t]*\n(?:[ \t]*\n)*", rest)
+                    for k, part in enumerate(parts):
+                        if k:
+                            flow.parbreak()
+                        flow.inline(esc(part))
+                    return i + 2
+            flow.inline(math_html)
             return i + 1
         if isinstance(n, LatexGroupNode):
             self.walk(n.nodelist, flow)
@@ -407,6 +440,10 @@ class HtmlConverter:
         if name in ("quad", "qquad"):
             flow.inline("&emsp;")
             return i + 1
+        if name == "qedhere":
+            self._saw_qedhere = True
+            flow.inline('<span class="qedbox"></span>')
+            return i + 1
         if name in self.theorems:
             self.warnings.append(f"\\{name} macro shadowing theorem name; dropped.")
             return i + 1
@@ -486,27 +523,36 @@ class HtmlConverter:
             self.walk(n.nodelist, inner)
             self._label_ctx.pop()
             flow.block(
-                f'<section class="problem" id="problem-{_anchor_slug(num)}">\n'
-                f'<h2 class="problem-title">Problem {esc(num)}</h2>\n'
-                f"{inner.result()}\n</section>"
+                f'<details class="problem" open id="problem-{_anchor_slug(num)}">\n'
+                f'<summary><h2 class="problem-title">Problem {esc(num)}</h2>'
+                "</summary>\n"
+                f"{inner.result()}\n</details>"
             )
         elif name in ("solution", "solution*"):
             if self.include_solutions:
+                outer_qed = self._saw_qedhere
+                self._saw_qedhere = False
                 inner = Flow()
                 self.walk(n.nodelist, inner)
+                cls = "solution-body has-qedhere" if self._saw_qedhere else "solution-body"
+                self._saw_qedhere = outer_qed
                 flow.block(
                     '<details class="solution" open><summary>Solution</summary>\n'
-                    f'<div class="solution-body">\n{inner.result()}\n</div></details>'
+                    f'<div class="{cls}">\n{inner.result()}\n</div></details>'
                 )
         elif name in self.theorems:
             flow.block(self._theorem_html(n))
         elif name == "proof":
+            outer_qed = self._saw_qedhere
+            self._saw_qedhere = False
             inner = Flow()
             self.walk(n.nodelist, inner)
+            cls = "proof has-qedhere" if self._saw_qedhere else "proof"
+            self._saw_qedhere = outer_qed
             body = _merge_head(
                 inner.result(), '<span class="proof-label">Proof.</span>'
             )
-            flow.block(f'<div class="proof">\n{body}\n</div>')
+            flow.block(f'<div class="{cls}">\n{body}\n</div>')
         elif name in ("enumerate", "itemize"):
             flow.block(self._list_html(n, ordered=(name == "enumerate")))
         elif name == "center":
@@ -731,23 +777,34 @@ class HtmlConverter:
         ]
         label_keys = re.findall(r"\\label\s*\{([^{}]*)\}", body)
         body = re.sub(r"\\label\s*\{[^{}]*\}", "", body)
+        has_qedhere = "\\qedhere" in body
+        if has_qedhere:
+            self._saw_qedhere = True
+            body = body.replace("\\qedhere", "")
         anchor = ""
+        qed_tag = ""
         if name == "equation":
             self.eq_counter += 1
             display = f"{self.eq_prefix}{self.eq_counter}"
             for key in label_keys:
                 self.labels[key.strip()] = ("eq", display)
+            if has_qedhere:
+                body = body.rstrip() + " \\;\\square"
             body = body.rstrip() + f" \\tag{{{display}}}"
             anchor = f' id="eq-{_anchor_slug(display)}"'
-        elif label_keys and not self._collecting:
-            self.warnings.append(
-                f"\\label in {{{name}}}: equation numbers in this environment "
-                "are not preserved in HTML; references will not resolve."
-            )
-        if inner_env:
-            tex = f"\\[\\begin{{{inner_env}}}{body}\\end{{{inner_env}}}\\]"
         else:
-            tex = f"\\[{body}\\]"
+            if label_keys and not self._collecting:
+                self.warnings.append(
+                    f"\\label in {{{name}}}: equation numbers in this "
+                    "environment are not preserved in HTML; references will "
+                    "not resolve."
+                )
+            if has_qedhere:
+                qed_tag = " \\tag*{$\\square$}"
+        if inner_env:
+            tex = f"\\[\\begin{{{inner_env}}}{body}\\end{{{inner_env}}}{qed_tag}\\]"
+        else:
+            tex = f"\\[{body}{qed_tag}\\]"
         return f'<div class="math-display"{anchor}>{esc(tex)}</div>'
 
 

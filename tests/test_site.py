@@ -85,6 +85,10 @@ def test_build_site_structure_and_gating(repo):
     assert 'ps/2/solutions.html' not in index
     assert index.count("Solutions not yet released") == 2
 
+    # download buttons and KaTeX (for math in titles) on the index
+    assert 'class="dl"' in index and 'download' in index
+    assert "katex" in index and "renderMathInElement" in index
+
     # solutions content only where released
     assert "Top secret answer 1" in (site / "ps/1/solutions.html").read_text()
     handout2 = (site / "ps/2/index.html").read_text()

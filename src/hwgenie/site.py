@@ -39,8 +39,11 @@ from .build import (
     make_variants,
     require_course_fields,
 )
+import json
+
 from .courseconfig import load_course_config
-from .htmltemplate import CSS, NAV_CSS
+from .htmltemplate import CSS, NAV_CSS, download_link, katex_block
+from .katexmacros import extract_macros
 from .metadata import Metadata, MetadataError, parse_metadata
 from . import texscan
 
@@ -129,14 +132,15 @@ def build_site(
         result.warnings.append("No course.yml found (or empty) in repo root.")
     _clean_out_dir(out)
 
+    macro_pool: Dict[str, str] = {}
     for src in discover_sources(source_root):
         try:
-            _build_assignment(src, cfg, out, compile_pdfs, today, result)
+            _build_assignment(src, cfg, out, compile_pdfs, today, result, macro_pool)
         except (BuildError, MetadataError) as e:
             result.errors.append(f"{src.relative_to(repo_root)}: {e}")
 
     result.assignments.sort(key=_sort_key)
-    index = render_index(cfg, result.assignments)
+    index = render_index(cfg, result.assignments, macro_pool)
     (out / "index.html").write_text(index, encoding="utf-8")
     return result
 
@@ -155,8 +159,11 @@ def _build_assignment(
     compile_pdfs: bool,
     today: Optional[date],
     result: SiteResult,
+    macro_pool: Optional[Dict[str, str]] = None,
 ) -> None:
     text = src.read_text(encoding="utf-8")
+    if macro_pool is not None:
+        macro_pool.update(extract_macros(text))
     meta = parse_metadata(texscan.mask_verbatim(text))
     meta.course = meta.course or cfg.get("course")
     meta.semester = meta.semester or cfg.get("semester")
@@ -196,8 +203,10 @@ def _build_assignment(
     dot = '<span class="sep-dot">·</span>'
     handout_nav = [
         home, dot,
-        f'<a href="problem-set-{n}.pdf">PDF</a>', dot,
+        f'<a href="problem-set-{n}.pdf">PDF</a>',
+        download_link(f"problem-set-{n}.pdf", "PDF"), dot,
         f'<a href="problem-set-{n}-submission.tex">LaTeX submission file</a>',
+        download_link(f"problem-set-{n}-submission.tex", "LaTeX submission file"),
     ]
     if released:
         handout_nav += [dot, '<a href="solutions.html">Solutions</a>']
@@ -211,6 +220,7 @@ def _build_assignment(
         sol_nav = [
             home, dot, '<a href="./">Handout</a>', dot,
             f'<a href="problem-set-{n}-solutions.pdf">Solutions PDF</a>',
+            download_link(f"problem-set-{n}-solutions.pdf", "solutions PDF"),
         ]
         build_html(
             variants["solutions_web"], meta, True, ps_dir / "solutions.html",
@@ -248,7 +258,6 @@ INDEX_CSS = """
   background: var(--card-bg);
   border: 1px solid var(--border);
   border-left: 4px solid var(--accent);
-  border-radius: 10px;
   padding: 1rem 1.25rem;
   margin: 1.1rem 0;
 }
@@ -271,7 +280,11 @@ INDEX_CSS = """
 """
 
 
-def render_index(cfg: Dict[str, str], assignments: List[AssignmentBuild]) -> str:
+def render_index(
+    cfg: Dict[str, str],
+    assignments: List[AssignmentBuild],
+    macros: Optional[Dict[str, str]] = None,
+) -> str:
     e = html_mod.escape
     course = cfg.get("course", "Course")
     title = cfg.get("title")
@@ -289,17 +302,20 @@ def render_index(cfg: Dict[str, str], assignments: List[AssignmentBuild]) -> str
         dot = '<span class="sep-dot">·</span>'
         links = [f'<a href="{a.rel_url}">View</a>', dot]
         slug = _slug(a.meta.number)
-        links += [f'<a href="{a.rel_url}problem-set-{slug}.pdf">PDF</a>', dot]
+        pdf_href = f"{a.rel_url}problem-set-{slug}.pdf"
+        sub_href = f"{a.rel_url}problem-set-{slug}-submission.tex"
+        links += [f'<a href="{pdf_href}">PDF</a>', download_link(pdf_href, "PDF"), dot]
         links += [
-            f'<a href="{a.rel_url}problem-set-{slug}-submission.tex">'
-            "LaTeX submission file</a>"
+            f'<a href="{sub_href}">LaTeX submission file</a>',
+            download_link(sub_href, "LaTeX submission file"),
         ]
         if a.released:
+            sol_pdf_href = f"{a.rel_url}problem-set-{slug}-solutions.pdf"
             links += [
                 dot,
                 f'<a href="{a.rel_url}solutions.html">Solutions</a>', dot,
-                f'<a href="{a.rel_url}problem-set-{slug}-solutions.pdf">'
-                "Solutions PDF</a>",
+                f'<a href="{sol_pdf_href}">Solutions PDF</a>',
+                download_link(sol_pdf_href, "solutions PDF"),
             ]
         else:
             links += [dot, '<span class="pending">Solutions not yet released</span>']
@@ -310,12 +326,15 @@ def render_index(cfg: Dict[str, str], assignments: List[AssignmentBuild]) -> str
         )
 
     body = "\n".join(cards) if cards else "<p>No assignments posted yet.</p>"
+    macros_json = json.dumps(macros or {}, ensure_ascii=False)
+    plain_heading = re.sub(r"\$", "", heading)
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{e(heading)} — {e(semester)}</title>
+<title>{e(plain_heading)} — {e(semester)}</title>
+{katex_block(macros_json)}
 <style>{CSS}{NAV_CSS}{INDEX_CSS}</style>
 </head>
 <body>

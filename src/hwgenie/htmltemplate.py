@@ -92,14 +92,28 @@ hr.sep {
 .task { color: var(--accent); }
 .alert { color: var(--alert); }
 
-section.problem {
+details.problem {
   background: var(--card-bg);
   border: 1px solid var(--border);
   border-left: 4px solid var(--accent);
-  border-radius: 10px;
   padding: 1.1rem 1.25rem .6rem;
   margin: 1.9rem 0;
 }
+details.problem > summary {
+  cursor: pointer;
+  list-style: none;
+  margin: 0 0 .8rem;
+}
+details.problem > summary::-webkit-details-marker { display: none; }
+details.problem > summary::before {
+  content: "▾";
+  color: var(--accent);
+  margin-right: .5em;
+  display: inline-block;
+  transition: transform .15s;
+}
+details.problem:not([open]) > summary::before { transform: rotate(-90deg); }
+details.problem:not([open]) > summary { margin-bottom: .3rem; }
 .problem-title {
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   font-size: .95rem;
@@ -107,12 +121,12 @@ section.problem {
   letter-spacing: .06em;
   text-transform: uppercase;
   color: var(--accent);
-  margin: 0 0 .8rem;
+  margin: 0;
+  display: inline;
 }
 
 details.solution {
   background: var(--sol-bg);
-  border-radius: 10px;
   padding: .65rem .95rem;
   margin: 1.1rem 0;
 }
@@ -126,7 +140,28 @@ details.solution summary {
   color: var(--sol-accent);
 }
 .solution-body { margin-top: .6rem; }
-.solution-body > :last-child::after { content: "\\2002\\220E"; }
+/* amsthm-style tombstone: hollow square at the right margin of the last line */
+.solution-body > :last-child::after,
+.proof > :last-child::after {
+  content: "";
+  float: right;
+  width: .62em;
+  height: .62em;
+  margin-top: .35em;
+  margin-left: .5em;
+  border: 1.2px solid currentColor;
+}
+.solution-body.has-qedhere > :last-child::after,
+.proof.has-qedhere > :last-child::after { content: none; }
+.qedbox {
+  float: right;
+  width: .62em;
+  height: .62em;
+  margin-top: .35em;
+  margin-left: .5em;
+  border: 1.2px solid currentColor;
+}
+.nw { white-space: nowrap; }
 
 ol, ul { padding-left: 1.6rem; margin: 0 0 .9em; }
 li { margin-bottom: .45em; }
@@ -140,7 +175,6 @@ figure.fig {
 figure.fig img {
   max-width: min(100%, 620px);
   height: auto;
-  border-radius: 6px;
 }
 figure.fig figcaption {
   font-size: .9rem;
@@ -151,7 +185,6 @@ figure.fig figcaption {
 pre.code {
   background: var(--code-bg);
   border: 1px solid var(--border);
-  border-radius: 8px;
   padding: .9rem 1rem;
   overflow-x: auto;
   font-size: .82rem;
@@ -186,7 +219,6 @@ code {
 .thm-head { font-weight: 700; }
 .proof { margin: 1rem 0 1.2rem; }
 .proof-label { font-style: italic; }
-.proof > :last-child::after { content: "\\2002\\220E"; color: var(--muted); }
 .xref { color: var(--accent); text-decoration: none; }
 .xref:hover { text-decoration: underline; }
 sup.fn a { color: var(--accent); text-decoration: none; font-weight: 600; }
@@ -207,7 +239,78 @@ footer.doc {
 """
 
 
+DOWNLOAD_ICON = (
+    '<svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor" '
+    'aria-hidden="true"><path d="M8.75 1h-1.5v7.1L4.9 5.75 3.85 6.8 8 10.95 '
+    '12.15 6.8 11.1 5.75 8.75 8.1V1z"/>'
+    '<path d="M2.5 12.5h11V14h-11z"/></svg>'
+)
+
+
+def download_link(href: str, label: str) -> str:
+    return (
+        f'<a class="dl" href="{href}" download aria-label="Download {label}" '
+        f'title="Download {label}">{DOWNLOAD_ICON}</a>'
+    )
+
+
+def katex_block(macros_json: str) -> str:
+    """KaTeX assets + auto-render + wide-display auto-scaling."""
+    return f"""<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@{KATEX_VERSION}/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@{KATEX_VERSION}/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@{KATEX_VERSION}/dist/contrib/auto-render.min.js"></script>
+<script>
+document.addEventListener("DOMContentLoaded", function() {{
+  renderMathInElement(document.body, {{
+    delimiters: [
+      {{left: "$$", right: "$$", display: true}},
+      {{left: "\\\\[", right: "\\\\]", display: true}},
+      {{left: "$", right: "$", display: false}},
+      {{left: "\\\\(", right: "\\\\)", display: false}}
+    ],
+    macros: {macros_json},
+    throwOnError: false
+  }});
+  fitDisplays();
+}});
+function fitDisplays() {{
+  document.querySelectorAll(".katex-display").forEach(function(d) {{
+    d.style.fontSize = "";
+    if (d.scrollWidth > d.clientWidth + 1) {{
+      var scale = d.clientWidth / d.scrollWidth;
+      if (scale >= 0.7) d.style.fontSize = (scale * 100).toFixed(1) + "%";
+      // below 70% keep full size; the container scrolls horizontally
+    }}
+  }});
+}}
+var fitTimer = null;
+window.addEventListener("resize", function() {{
+  clearTimeout(fitTimer);
+  fitTimer = setTimeout(fitDisplays, 150);
+}});
+window.addEventListener("load", fitDisplays);
+if (document.fonts && document.fonts.ready) {{
+  document.fonts.ready.then(fitDisplays);
+}}
+if (window.ResizeObserver) {{
+  new ResizeObserver(function() {{
+    clearTimeout(fitTimer);
+    fitTimer = setTimeout(fitDisplays, 150);
+  }}).observe(document.body);
+}}
+</script>"""
+
+
 NAV_CSS = """
+.dl {
+  display: inline-flex;
+  align-items: center;
+  padding: .15rem .3rem;
+  border: 1px solid var(--border);
+  color: var(--accent);
+  vertical-align: baseline;
+}
+.dl:hover { border-color: var(--accent); }
 nav.site {
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   font-size: .85rem;
@@ -242,9 +345,7 @@ def render_page(
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{e(title)}</title>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@{KATEX_VERSION}/dist/katex.min.css">
-<script defer src="https://cdn.jsdelivr.net/npm/katex@{KATEX_VERSION}/dist/katex.min.js"></script>
-<script defer src="https://cdn.jsdelivr.net/npm/katex@{KATEX_VERSION}/dist/contrib/auto-render.min.js"></script>
+{katex_block(macros_json)}
 <style>{CSS}{NAV_CSS}</style>
 </head>
 <body>
@@ -258,20 +359,6 @@ def render_page(
 {body}
 <footer class="doc">Generated by hwgenie</footer>
 </main>
-<script>
-document.addEventListener("DOMContentLoaded", function() {{
-  renderMathInElement(document.body, {{
-    delimiters: [
-      {{left: "$$", right: "$$", display: true}},
-      {{left: "\\\\[", right: "\\\\]", display: true}},
-      {{left: "$", right: "$", display: false}},
-      {{left: "\\\\(", right: "\\\\)", display: false}}
-    ],
-    macros: {macros_json},
-    throwOnError: false
-  }});
-}});
-</script>
 </body>
 </html>
 """
