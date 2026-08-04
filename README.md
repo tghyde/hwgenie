@@ -49,6 +49,29 @@ cd hwgenie && python3 -m venv .venv && .venv/bin/pip install -e .
 .venv/bin/hwgenie build ...
 ```
 
+## Building a whole course site
+
+```
+hwgenie build-site <repo-root> [--out DIR] [--no-pdf] [--date YYYY-MM-DD]
+```
+
+Expects `course.yml` (course/title/semester/instructor) and `source/**/*.tex`
+in the repo root; produces a static site (default `site/`):
+
+```
+index.html            course home listing all assignments
+ps/N/                 handout HTML (+ images)
+ps/N/problem-set-N.pdf, problem-set-N-submission.tex
+ps/N/solutions.html, problem-set-N-solutions.pdf   (only once released)
+```
+
+Solutions release is controlled by the `solutions` metadata key per
+assignment: an ISO date (auto-releases that day), `manual` (hidden), or
+`released`. Unreleased solutions are not built into the site at all.
+`--date` overrides "today" for testing. A course repo template with a GitHub
+Actions workflow (build on push, daily rebuild for date releases, Pages
+deploy) lives in the course repos generated alongside this tool.
+
 ## Source file conventions
 
 **Metadata block** (new format — the old `%Problem Set Data` block still works):
