@@ -1,0 +1,16 @@
+[project]
+name = "hwgenie"
+version = "0.2.0"
+description = "Generate handout/submission/solutions files from a single LaTeX homework source"
+requires-python = ">=3.9"
+dependencies = ["pylatexenc>=2.10,<3"]
+
+[project.scripts]
+hwgenie = "hwgenie.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
