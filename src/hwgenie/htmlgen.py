@@ -10,7 +10,9 @@ from __future__ import annotations
 import html as html_mod
 import re
 import textwrap
-from typing import List, Optional, Tuple
+import unicodedata
+from collections import defaultdict
+from typing import Dict, List, Optional, Tuple
 
 from pylatexenc.latexwalker import (
     LatexCharsNode,
@@ -58,7 +60,8 @@ SKIP_MACROS = {
     "pagestyle": 1, "thispagestyle": 1,
     "setcounter": 2, "addtocounter": 2, "numberwithin": 2,
     "setlength": 2, "addtolength": 2,
-    "label": 1, "qed": 0, "pushQED": 1, "popQED": 0,
+    "qed": 0, "pushQED": 1, "popQED": 0,
+    "theoremstyle": 1,
     "!": 0, ";": 0, ":": 0,
 }
 
@@ -66,6 +69,21 @@ SPECIALS_MAP = {
     "--": "–", "---": "—", "~": "&nbsp;",
     "``": "“", "''": "”", "`": "‘", "'": "’",
 }
+
+# Accent macros: combining character applied to the next letter.
+ACCENT_MACROS = {
+    "'": "\u0301", "\"": "\u0308", "`": "\u0300", "^": "\u0302",
+    "~": "\u0303", "=": "\u0304", ".": "\u0307",
+    "u": "\u0306", "v": "\u030C", "c": "\u0327", "H": "\u030B",
+}
+
+# \newtheorem{name}[shared]{Label}  |  \newtheorem{name}{Label}[parent]
+# \newtheorem*{name}{Label}
+NEWTHEOREM_RE = re.compile(
+    r"\\newtheorem(\*?)\s*\{([^{}]+)\}\s*"
+    r"(?:\[([^\[\]]+)\]\s*)?\{([^{}]+)\}\s*(?:\[([^\[\]]+)\])?"
+)
+NUMBERWITHIN_RE = re.compile(r"\\numberwithin\s*\{equation\}\s*\{([^{}]+)\}")
 
 # Display-math environments: KaTeX supports the *inner* (aligned/gathered)
 # forms inside \[...\]; numbering is not preserved.
@@ -116,22 +134,92 @@ class HtmlConverter:
         self.warnings: List[str] = []
         self.images: List[str] = []
         self.title_lines: List[str] = []
+        self.footnotes: List[str] = []
+        self.labels: Dict[str, Tuple[str, str]] = {}  # key -> (kind, display)
         self.problem_counter = 0
+        self.counters: Dict[str, int] = defaultdict(int)
+        self.eq_counter = 0
+        self._label_ctx: List[Tuple[str, str]] = []
+        self._collecting = False
+        self.theorems = self._parse_newtheorems()
+        self.eq_prefix = self._parse_eq_prefix()
+
+    def _parse_newtheorems(self) -> Dict[str, Dict[str, Optional[str]]]:
+        thms: Dict[str, Dict[str, Optional[str]]] = {}
+        for m in NEWTHEOREM_RE.finditer(self.text):
+            star, name, shared, label, parent = m.groups()
+            if name in ("problem", "solution"):
+                continue  # handled specially
+            if star:
+                thms[name] = {"label": label, "counter": None, "parent": None}
+            elif shared:
+                owner = thms.get(shared, {})
+                counter = owner.get("counter", shared) or shared
+                thms[name] = {
+                    "label": label,
+                    "counter": counter,
+                    "parent": owner.get("parent"),
+                }
+            else:
+                thms[name] = {"label": label, "counter": name, "parent": parent}
+        return thms
+
+    def _parse_eq_prefix(self) -> str:
+        m = NUMBERWITHIN_RE.search(self.text)
+        sec = self.section or "1"
+        if not m:
+            return ""
+        if m.group(1) == "section":
+            return f"{sec}."
+        if m.group(1) == "subsection":
+            return f"{sec}.0."   # problem sets never increment subsections
+        return ""
 
     # ------------------------------------------------------------- top level
+
+    def _reset_pass_state(self) -> None:
+        self.warnings = []
+        self.images = []
+        self.title_lines = []
+        self.footnotes = []
+        self.problem_counter = 0
+        self.counters = defaultdict(int)
+        self.eq_counter = 0
+        self._label_ctx = []
 
     def convert(self) -> str:
         masked = texscan.mask_verbatim(self.text)
         nodes = texscan.parse_nodes(masked)
         doc = next(iter(texscan.iter_envs(nodes, ("document",))), None)
         body = doc.nodelist if doc is not None else nodes
+
+        # Pass 1: collect \label targets (numbers depend on document order).
+        self._collecting = True
+        self.walk(body, Flow())
+        # Pass 2: real conversion with all labels resolvable.
+        self._collecting = False
+        self._reset_pass_state()
         flow = Flow()
         self.walk(body, flow)
-        return flow.result()
+        html = flow.result()
+
+        if self.footnotes:
+            items = "\n".join(
+                f'<li id="fn-{k + 1}">{fn} '
+                f'<a href="#fnref-{k + 1}" class="fn-back" '
+                f'aria-label="Back to text">↩</a></li>'
+                for k, fn in enumerate(self.footnotes)
+            )
+            html += (
+                '\n<section class="footnotes"><hr class="sep">'
+                f"<ol>\n{items}\n</ol></section>"
+            )
+        return html
 
     def convert_fragment(self, s: str) -> str:
         """Convert a standalone LaTeX fragment; returns inline-ish HTML."""
         sub = HtmlConverter(s, self.include_solutions, self.section)
+        sub.labels = self.labels
         nodes = texscan.parse_nodes(texscan.mask_verbatim(s))
         flow = Flow()
         sub.walk(nodes, flow)
@@ -278,10 +366,90 @@ class HtmlConverter:
         if name == "item":
             self.warnings.append("\\item found outside a list; ignored.")
             return i + 1
+        if name in ACCENT_MACROS:
+            return self._accent(nodes, i, flow)
+        if name == "label":
+            args, j = self._macro_args(nodes, i, 1)
+            if args:
+                key = _group_text(args[0]).strip()
+                if self._label_ctx:
+                    self.labels[key] = self._label_ctx[-1]
+                elif key not in self.labels:
+                    self.warnings.append(
+                        f"\\label{{{key}}} outside a numbered environment; "
+                        "references to it will not resolve."
+                    )
+            return j
+        if name in ("ref", "eqref"):
+            args, j = self._macro_args(nodes, i, 1)
+            key = _group_text(args[0]).strip() if args else ""
+            target = self.labels.get(key)
+            if target is None:
+                if not self._collecting:
+                    self.warnings.append(f"Unresolved \\{name}{{{key}}} rendered as '??'.")
+                flow.inline("(??)" if name == "eqref" else "??")
+                return j
+            kind, display = target
+            anchor = f"{kind}-{_anchor_slug(display)}"
+            link = f'<a class="xref" href="#{anchor}">{esc(display)}</a>'
+            flow.inline(f"({link})" if name == "eqref" else link)
+            return j
+        if name == "footnote":
+            args, j = self._macro_args(nodes, i, 1)
+            if args:
+                content = self.convert_inline(args[0].nodelist)
+                self.footnotes.append(content)
+                k = len(self.footnotes)
+                flow.inline(
+                    f'<sup class="fn"><a href="#fn-{k}" id="fnref-{k}">{k}</a></sup>'
+                )
+            return j
+        if name in ("quad", "qquad"):
+            flow.inline("&emsp;")
+            return i + 1
+        if name in self.theorems:
+            self.warnings.append(f"\\{name} macro shadowing theorem name; dropped.")
+            return i + 1
 
         self.warnings.append(f"Unknown macro \\{name} dropped (content kept).")
         for a in self._parsed_group_args(n):
             self.walk(a.nodelist, flow)
+        return i + 1
+
+    def _accent(self, nodes, i: int, flow: Flow) -> int:
+        """Apply an accent macro (\\'e, \\\"o, ...) to the following letter."""
+        n = nodes[i]
+        combining = ACCENT_MACROS[n.macroname]
+        # pylatexenc parses the argument itself: a group ({E}) or a bare
+        # chars node (the single letter after \').
+        if n.nodeargd and n.nodeargd.argnlist:
+            for a in n.nodeargd.argnlist:
+                if isinstance(a, LatexGroupNode):
+                    inner = self.convert_inline(a.nodelist)
+                    flow.inline(_apply_accent(inner, combining))
+                    return i + 1
+                if isinstance(a, LatexCharsNode) and a.chars:
+                    flow.inline(
+                        _apply_accent(esc(a.chars[0]), combining)
+                        + esc(a.chars[1:])
+                    )
+                    return i + 1
+        j = i + 1
+        if j < len(nodes) and isinstance(nodes[j], LatexGroupNode):
+            inner = self.convert_inline(nodes[j].nodelist)
+            flow.inline(_apply_accent(inner, combining))
+            return j + 1
+        if j < len(nodes) and isinstance(nodes[j], LatexCharsNode) and nodes[j].chars:
+            chars = nodes[j].chars
+            flow.inline(_apply_accent(esc(chars[0]), combining))
+            rest = chars[1:]
+            if rest:
+                parts = re.split(r"\n[ \t]*\n(?:[ \t]*\n)*", rest)
+                for k, part in enumerate(parts):
+                    if k:
+                        flow.parbreak()
+                    flow.inline(esc(part))
+            return j + 1
         return i + 1
 
     def convert_inline(self, nodes) -> str:
@@ -313,10 +481,12 @@ class HtmlConverter:
                 if self.section
                 else str(self.problem_counter)
             )
+            self._label_ctx.append(("problem", num))
             inner = Flow()
             self.walk(n.nodelist, inner)
+            self._label_ctx.pop()
             flow.block(
-                f'<section class="problem" id="problem-{html_mod.escape(num)}">\n'
+                f'<section class="problem" id="problem-{_anchor_slug(num)}">\n'
                 f'<h2 class="problem-title">Problem {esc(num)}</h2>\n'
                 f"{inner.result()}\n</section>"
             )
@@ -328,6 +498,15 @@ class HtmlConverter:
                     '<details class="solution" open><summary>Solution</summary>\n'
                     f'<div class="solution-body">\n{inner.result()}\n</div></details>'
                 )
+        elif name in self.theorems:
+            flow.block(self._theorem_html(n))
+        elif name == "proof":
+            inner = Flow()
+            self.walk(n.nodelist, inner)
+            body = _merge_head(
+                inner.result(), '<span class="proof-label">Proof.</span>'
+            )
+            flow.block(f'<div class="proof">\n{body}\n</div>')
         elif name in ("enumerate", "itemize"):
             flow.block(self._list_html(n, ordered=(name == "enumerate")))
         elif name == "center":
@@ -485,6 +664,64 @@ class HtmlConverter:
             lang = f' class="language-{lm.group(1).lower()}"'
         return f'<pre class="code"><code{lang}>{esc(content)}</code></pre>'
 
+    def _theorem_html(self, n) -> str:
+        spec = self.theorems[n.environmentname]
+        display = None
+        if spec["counter"]:
+            self.counters[spec["counter"]] += 1
+            count = self.counters[spec["counter"]]
+            display = (
+                f"{self.section}.{count}"
+                if spec["parent"] == "section" and self.section
+                else str(count)
+            )
+        head = esc(spec["label"]) + (f" {esc(display)}" if display else "")
+        title = ""
+        # pylatexenc may have parsed [Title] as an environment argument.
+        if n.nodeargd and n.nodeargd.argnlist:
+            for a in n.nodeargd.argnlist:
+                if a is not None and getattr(a, "nodelist", None):
+                    title = self.convert_inline(a.nodelist).strip()
+                    break
+        if title:
+            content_nodes = [c for c in (n.nodelist or []) if c is not None]
+        else:
+            content_nodes, title = self._extract_bracket_title(n.nodelist)
+        if title:
+            head += f" ({title})"
+        anchor = f' id="thm-{_anchor_slug(display)}"' if display else ""
+        self._label_ctx.append(("thm", display or spec["label"]))
+        inner = Flow()
+        self.walk(content_nodes, inner)
+        self._label_ctx.pop()
+        body = _merge_head(
+            inner.result(), f'<span class="thm-head">{head}.</span>'
+        )
+        return f'<div class="thmblock"{anchor}>\n{body}\n</div>'
+
+    def _extract_bracket_title(self, nodelist):
+        """Pull a leading [Optional Title] out of an environment's content."""
+        nodes = [c for c in (nodelist or []) if c is not None]
+        k = 0
+        while (
+            k < len(nodes)
+            and isinstance(nodes[k], LatexCharsNode)
+            and not nodes[k].chars.strip()
+        ):
+            k += 1
+        if k < len(nodes) and isinstance(nodes[k], LatexCharsNode):
+            chars = nodes[k].chars.lstrip()
+            if chars.startswith("["):
+                close = chars.find("]")
+                if close >= 0:
+                    title = esc(chars[1:close].strip())
+                    rest = LatexCharsNode(
+                        chars=chars[close + 1 :],
+                        pos=nodes[k].pos, len=nodes[k].len,
+                    )
+                    return nodes[:k] + [rest] + nodes[k + 1 :], title
+        return nodes, ""
+
     def _math_env_html(self, n) -> str:
         name = n.environmentname
         inner_env = MATH_ENVS[name]
@@ -492,11 +729,26 @@ class HtmlConverter:
         body = env_text[
             len(f"\\begin{{{name}}}") : env_text.rfind(f"\\end{{{name}}}")
         ]
+        label_keys = re.findall(r"\\label\s*\{([^{}]*)\}", body)
+        body = re.sub(r"\\label\s*\{[^{}]*\}", "", body)
+        anchor = ""
+        if name == "equation":
+            self.eq_counter += 1
+            display = f"{self.eq_prefix}{self.eq_counter}"
+            for key in label_keys:
+                self.labels[key.strip()] = ("eq", display)
+            body = body.rstrip() + f" \\tag{{{display}}}"
+            anchor = f' id="eq-{_anchor_slug(display)}"'
+        elif label_keys and not self._collecting:
+            self.warnings.append(
+                f"\\label in {{{name}}}: equation numbers in this environment "
+                "are not preserved in HTML; references will not resolve."
+            )
         if inner_env:
             tex = f"\\[\\begin{{{inner_env}}}{body}\\end{{{inner_env}}}\\]"
         else:
             tex = f"\\[{body}\\]"
-        return f'<div class="math-display">{esc(tex)}</div>'
+        return f'<div class="math-display"{anchor}>{esc(tex)}</div>'
 
 
 # ------------------------------------------------------------------- helpers
@@ -515,6 +767,31 @@ def _group_text(group) -> str:
 def _unwrap_single_p(html: str) -> str:
     m = re.fullmatch(r"<p>(.*)</p>", html, re.DOTALL)
     return m.group(1) if m and "<p>" not in m.group(1) else html
+
+
+def _anchor_slug(s: Optional[str]) -> str:
+    return re.sub(r"[^A-Za-z0-9.-]+", "-", s or "").strip("-")
+
+
+def _apply_accent(inner: str, combining: str) -> str:
+    """Apply a combining accent to the first character of (possibly escaped)
+    HTML text, normalizing to a precomposed character."""
+    if not inner:
+        return inner
+    m = re.match(r"&[a-zA-Z]+;|&#\d+;|.", inner, re.DOTALL)
+    first = m.group(0)
+    rest = inner[m.end():]
+    if len(first) == 1:
+        first = unicodedata.normalize("NFC", first + combining)
+        return first + rest
+    return inner
+
+
+def _merge_head(body_html: str, head_html: str) -> str:
+    """Inject a bold run-in heading into the first paragraph of a block."""
+    if body_html.startswith("<p>"):
+        return body_html.replace("<p>", f"<p>{head_html} ", 1)
+    return f"<p>{head_html}</p>\n{body_html}"
 
 
 def _alt_from_filename(fname: str) -> str:

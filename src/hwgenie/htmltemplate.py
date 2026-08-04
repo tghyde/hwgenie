@@ -178,6 +178,22 @@ code {
 .al-center { text-align: center; }
 .al-right { text-align: right; }
 
+.thmblock {
+  border-left: 3px solid var(--muted);
+  padding: .15rem 0 .15rem 1rem;
+  margin: 1.2rem 0;
+}
+.thm-head { font-weight: 700; }
+.proof { margin: 1rem 0 1.2rem; }
+.proof-label { font-style: italic; }
+.proof > :last-child::after { content: "\\2002\\220E"; color: var(--muted); }
+.xref { color: var(--accent); text-decoration: none; }
+.xref:hover { text-decoration: underline; }
+sup.fn a { color: var(--accent); text-decoration: none; font-weight: 600; }
+section.footnotes { font-size: .9rem; color: var(--muted); }
+section.footnotes ol { padding-left: 1.3rem; }
+.fn-back { text-decoration: none; }
+
 .math-display { overflow-x: auto; }
 .katex-display { overflow-x: auto; overflow-y: hidden; padding: .2rem 0; }
 

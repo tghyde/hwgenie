@@ -1,0 +1,97 @@
+from hwgenie.htmlgen import HtmlConverter
+
+PREAMBLE = (
+    "\\newtheorem{theorem}{Theorem}[section]\n"
+    "\\newtheorem{proposition}[theorem]{Proposition}\n"
+    "\\newtheorem{definition}[theorem]{Definition}\n"
+    "\\newtheorem*{remark}{Remark}\n"
+    "\\numberwithin{equation}{subsection}\n"
+)
+
+
+def convert(body: str, section="1"):
+    conv = HtmlConverter(
+        PREAMBLE + "\\begin{document}\n" + body + "\n\\end{document}",
+        include_solutions=True,
+        section=section,
+    )
+    return conv, conv.convert()
+
+
+def test_theorem_numbering_shared_counters():
+    _c, html = convert(
+        "\\begin{theorem}\nA.\n\\end{theorem}\n"
+        "\\begin{definition}\nB.\n\\end{definition}\n"
+        "\\begin{proposition}\nC.\n\\end{proposition}\n"
+        "\\begin{remark}\nD.\n\\end{remark}"
+    )
+    assert '<span class="thm-head">Theorem 1.1.</span>' in html
+    assert '<span class="thm-head">Definition 1.2.</span>' in html
+    assert '<span class="thm-head">Proposition 1.3.</span>' in html
+    assert '<span class="thm-head">Remark.</span>' in html
+
+
+def test_theorem_optional_title_and_ref():
+    _c, html = convert(
+        "\\begin{theorem}[Division with Remainder]\n\\label{thm div}\nStatement.\n"
+        "\\end{theorem}\n"
+        "By Theorem \\ref{thm div} we win."
+    )
+    assert "Theorem 1.1 (Division with Remainder)." in html
+    assert 'id="thm-1.1"' in html
+    assert 'By Theorem <a class="xref" href="#thm-1.1">1.1</a> we win.' in html
+
+
+def test_forward_reference_resolves():
+    _c, html = convert(
+        "See Theorem \\ref{later}.\n"
+        "\\begin{theorem}\n\\label{later}\nX.\n\\end{theorem}"
+    )
+    assert 'See Theorem <a class="xref" href="#thm-1.1">1.1</a>.' in html
+
+
+def test_equation_numbering_and_eqref():
+    conv, html = convert(
+        "\\begin{equation}\n\\label{eqn logic ex}\n(P \\wedge Q) \\Rightarrow R.\n"
+        "\\end{equation}\n"
+        "So \\eqref{eqn logic ex} is read aloud."
+    )
+    assert "\\tag{1.0.1}" in html
+    assert 'id="eq-1.0.1"' in html
+    assert "\\label" not in html
+    assert '(<a class="xref" href="#eq-1.0.1">1.0.1</a>) is read aloud' in html
+
+
+def test_proof_block():
+    _c, html = convert("\\begin{proof}\nObvious.\n\\end{proof}")
+    assert '<div class="proof">' in html
+    assert '<span class="proof-label">Proof.</span> Obvious.' in html
+
+
+def test_footnotes():
+    _c, html = convert(
+        "Axioms are nice.\\footnote{Said \\textbf{everyone}.} More text."
+    )
+    assert '<sup class="fn"><a href="#fn-1" id="fnref-1">1</a></sup>' in html
+    assert '<li id="fn-1">Said <strong>everyone</strong>.' in html
+
+
+def test_accents():
+    _c, html = convert("Garc\\'ia M\\'arquez and G\\\"odel and \\'{E}cole.")
+    assert "García Márquez" in html
+    assert "Gödel" in html
+    assert "École" in html
+
+
+def test_problem_label_ref():
+    _c, html = convert(
+        "\\begin{problem}\n\\label{prob one}\nDo it.\n\\end{problem}\n"
+        "Recall Problem \\ref{prob one}."
+    )
+    assert 'Recall Problem <a class="xref" href="#problem-1.1">1.1</a>.' in html
+
+
+def test_unresolved_ref_warns():
+    conv, html = convert("See \\ref{nope}.")
+    assert "See ??." in html
+    assert any("Unresolved" in w for w in conv.warnings)
