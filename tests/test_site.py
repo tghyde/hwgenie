@@ -77,7 +77,8 @@ def test_build_site_structure_and_gating(repo):
     assert not (site / "ps/2/solutions.html").exists()
     assert not (site / "ps/3/solutions.html").exists()
     assert (site / "ps/2/index.html").exists()
-    assert (site / "ps/2/problem-set-2-submission.tex").exists()
+    # descriptive download file names
+    assert (site / "ps/2/PS2-submission-Math261-Fall2025.tex").exists()
     assert (site / ".nojekyll").exists()
 
     # index links reflect release state
@@ -85,9 +86,12 @@ def test_build_site_structure_and_gating(repo):
     assert 'ps/2/solutions.html' not in index
     assert index.count("Solutions not yet released") == 2
 
-    # download buttons and KaTeX (for math in titles) on the index
-    assert 'class="dl"' in index and 'download' in index
+    # grouped file boxes with download buttons; KaTeX for math in titles
+    assert 'class="filebox"' in index and 'class="dl"' in index
+    assert "Handout PDF" in index and "LaTeX source" in index
+    assert 'ps/1/PS1-Math261-Fall2025.pdf' in index
     assert "katex" in index and "renderMathInElement" in index
+    assert 'href="https://github.com/tghyde/hwgenie">hwGenie</a>' in index
 
     # solutions content only where released
     assert "Top secret answer 1" in (site / "ps/1/solutions.html").read_text()

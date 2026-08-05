@@ -123,12 +123,13 @@ def test_qedhere_in_display_math_becomes_tag():
     assert 'has-qedhere' in html
 
 
-def test_qedhere_in_align_star():
+def test_qedhere_in_align_star_stays_on_its_line():
     _c, html = convert(
-        "\\begin{solution}\n\\begin{align*}\nx &= 1\\qedhere\n\\end{align*}\n"
-        "\\end{solution}"
+        "\\begin{solution}\n\\begin{align*}\nx &= 1 \\\\\ny &= 2\\qedhere\n"
+        "\\end{align*}\n\\end{solution}"
     )
-    assert "\\end{aligned} \\tag*{$\\square$}\\]" in html
+    assert "y &amp;= 2\\qquad\\square" in html
+    assert "\\tag*" not in html
 
 
 def test_problem_is_collapsible_details():

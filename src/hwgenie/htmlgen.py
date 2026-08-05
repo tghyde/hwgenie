@@ -379,7 +379,7 @@ class HtmlConverter:
                 self.title_lines = self._split_on_newline_macro(args[0].nodelist)
             return j
         if name == "separate":
-            flow.block('<hr class="sep">')
+            # Problem cards make the old horizontal-rule spacers redundant.
             return i + 1
         if name == "href":
             args, j = self._macro_args(nodes, i, 2)
@@ -780,7 +780,11 @@ class HtmlConverter:
         has_qedhere = "\\qedhere" in body
         if has_qedhere:
             self._saw_qedhere = True
-            body = body.replace("\\qedhere", "")
+            if inner_env:
+                # Keep the square on the line where \qedhere sits (amsthm-like).
+                body = body.replace("\\qedhere", "\\qquad\\square")
+            else:
+                body = body.replace("\\qedhere", "")
         anchor = ""
         qed_tag = ""
         if name == "equation":
@@ -799,7 +803,7 @@ class HtmlConverter:
                     "environment are not preserved in HTML; references will "
                     "not resolve."
                 )
-            if has_qedhere:
+            if has_qedhere and not inner_env:
                 qed_tag = " \\tag*{$\\square$}"
         if inner_env:
             tex = f"\\[\\begin{{{inner_env}}}{body}\\end{{{inner_env}}}{qed_tag}\\]"

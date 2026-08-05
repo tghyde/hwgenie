@@ -42,7 +42,13 @@ from .build import (
 import json
 
 from .courseconfig import load_course_config
-from .htmltemplate import CSS, NAV_CSS, download_link, katex_block
+from .htmltemplate import (
+    CSS,
+    FOOTER_HTML,
+    NAV_CSS,
+    file_box,
+    katex_block,
+)
 from .katexmacros import extract_macros
 from .metadata import Metadata, MetadataError, parse_metadata
 from . import texscan
@@ -98,6 +104,18 @@ def discover_sources(source_root: Path) -> List[Path]:
 
 def _slug(number: str) -> str:
     return re.sub(r"[^A-Za-z0-9.-]+", "-", number.strip()).strip("-").lower()
+
+
+def _file_names(meta: Metadata, n: str) -> Dict[str, str]:
+    """Descriptive download names, e.g. PS1-Math261-Fall2025.pdf"""
+    tag = re.sub(r"\s+", "", f"{meta.course}") + "-" + re.sub(
+        r"\s+", "", f"{meta.semester}"
+    )
+    return {
+        "handout_pdf": f"PS{n}-{tag}.pdf",
+        "submission": f"PS{n}-submission-{tag}.tex",
+        "solutions_pdf": f"PS{n}-solutions-{tag}.pdf",
+    }
 
 
 def _clean_out_dir(out_dir: Path) -> None:
@@ -190,9 +208,10 @@ def _build_assignment(
         meta=meta, source_path=src, rel_url=f"ps/{n}/", released=released
     )
     variants = make_variants(text)
+    names = _file_names(meta, n)
 
     # Submission template (.tex)
-    submission_path = ps_dir / f"problem-set-{n}-submission.tex"
+    submission_path = ps_dir / names["submission"]
     submission_path.write_text(variants["submission"], encoding="utf-8")
     ab.files["submission"] = submission_path
 
@@ -201,15 +220,17 @@ def _build_assignment(
 
     home = f'<a href="../../">← {html_mod.escape(cfg.get("course", "Course home"))}</a>'
     dot = '<span class="sep-dot">·</span>'
-    handout_nav = [
-        home, dot,
-        f'<a href="problem-set-{n}.pdf">PDF</a>',
-        download_link(f"problem-set-{n}.pdf", "PDF"), dot,
-        f'<a href="problem-set-{n}-submission.tex">LaTeX submission file</a>',
-        download_link(f"problem-set-{n}-submission.tex", "LaTeX submission file"),
+    boxes = [
+        file_box(names["handout_pdf"], "Handout PDF"),
+        file_box(names["submission"], "LaTeX source"),
     ]
     if released:
+        boxes.append(file_box(names["solutions_pdf"], "Solutions PDF"))
+
+    handout_nav = [home]
+    if released:
         handout_nav += [dot, '<a href="solutions.html">Solutions</a>']
+    handout_nav += [dot] + boxes
     build_html(
         variants["handout"], meta, False, ps_dir / "index.html",
         src.parent, br, nav=" ".join(handout_nav),
@@ -217,11 +238,7 @@ def _build_assignment(
     ab.files["handout_html"] = ps_dir / "index.html"
 
     if released:
-        sol_nav = [
-            home, dot, '<a href="./">Handout</a>', dot,
-            f'<a href="problem-set-{n}-solutions.pdf">Solutions PDF</a>',
-            download_link(f"problem-set-{n}-solutions.pdf", "solutions PDF"),
-        ]
+        sol_nav = [home, dot, '<a href="./">Handout</a>', dot] + boxes
         build_html(
             variants["solutions_web"], meta, True, ps_dir / "solutions.html",
             src.parent, br, nav=" ".join(sol_nav),
@@ -231,7 +248,7 @@ def _build_assignment(
     if compile_pdfs:
         pdf_path, error = compile_variant_pdf(
             variants["handout"], ps_dir, src.parent,
-            f"problem-set-{n}.pdf", "_hwg_handout",
+            names["handout_pdf"], "_hwg_handout",
         )
         if pdf_path:
             ab.files["handout_pdf"] = pdf_path
@@ -240,7 +257,7 @@ def _build_assignment(
         if released:
             pdf_path, error = compile_variant_pdf(
                 variants["solutions"], ps_dir, src.parent,
-                f"problem-set-{n}-solutions.pdf", "_hwg_solutions",
+                names["solutions_pdf"], "_hwg_solutions",
             )
             if pdf_path:
                 ab.files["solutions_pdf"] = pdf_path
@@ -300,23 +317,20 @@ def render_index(
         if a.meta.title:
             label += f": {e(a.meta.title)}"
         dot = '<span class="sep-dot">·</span>'
-        links = [f'<a href="{a.rel_url}">View</a>', dot]
         slug = _slug(a.meta.number)
-        pdf_href = f"{a.rel_url}problem-set-{slug}.pdf"
-        sub_href = f"{a.rel_url}problem-set-{slug}-submission.tex"
-        links += [f'<a href="{pdf_href}">PDF</a>', download_link(pdf_href, "PDF"), dot]
+        names = _file_names(a.meta, slug)
+        links = [f'<a href="{a.rel_url}">View</a>']
+        if a.released:
+            links += [dot, f'<a href="{a.rel_url}solutions.html">Solutions</a>']
         links += [
-            f'<a href="{sub_href}">LaTeX submission file</a>',
-            download_link(sub_href, "LaTeX submission file"),
+            dot,
+            file_box(f'{a.rel_url}{names["handout_pdf"]}', "Handout PDF"),
+            file_box(f'{a.rel_url}{names["submission"]}', "LaTeX source"),
         ]
         if a.released:
-            sol_pdf_href = f"{a.rel_url}problem-set-{slug}-solutions.pdf"
-            links += [
-                dot,
-                f'<a href="{a.rel_url}solutions.html">Solutions</a>', dot,
-                f'<a href="{sol_pdf_href}">Solutions PDF</a>',
-                download_link(sol_pdf_href, "solutions PDF"),
-            ]
+            links.append(
+                file_box(f'{a.rel_url}{names["solutions_pdf"]}', "Solutions PDF")
+            )
         else:
             links += [dot, '<span class="pending">Solutions not yet released</span>']
         cards.append(
@@ -347,7 +361,7 @@ def render_index(
 <h2 style="font-size:1.15rem">Problem Sets</h2>
 {body}
 </section>
-<footer class="doc">Generated by hwgenie</footer>
+<footer class="doc">{FOOTER_HTML}</footer>
 </main>
 </body>
 </html>
