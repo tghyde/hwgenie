@@ -46,6 +46,9 @@ from .htmltemplate import (
     CSS,
     FOOTER_HTML,
     NAV_CSS,
+    THEME_HEAD_SCRIPT,
+    THEME_TOGGLE_HTML,
+    THEME_TOGGLE_JS,
     file_box,
     katex_block,
     view_box,
@@ -275,9 +278,7 @@ def _build_assignment(
 INDEX_CSS = """
 .assignment {
   background: var(--card-bg);
-  border: 1px solid var(--border);
-  border-left: 4px solid var(--accent);
-  padding: 1rem 1.25rem;
+  padding: 1.05rem 1.3rem;
   margin: 1.1rem 0;
 }
 .assignment h2 {
@@ -346,10 +347,12 @@ def render_index(
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{e(plain_heading)} — {e(semester)}</title>
+{THEME_HEAD_SCRIPT}
 {katex_block(macros_json)}
 <style>{CSS}{NAV_CSS}{INDEX_CSS}</style>
 </head>
 <body>
+{THEME_TOGGLE_HTML}
 <main>
 <header class="doc">
 <p class="course">{e(sub)}</p>
@@ -361,6 +364,7 @@ def render_index(
 </section>
 <footer class="doc">{FOOTER_HTML}</footer>
 </main>
+{THEME_TOGGLE_JS}
 </body>
 </html>
 """

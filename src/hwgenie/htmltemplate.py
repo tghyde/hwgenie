@@ -8,33 +8,39 @@ from typing import Dict, List, Optional, Tuple
 
 KATEX_VERSION = "0.16.21"
 
-CSS = """
-:root {
-  --bg: #fdfdfb;
-  --fg: #1e2126;
-  --muted: #5b6270;
-  --accent: #1a56b0;
+_LIGHT_VARS = """
+  --bg: #faf9f6;
+  --fg: #20242a;
+  --muted: #5d646f;
+  --accent: #24589f;
   --alert: #b3223a;
-  --border: #ddddd6;
-  --card-bg: #ffffff;
-  --sol-bg: #f2f7f1;
-  --sol-accent: #2e6b3e;
-  --code-bg: #f4f4ef;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #16181d;
-    --fg: #e6e4de;
-    --muted: #9aa1ad;
-    --accent: #7aa7e8;
-    --alert: #e87a90;
-    --border: #33363e;
-    --card-bg: #1d2026;
-    --sol-bg: #1c2420;
-    --sol-accent: #8cc79b;
-    --code-bg: #22252c;
-  }
-}
+  --border: #dcdad0;
+  --card-bg: #efeee8;
+  --sol-bg: #e6efe6;
+  --sol-accent: #2c6a3f;
+  --code-bg: #f1f0ea;
+"""
+
+_DARK_VARS = """
+  --bg: #15171c;
+  --fg: #e7e5e0;
+  --muted: #9aa1ad;
+  --accent: #8db1ea;
+  --alert: #e87a90;
+  --border: #33363e;
+  --card-bg: #1f222a;
+  --sol-bg: #1c2721;
+  --sol-accent: #98cda5;
+  --code-bg: #22252d;
+"""
+
+CSS = f"""
+:root {{{_LIGHT_VARS}}}
+@media (prefers-color-scheme: dark) {{
+  :root:not([data-theme="light"]) {{{_DARK_VARS}}}
+}}
+:root[data-theme="dark"] {{{_DARK_VARS}}}
+""" + """
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
 body {
@@ -71,15 +77,14 @@ header.doc h1 {
 .badge {
   display: inline-block;
   margin-top: .8rem;
-  padding: .15rem .8rem;
-  border-radius: 999px;
+  padding: .2rem .85rem;
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   font-size: .8rem;
   font-weight: 600;
   letter-spacing: .08em;
   text-transform: uppercase;
   color: var(--sol-accent);
-  border: 1.5px solid var(--sol-accent);
+  background: var(--sol-bg);
 }
 p { margin: 0 0 .9em; }
 hr.sep {
@@ -107,9 +112,7 @@ blockquote.epigraph footer {
 details.problem {
   scroll-margin-top: 4.5rem;
   background: var(--card-bg);
-  border: 1px solid var(--border);
-  border-left: 4px solid var(--accent);
-  padding: 1.1rem 1.25rem .6rem;
+  padding: 1.15rem 1.35rem .65rem;
   margin: 1.9rem 0;
 }
 details.problem > summary {
@@ -195,7 +198,6 @@ figure.fig figcaption {
 
 pre.code {
   background: var(--code-bg);
-  border: 1px solid var(--border);
   padding: .9rem 1rem;
   overflow-x: auto;
   font-size: .82rem;
@@ -223,8 +225,8 @@ code {
 .al-right { text-align: right; }
 
 .thmblock {
-  border-left: 3px solid var(--muted);
-  padding: .15rem 0 .15rem 1rem;
+  background: var(--bg);
+  padding: .9rem 1.1rem;
   margin: 1.2rem 0;
 }
 .thm-head { font-weight: 700; }
@@ -247,7 +249,62 @@ footer.doc {
   font-size: .78rem;
   color: var(--muted);
 }
+
+#themetoggle {
+  position: fixed;
+  top: .5rem;
+  right: .7rem;
+  z-index: 60;
+  background: var(--card-bg);
+  color: var(--fg);
+  border: none;
+  padding: .3rem .6rem;
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+#themetoggle:hover { background: var(--code-bg); }
+@media (prefers-reduced-motion: no-preference) {
+  body { transition: background-color .2s ease, color .2s ease; }
+}
 """
+
+# Applies a saved manual theme before first paint (no flash); without a saved
+# choice the CSS media query follows the system preference.
+THEME_HEAD_SCRIPT = (
+    "<script>(function(){try{var t=localStorage.getItem('hwg-theme');"
+    "if(t==='light'||t==='dark')document.documentElement.setAttribute("
+    "'data-theme',t);}catch(e){}})();</script>"
+)
+
+THEME_TOGGLE_HTML = (
+    '<button id="themetoggle" aria-label="Toggle light or dark theme" '
+    'title="Toggle light/dark"></button>'
+)
+
+THEME_TOGGLE_JS = """<script>
+(function() {
+  var b = document.getElementById("themetoggle");
+  if (!b) return;
+  function effective() {
+    var a = document.documentElement.getAttribute("data-theme");
+    if (a) return a;
+    return window.matchMedia &&
+      matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  }
+  function icon() { b.textContent = effective() === "dark" ? "\\u2600" : "\\u263E"; }
+  b.addEventListener("click", function() {
+    var next = effective() === "dark" ? "light" : "dark";
+    document.documentElement.setAttribute("data-theme", next);
+    try { localStorage.setItem("hwg-theme", next); } catch (e) {}
+    icon();
+  });
+  if (window.matchMedia) {
+    matchMedia("(prefers-color-scheme: dark)").addEventListener("change", icon);
+  }
+  icon();
+})();
+</script>"""
 
 
 HWGENIE_URL = "https://github.com/tghyde/hwgenie"
@@ -329,16 +386,18 @@ NAV_CSS = """
   display: inline-flex;
   align-items: center;
   gap: .4rem;
-  border: 1px solid var(--border);
-  padding: .2rem .55rem;
+  background: var(--card-bg);
+  padding: .25rem .6rem;
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   font-size: .85rem;
   white-space: nowrap;
   color: var(--accent);
   text-decoration: none;
 }
-.filebox:hover { border-color: var(--accent); }
+.filebox:hover { background: var(--code-bg); }
 .filebox svg { flex-shrink: 0; }
+.assignment .filebox { background: var(--bg); }
+.assignment .filebox:hover { background: var(--sol-bg); }
 
 .scrollbar {
   position: fixed;
@@ -347,9 +406,9 @@ NAV_CSS = """
   display: flex;
   align-items: center;
   gap: .9rem;
-  padding: .45rem .9rem;
-  background: var(--bg);
-  border-bottom: 1px solid var(--border);
+  padding: .45rem 3.4rem .45rem .9rem;
+  background: var(--card-bg);
+  box-shadow: 0 1px 10px rgba(0, 0, 0, .14);
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   font-size: .85rem;
   overflow-x: auto;
@@ -451,10 +510,12 @@ def render_page(
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{e(title)}</title>
+{THEME_HEAD_SCRIPT}
 {katex_block(macros_json)}
 <style>{CSS}{NAV_CSS}</style>
 </head>
 <body>
+{THEME_TOGGLE_HTML}
 {scrollbar}
 <main>
 {nav_html}
@@ -467,6 +528,7 @@ def render_page(
 <footer class="doc">{FOOTER_HTML}</footer>
 </main>
 {SCROLLBAR_JS if scrollbar else ""}
+{THEME_TOGGLE_JS}
 </body>
 </html>
 """
