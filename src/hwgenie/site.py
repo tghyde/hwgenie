@@ -62,13 +62,17 @@ SITE_MARKER = ".hwgenie-site"
 
 
 def is_released(release: Optional[str], today: Optional[date] = None) -> Optional[bool]:
-    """True/False, or None for 'unparseable' (treated as not released)."""
+    """True/False, or None for 'unparseable' (treated as not released).
+
+    The documented grammar is simply 'yes' / 'no'; older spellings
+    (released/manual) and ISO dates keep working for compatibility.
+    """
     if not release:
         return False
     r = release.strip().lower()
-    if r in ("released", "true", "yes"):
+    if r in ("yes", "released", "true"):
         return True
-    if r in ("manual", "no", "false"):
+    if r in ("no", "manual", "false"):
         return False
     try:
         return date.fromisoformat(release.strip()) <= (today or date.today())
@@ -229,8 +233,8 @@ def _build_assignment(
     if released is None:
         result.warnings.append(
             f"{src.name}: could not parse solutions = "
-            f"{meta.solutions_release!r} (expected a YYYY-MM-DD date, "
-            "'manual', or 'released'); treating as NOT released."
+            f"{meta.solutions_release!r} (expected 'yes' or 'no'); "
+            "treating as NOT released."
         )
         released = False
 

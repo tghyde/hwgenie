@@ -54,6 +54,8 @@ def test_course_config_parse():
 
 def test_is_released():
     today = date(2025, 10, 15)
+    assert is_released("yes", today) is True
+    assert is_released("No", today) is False
     assert is_released("released", today) is True
     assert is_released("manual", today) is False
     assert is_released(None, today) is False
