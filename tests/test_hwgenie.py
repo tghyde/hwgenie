@@ -82,7 +82,7 @@ def test_metadata_course_semester_optional():
 
 
 def test_metadata_absent():
-    with pytest.raises(MetadataError, match="No metadata block"):
+    with pytest.raises(MetadataError, match="No metadata"):
         parse_metadata("\\documentclass{article}")
 
 

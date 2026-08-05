@@ -32,6 +32,8 @@ V2_START = re.compile(r"^%\s*={2,}\s*hwgenie\s*={2,}\s*$", re.IGNORECASE)
 V2_END = re.compile(r"^%\s*={2,}\s*$")
 KV_LINE = re.compile(r"^%\s*([A-Za-z][\w-]*)\s*=\s*(.*?)\s*$")
 LEGACY_START = re.compile(r"^%\s*Problem Set Data\s*$", re.IGNORECASE)
+# LaTeX-variable metadata (defined in hwgenie.sty): \hwnumber{3} etc.
+HWCMD_RE = re.compile(r"\\hw(number|title|solutions|release)\s*\{([^{}]*)\}")
 
 
 class MetadataError(ValueError):
@@ -46,6 +48,7 @@ class Metadata:
     doc_type: str = "problemset"
     title: Optional[str] = None
     solutions_release: Optional[str] = None  # date string, "manual", or "released"
+    release: Optional[str] = None  # gate for the whole assignment (None = live)
     legacy_path: Optional[str] = None
     fmt: str = "v2"      # "v2" or "legacy"
     span: Tuple[int, int] = (0, 0)  # char span of the block (for removal)
@@ -64,6 +67,12 @@ def _line_spans(text: str):
 
 def parse_metadata(text: str) -> Metadata:
     lines = list(_line_spans(text))
+    # \hw... commands override comment-block values wherever both exist.
+    cmd_raw = {
+        m.group(1): m.group(2).strip()
+        for m in HWCMD_RE.finditer(text)
+        if m.group(2).strip()
+    }
 
     # --- v2 format ---
     for i, (start, _end, line) in enumerate(lines):
@@ -89,6 +98,7 @@ def parse_metadata(text: str) -> Metadata:
                 raise MetadataError(
                     "hwgenie metadata block is missing its closing '%====' line."
                 )
+            raw.update(cmd_raw)
             return _build(raw, fmt="v2", span=(start, span_end))
 
     # --- legacy format ---
@@ -103,11 +113,15 @@ def parse_metadata(text: str) -> Metadata:
                     break
                 raw[m.group(1).lower()] = m.group(2)
                 span_end = e
+            raw.update(cmd_raw)
             return _build(raw, fmt="legacy", span=(start, span_end))
 
+    if cmd_raw:
+        return _build(cmd_raw, fmt="commands", span=(0, 0))
+
     raise MetadataError(
-        "No metadata block found. Add a '%===hwgenie===' block near the top of the "
-        "document (see hwgenie README)."
+        "No metadata found. Use \\hwnumber{...}/\\hwtitle{...} (hwgenie.sty) "
+        "or a '%===hwgenie===' comment block near the top of the document."
     )
 
 
@@ -127,6 +141,7 @@ def _build(raw: dict, fmt: str, span: Tuple[int, int]) -> Metadata:
         doc_type=raw.get("type", "problemset").lower(),
         title=raw.get("title"),
         solutions_release=raw.get("solutions"),
+        release=raw.get("release"),
         legacy_path=raw.get("path"),
         fmt=fmt,
         span=span,

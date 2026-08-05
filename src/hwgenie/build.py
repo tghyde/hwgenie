@@ -142,6 +142,8 @@ def make_variants(text: str, search_dirs=None) -> Dict[str, str]:
     )
     submission = transforms.apply_edits(text, submission_edits)
     submission = transforms.collapse_blank_lines(submission)
+    if search_dirs:
+        submission = transforms.inline_sty(submission, search_dirs)
 
     # Solutions-for-web: like solutions but no banner (the HTML template has
     # its own badge) and no %HEADER line.

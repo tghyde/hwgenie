@@ -214,6 +214,17 @@ def _build_assignment(
         )
         return
 
+    # Whole-assignment gate: \hwrelease{date|released} hides an in-progress
+    # problem set from the site entirely until it is due to appear.
+    if meta.release is not None:
+        assignment_live = is_released(meta.release, today)
+        if not assignment_live:
+            result.warnings.append(
+                f"{src.name}: not released yet (release = {meta.release!r}); "
+                "not built into the site."
+            )
+            return
+
     released = is_released(meta.solutions_release, today)
     if released is None:
         result.warnings.append(
