@@ -105,7 +105,7 @@ blockquote.epigraph footer {
 .alert { color: var(--alert); }
 
 details.problem {
-  scroll-margin-top: 3.2rem;
+  scroll-margin-top: 4.5rem;
   background: var(--card-bg);
   border: 1px solid var(--border);
   border-left: 4px solid var(--accent);
