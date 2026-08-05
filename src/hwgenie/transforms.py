@@ -8,11 +8,52 @@ the author's formatting is preserved everywhere we don't explicitly touch.
 from __future__ import annotations
 
 import re
-from typing import List, Tuple
+from pathlib import Path
+from typing import List, Optional, Sequence, Tuple
 
 from . import texscan
 
 Edit = Tuple[int, int, str]
+
+INPUT_RE = re.compile(r"\\(?:input|include)\s*\{([^{}]+)\}")
+
+
+def expand_inputs(
+    text: str,
+    search_dirs: Sequence[Path],
+    warnings: Optional[List[str]] = None,
+    depth: int = 0,
+) -> str:
+    """Inline \\input{...}/\\include{...} files so every generated variant is
+    self-contained (students receive a single submission .tex).  Files are
+    looked up in `search_dirs`; unresolvable inputs are left in place (the
+    PDF compiler may still find them via TEXINPUTS)."""
+    if depth > 3 or not search_dirs:
+        return text
+    masked = texscan.mask_verbatim(text)
+    out: List[str] = []
+    last = 0
+    for m in INPUT_RE.finditer(masked):
+        fname = m.group(1).strip()
+        if not fname.endswith(".tex"):
+            fname += ".tex"
+        path = next(
+            (d / fname for d in search_dirs if (Path(d) / fname).exists()), None
+        )
+        if path is None:
+            if warnings is not None:
+                warnings.append(
+                    f"\\input{{{m.group(1)}}} not found next to the source or "
+                    "repo root; left unexpanded."
+                )
+            continue
+        content = Path(path).read_text(encoding="utf-8")
+        content = expand_inputs(content, search_dirs, warnings, depth + 1)
+        out.append(text[last : m.start()])
+        out.append(content.strip("\n"))
+        last = m.end()
+    out.append(text[last:])
+    return "".join(out)
 
 SOLUTION_PLACEHOLDER = "%Write your solution here"
 

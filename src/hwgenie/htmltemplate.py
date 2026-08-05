@@ -87,9 +87,19 @@ blockquote.epigraph footer {
 details.problem {
   scroll-margin-top: 4.5rem;
   background: var(--card-bg);
-  padding: 1.15rem 1.35rem .65rem;
+  padding: 1.15rem 1.35rem;
   margin: 1.9rem 0;
 }
+/* color blocks get even visual padding: kill trailing paragraph margins */
+.thmblock > :last-child,
+.proof > :last-child,
+.solution-body > :last-child,
+details.problem > :last-child,
+blockquote.epigraph > :last-child,
+pre.code > :last-child {
+  margin-bottom: 0;
+}
+.thmblock > :first-child { margin-top: 0; }
 details.problem > summary {
   cursor: pointer;
   list-style: none;
@@ -368,10 +378,10 @@ NAV_CSS = """
   color: var(--accent);
   text-decoration: none;
 }
-.filebox:hover { background: var(--code-bg); }
+.filebox:hover { background: var(--accent); color: var(--bg); }
 .filebox svg { flex-shrink: 0; }
 .assignment .filebox { background: var(--bg); }
-.assignment .filebox:hover { background: var(--sol-bg); }
+.assignment .filebox:hover { background: var(--accent); color: var(--bg); }
 
 .scrollbar {
   position: fixed;

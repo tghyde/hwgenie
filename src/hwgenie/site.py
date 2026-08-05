@@ -229,7 +229,8 @@ def _build_assignment(
     ab = AssignmentBuild(
         meta=meta, source_path=src, rel_url=f"ps/{n}/", released=released
     )
-    variants = make_variants(text)
+    search_dirs = [src.parent] + ([repo_root] if repo_root else [])
+    variants = make_variants(text, search_dirs=search_dirs)
     names = _file_names(meta, n)
 
     # Submission template (.tex)

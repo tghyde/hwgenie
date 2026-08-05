@@ -105,8 +105,12 @@ def output_names(meta: Metadata) -> Dict[str, str]:
     }
 
 
-def make_variants(text: str) -> Dict[str, str]:
-    """Return the three derived .tex contents from the source text."""
+def make_variants(text: str, search_dirs=None) -> Dict[str, str]:
+    """Return the derived .tex contents from the source text.  When
+    search_dirs is given, \\input files are inlined first so every variant is
+    self-contained."""
+    if search_dirs:
+        text = transforms.expand_inputs(text, search_dirs)
     masked = texscan.mask_verbatim(text)
     nodes = texscan.parse_nodes(masked)
     meta = parse_metadata(masked)
@@ -271,7 +275,7 @@ def build(
     )
     result.out_dir.mkdir(parents=True, exist_ok=True)
 
-    variants = make_variants(text)
+    variants = make_variants(text, search_dirs=[source_path.parent, sty_dir])
     names = output_names(meta)
 
     if "%HEADER" not in texscan.mask_verbatim(text):
