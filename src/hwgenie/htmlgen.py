@@ -127,8 +127,9 @@ class Flow:
 
 class HtmlConverter:
     def __init__(self, text: str, include_solutions: bool = True,
-                 section: Optional[str] = None):
+                 section: Optional[str] = None, extra_preamble: str = ""):
         self.text = text
+        self.extra_preamble = extra_preamble  # e.g. a shared hwgenie.sty
         self.include_solutions = include_solutions
         self.section = section
         self.warnings: List[str] = []
@@ -149,7 +150,7 @@ class HtmlConverter:
 
     def _parse_newtheorems(self) -> Dict[str, Dict[str, Optional[str]]]:
         thms: Dict[str, Dict[str, Optional[str]]] = {}
-        for m in NEWTHEOREM_RE.finditer(self.text):
+        for m in NEWTHEOREM_RE.finditer(self.extra_preamble + "\n" + self.text):
             star, name, shared, label, parent = m.groups()
             if name in ("problem", "solution"):
                 continue  # handled specially
@@ -168,7 +169,7 @@ class HtmlConverter:
         return thms
 
     def _parse_eq_prefix(self) -> str:
-        m = NUMBERWITHIN_RE.search(self.text)
+        m = NUMBERWITHIN_RE.search(self.extra_preamble + "\n" + self.text)
         sec = self.section or "1"
         if not m:
             return ""
@@ -588,6 +589,12 @@ class HtmlConverter:
             flow.block(self._code_html(n))
         elif name in MATH_ENVS:
             flow.block(self._math_env_html(n))
+        elif name == "htmlonly":
+            inner = Flow()
+            self.walk(n.nodelist, inner)
+            flow.block(inner.result())
+        elif name == "pdfonly":
+            pass  # PDF-only content: skipped in HTML
         elif name in ("multicols", "minipage", "quote", "quotation"):
             inner = Flow()
             self.walk(n.nodelist, inner)

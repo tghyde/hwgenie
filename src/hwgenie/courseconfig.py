@@ -11,7 +11,7 @@ import re
 from pathlib import Path
 from typing import Dict, Optional
 
-LINE = re.compile(r"^([A-Za-z][\w-]*)\s*:\s*(.*)$")
+LINE = re.compile(r"^([A-Za-z][\w.-]*)\s*:\s*(.*)$")
 
 
 def parse_course_config(text: str) -> Dict[str, str]:

@@ -20,9 +20,10 @@ from . import compile as texcompile
 from . import texscan, transforms
 from .courseconfig import find_course_config, load_course_config
 from .htmlgen import HtmlConverter
-from .htmltemplate import render_page, scrollbar_html
+from .htmltemplate import DEFAULT_THEME_CSS, render_page, scrollbar_html
 from .katexmacros import extract_macros
 from .metadata import Metadata, parse_metadata
+from .themes import theme_from_config
 
 
 class BuildError(RuntimeError):
@@ -69,11 +70,14 @@ def compile_variant_pdf(
     workdir: Path,
     final_name: str,
     stem: str,
+    extra_inputs: Optional[Path] = None,
 ):
     """Compile a tex variant; returns (pdf_path or None, error or None)."""
     tmp_tex = out_dir / f"{stem}.tex"
     tmp_tex.write_text(tex_content, encoding="utf-8")
-    ok, log = texcompile.compile_pdf(tmp_tex, workdir=workdir, out_dir=out_dir)
+    ok, log = texcompile.compile_pdf(
+        tmp_tex, workdir=workdir, out_dir=out_dir, extra_inputs=extra_inputs
+    )
     error = None
     pdf_path = None
     if ok:
@@ -130,6 +134,7 @@ def make_variants(text: str) -> Dict[str, str]:
         + transforms.figure_edits(text, nodes)
         + transforms.solution_edits(text, nodes, mode="blank")
         + transforms.clear_table_edits(text, nodes)
+        + transforms.env_removal_edits(text, nodes, ("htmlonly",))
     )
     submission = transforms.apply_edits(text, submission_edits)
     submission = transforms.collapse_blank_lines(submission)
@@ -175,9 +180,11 @@ def build_html(
     nav: str = "",
     image_dir: Optional[Path] = None,
     sb_home: Optional[tuple] = None,   # (href, label) for the sticky bar
+    extra_preamble: str = "",
+    theme: str = DEFAULT_THEME_CSS,
 ) -> None:
     conv = HtmlConverter(variant_text, include_solutions=include_solutions,
-                         section=meta.number)
+                         section=meta.number, extra_preamble=extra_preamble)
     body = conv.convert()
     result.warnings.extend(sorted(set(conv.warnings)))
 
@@ -209,10 +216,11 @@ def build_html(
         course_line=course_line,
         heading=heading,
         body=body,
-        macros=extract_macros(variant_text),
+        macros=extract_macros(extra_preamble + "\n" + variant_text),
         solutions=include_solutions,
         nav=nav,
         scrollbar=scrollbar,
+        theme=theme,
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(page, encoding="utf-8")
@@ -242,7 +250,16 @@ def build(
 
     text = source_path.read_text(encoding="utf-8")
     meta = parse_metadata(texscan.mask_verbatim(text))
-    merge_course_config(meta, source_path.parent)
+    cfg_path = find_course_config(source_path.parent)
+    cfg = load_course_config(cfg_path) if cfg_path else {}
+    meta.course = meta.course or cfg.get("course")
+    meta.semester = meta.semester or cfg.get("semester")
+    sty_dir = cfg_path.parent if cfg_path else source_path.parent
+    sty_path = sty_dir / "hwgenie.sty"
+    extra_preamble = (
+        sty_path.read_text(encoding="utf-8") if sty_path.exists() else ""
+    )
+    theme = theme_from_config(cfg)
     if meta.doc_type != "problemset":
         raise BuildError(
             f"Document type {meta.doc_type!r} is not supported yet (only 'problemset')."
@@ -281,6 +298,7 @@ def build(
             pdf_path, error = compile_variant_pdf(
                 tex_content, result.out_dir, source_path.parent,
                 pdf_name, "_hwg_" + key,
+                extra_inputs=sty_dir if extra_preamble else None,
             )
             if pdf_path:
                 result.files[key] = pdf_path
@@ -299,9 +317,11 @@ def build(
         handout_html = html_dir / f"problem-set-{meta.number}.html"
         solutions_html = html_dir / f"problem-set-{meta.number}-solutions.html"
         build_html(variants["handout"], meta, False, handout_html,
-                   source_path.parent, result)
+                   source_path.parent, result,
+                   extra_preamble=extra_preamble, theme=theme)
         build_html(variants["solutions_web"], meta, True, solutions_html,
-                   source_path.parent, result)
+                   source_path.parent, result,
+                   extra_preamble=extra_preamble, theme=theme)
         result.files["handout_html"] = handout_html
         result.files["solutions_html"] = solutions_html
 

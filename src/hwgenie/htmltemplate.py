@@ -8,49 +8,24 @@ from typing import Dict, List, Optional, Tuple
 
 KATEX_VERSION = "0.16.21"
 
-_LIGHT_VARS = """
-  --bg: #faf9f6;
-  --fg: #20242a;
-  --muted: #5d646f;
-  --accent: #24589f;
-  --alert: #b3223a;
-  --border: #dcdad0;
-  --card-bg: #efeee8;
-  --sol-bg: #e6efe6;
-  --sol-accent: #2c6a3f;
-  --code-bg: #f1f0ea;
-"""
+from .themes import theme_css as _theme_css
 
-_DARK_VARS = """
-  --bg: #15171c;
-  --fg: #e7e5e0;
-  --muted: #9aa1ad;
-  --accent: #8db1ea;
-  --alert: #e87a90;
-  --border: #33363e;
-  --card-bg: #1f222a;
-  --sol-bg: #1c2721;
-  --sol-accent: #98cda5;
-  --code-bg: #22252d;
-"""
+DEFAULT_THEME_CSS = _theme_css()
 
-CSS = f"""
-:root {{{_LIGHT_VARS}}}
-@media (prefers-color-scheme: dark) {{
-  :root:not([data-theme="light"]) {{{_DARK_VARS}}}
-}}
-:root[data-theme="dark"] {{{_DARK_VARS}}}
-""" + """
+CSS = """
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
 body {
   margin: 0;
   background: var(--bg);
   color: var(--fg);
-  font-family: Charter, "Bitstream Charter", Georgia, "Times New Roman", serif;
+  font-family: var(--font-body, Charter, Georgia, serif);
   font-size: 1.0625rem;
   line-height: 1.65;
 }
+a { color: var(--accent); text-decoration: none; }
+main a:not(.filebox) { padding: 0 .12em; margin: 0 -.12em; }
+main a:not(.filebox):hover { background: var(--hover-bg); }
 main {
   max-width: 44rem;
   margin: 0 auto;
@@ -232,9 +207,8 @@ code {
 .thm-head { font-weight: 700; }
 .proof { margin: 1rem 0 1.2rem; }
 .proof-label { font-style: italic; }
-.xref { color: var(--accent); text-decoration: none; }
-.xref:hover { text-decoration: underline; }
-sup.fn a { color: var(--accent); text-decoration: none; font-weight: 600; }
+.xref { color: var(--accent); }
+sup.fn a { color: var(--accent); font-weight: 600; }
 section.footnotes { font-size: .9rem; color: var(--muted); }
 section.footnotes ol { padding-left: 1.3rem; }
 .fn-back { text-decoration: none; }
@@ -417,8 +391,8 @@ NAV_CSS = """
   white-space: nowrap;
 }
 .scrollbar.visible { transform: translateY(0); }
-.scrollbar a { color: var(--accent); text-decoration: none; }
-.scrollbar a:hover { text-decoration: underline; }
+.scrollbar a { color: var(--accent); padding: .1rem .3rem; }
+.scrollbar a:hover { background: var(--hover-bg); }
 .scrollbar .sb-label { color: var(--muted); }
 .scrollbar .sb-jumps { display: flex; gap: .7rem; }
 .scrollbar .sb-top { margin-left: auto; }
@@ -430,10 +404,7 @@ nav.site {
   flex-wrap: wrap;
   gap: .3rem 1rem;
 }
-nav.site a { color: var(--accent); text-decoration: none; }
-nav.site a:hover { text-decoration: underline; }
 nav.site .sep-dot { color: var(--muted); }
-a { color: var(--accent); }
 """
 
 
@@ -499,6 +470,7 @@ def render_page(
     solutions: bool = False,
     nav: str = "",
     scrollbar: str = "",
+    theme: str = DEFAULT_THEME_CSS,
 ) -> str:
     badge = '<div><span class="badge">Solutions</span></div>' if solutions else ""
     nav_html = f'<nav class="site">{nav}</nav>' if nav else ""
@@ -512,7 +484,7 @@ def render_page(
 <title>{e(title)}</title>
 {THEME_HEAD_SCRIPT}
 {katex_block(macros_json)}
-<style>{CSS}{NAV_CSS}</style>
+<style>{theme}{CSS}{NAV_CSS}</style>
 </head>
 <body>
 {THEME_TOGGLE_HTML}

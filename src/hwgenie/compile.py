@@ -2,19 +2,31 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from glob import escape as glob_escape
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 
-def compile_pdf(tex_path: Path, workdir: Path, out_dir: Path) -> Tuple[bool, str]:
+def compile_pdf(
+    tex_path: Path,
+    workdir: Path,
+    out_dir: Path,
+    extra_inputs: Optional[Path] = None,
+) -> Tuple[bool, str]:
     """Compile tex_path to PDF.  workdir is the cwd (so relative image paths
-    resolve); out_dir receives the PDF and aux files.  Returns (ok, log_excerpt).
+    resolve); out_dir receives the PDF and aux files.  extra_inputs (e.g. the
+    repo root holding hwgenie.sty) is added to TEXINPUTS.
+    Returns (ok, log_excerpt).
     """
     tex_path = Path(tex_path).resolve()
     out_dir = Path(out_dir).resolve()
+    env = os.environ.copy()
+    if extra_inputs is not None:
+        # trailing ':' keeps the default search path
+        env["TEXINPUTS"] = f".:{Path(extra_inputs).resolve()}:"
     if shutil.which("latexmk"):
         cmds = [[
             "latexmk", "-pdf", "-interaction=nonstopmode",
@@ -30,7 +42,7 @@ def compile_pdf(tex_path: Path, workdir: Path, out_dir: Path) -> Tuple[bool, str
     stdout = ""
     for cmd in cmds:
         result = subprocess.run(
-            cmd, cwd=workdir, capture_output=True, text=True, timeout=300
+            cmd, cwd=workdir, capture_output=True, text=True, timeout=300, env=env
         )
         stdout = result.stdout or ""
         if result.returncode != 0:

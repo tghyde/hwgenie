@@ -79,6 +79,14 @@ def figure_edits(text: str, nodes) -> List[Edit]:
     return edits
 
 
+def env_removal_edits(text: str, nodes, names) -> List[Edit]:
+    """Remove entire environments by name (e.g. htmlonly from the submission)."""
+    return [
+        (env.pos, env.pos + env.len, "")
+        for env in texscan.iter_envs(nodes, tuple(names))
+    ]
+
+
 # ------------------------------------------------------------------- tables
 
 def clear_table_edits(text: str, nodes) -> List[Edit]:

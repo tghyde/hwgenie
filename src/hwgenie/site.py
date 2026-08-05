@@ -55,6 +55,7 @@ from .htmltemplate import (
 )
 from .katexmacros import extract_macros
 from .metadata import Metadata, MetadataError, parse_metadata
+from .themes import theme_from_config
 from . import texscan
 
 SITE_MARKER = ".hwgenie-site"
@@ -99,8 +100,11 @@ class SiteResult:
 def discover_sources(source_root: Path) -> List[Path]:
     out = []
     for p in sorted(source_root.rglob("*.tex")):
+        rel_parts = p.relative_to(source_root).parts
+        if any(part.startswith("_") for part in rel_parts):
+            continue  # _experiments/ and friends stay out of the site
         name = p.name.lower()
-        if name.startswith("_") or "[submission]" in name or "[template]" in name:
+        if "[submission]" in name or "[template]" in name:
             continue
         out.append(p)
     return out
@@ -154,15 +158,26 @@ def build_site(
         result.warnings.append("No course.yml found (or empty) in repo root.")
     _clean_out_dir(out)
 
+    sty_path = repo_root / "hwgenie.sty"
+    extra_preamble = (
+        sty_path.read_text(encoding="utf-8") if sty_path.exists() else ""
+    )
+    theme = theme_from_config(cfg)
+
     macro_pool: Dict[str, str] = {}
+    if extra_preamble:
+        macro_pool.update(extract_macros(extra_preamble))
     for src in discover_sources(source_root):
         try:
-            _build_assignment(src, cfg, out, compile_pdfs, today, result, macro_pool)
+            _build_assignment(
+                src, cfg, out, compile_pdfs, today, result, macro_pool,
+                extra_preamble=extra_preamble, theme=theme, repo_root=repo_root,
+            )
         except (BuildError, MetadataError) as e:
             result.errors.append(f"{src.relative_to(repo_root)}: {e}")
 
     result.assignments.sort(key=_sort_key)
-    index = render_index(cfg, result.assignments, macro_pool)
+    index = render_index(cfg, result.assignments, macro_pool, theme=theme)
     (out / "index.html").write_text(index, encoding="utf-8")
     return result
 
@@ -182,6 +197,9 @@ def _build_assignment(
     today: Optional[date],
     result: SiteResult,
     macro_pool: Optional[Dict[str, str]] = None,
+    extra_preamble: str = "",
+    theme: str = "",
+    repo_root: Optional[Path] = None,
 ) -> None:
     text = src.read_text(encoding="utf-8")
     if macro_pool is not None:
@@ -223,7 +241,7 @@ def _build_assignment(
     br = BuildResult(meta=meta, out_dir=ps_dir)
 
     course_name = cfg.get("course", "Course home")
-    home = f'<a href="../../">← {html_mod.escape(course_name)}</a>'
+    home = view_box("../../", f"← {html_mod.escape(course_name)}")
     sb_home = ("../../", course_name)
     boxes = [
         file_box(names["handout_pdf"], "Problem Set PDF"),
@@ -239,6 +257,7 @@ def _build_assignment(
     build_html(
         variants["handout"], meta, False, ps_dir / "index.html",
         src.parent, br, nav=" ".join(handout_nav), sb_home=sb_home,
+        extra_preamble=extra_preamble, theme=theme,
     )
     ab.files["handout_html"] = ps_dir / "index.html"
 
@@ -247,6 +266,7 @@ def _build_assignment(
         build_html(
             variants["solutions_web"], meta, True, ps_dir / "solutions.html",
             src.parent, br, nav=" ".join(sol_nav), sb_home=sb_home,
+            extra_preamble=extra_preamble, theme=theme,
         )
         ab.files["solutions_html"] = ps_dir / "solutions.html"
 
@@ -254,6 +274,7 @@ def _build_assignment(
         pdf_path, error = compile_variant_pdf(
             variants["handout"], ps_dir, src.parent,
             names["handout_pdf"], "_hwg_handout",
+            extra_inputs=repo_root if extra_preamble else None,
         )
         if pdf_path:
             ab.files["handout_pdf"] = pdf_path
@@ -263,6 +284,7 @@ def _build_assignment(
             pdf_path, error = compile_variant_pdf(
                 variants["solutions"], ps_dir, src.parent,
                 names["solutions_pdf"], "_hwg_solutions",
+                extra_inputs=repo_root if extra_preamble else None,
             )
             if pdf_path:
                 ab.files["solutions_pdf"] = pdf_path
@@ -285,8 +307,8 @@ INDEX_CSS = """
   font-size: 1.1rem;
   margin: 0 0 .35rem;
 }
-.assignment h2 a { color: var(--fg); text-decoration: none; }
-.assignment h2 a:hover { color: var(--accent); }
+.assignment h2 a { color: var(--fg); }
+.assignment h2 a:hover { background: var(--hover-bg); }
 .assignment .links {
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   font-size: .85rem;
@@ -294,8 +316,6 @@ INDEX_CSS = """
   flex-wrap: wrap;
   gap: .3rem .6rem;
 }
-.assignment .links a { color: var(--accent); text-decoration: none; }
-.assignment .links a:hover { text-decoration: underline; }
 .assignment .links .sep-dot, .assignment .links .pending { color: var(--muted); }
 """
 
@@ -304,7 +324,10 @@ def render_index(
     cfg: Dict[str, str],
     assignments: List[AssignmentBuild],
     macros: Optional[Dict[str, str]] = None,
+    theme: str = "",
 ) -> str:
+    if not theme:
+        theme = theme_from_config(cfg)
     e = html_mod.escape
     course = cfg.get("course", "Course")
     title = cfg.get("title")
@@ -349,7 +372,7 @@ def render_index(
 <title>{e(plain_heading)} — {e(semester)}</title>
 {THEME_HEAD_SCRIPT}
 {katex_block(macros_json)}
-<style>{CSS}{NAV_CSS}{INDEX_CSS}</style>
+<style>{theme}{CSS}{NAV_CSS}{INDEX_CSS}</style>
 </head>
 <body>
 {THEME_TOGGLE_HTML}
