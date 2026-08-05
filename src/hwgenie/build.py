@@ -124,11 +124,16 @@ def make_variants(text: str, search_dirs=None) -> Dict[str, str]:
     handout = transforms.apply_edits(text, handout_edits)
     handout = transforms.collapse_blank_lines(handout)
 
+    has_marker = "%HEADER" in masked
+    uses_sty = transforms.USEPACKAGE_HWGENIE_RE.search(text) is not None
+
     # Solutions: SOLUTIONS banner, everything else untouched.
     solutions_edits = transforms.header_edits(
         masked, transforms.banner("SOLUTIONS"), remove=False
     )
     solutions = transforms.apply_edits(text, solutions_edits)
+    if not has_marker and uses_sty:
+        solutions = transforms.inject_variant(solutions, "Solutions")
 
     # Submission: SUBMISSION banner, metadata removed, figures removed,
     # solutions blanked, cleared tables.
@@ -142,6 +147,8 @@ def make_variants(text: str, search_dirs=None) -> Dict[str, str]:
     )
     submission = transforms.apply_edits(text, submission_edits)
     submission = transforms.collapse_blank_lines(submission)
+    if not has_marker and uses_sty:
+        submission = transforms.inject_variant(submission, "Submission")
     if search_dirs:
         submission = transforms.inline_sty(submission, search_dirs)
 
@@ -280,7 +287,10 @@ def build(
     variants = make_variants(text, search_dirs=[source_path.parent, sty_dir])
     names = output_names(meta)
 
-    if "%HEADER" not in texscan.mask_verbatim(text):
+    if (
+        "%HEADER" not in texscan.mask_verbatim(text)
+        and transforms.USEPACKAGE_HWGENIE_RE.search(text) is None
+    ):
         result.warnings.append(
             "No %HEADER line found — banners were not inserted anywhere."
         )

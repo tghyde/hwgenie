@@ -159,6 +159,15 @@ def inline_sty(text: str, search_dirs: Sequence[Path]) -> str:
     )
 
 
+def inject_variant(text: str, label: str) -> str:
+    """Insert \\hwvariant{label} after \\usepackage{hwgenie} — the modern
+    replacement for the %HEADER banner marker."""
+    m = USEPACKAGE_HWGENIE_RE.search(text)
+    if not m:
+        return text
+    return text[: m.end()] + f"\n\\hwvariant{{{label}}}" + text[m.end():]
+
+
 def env_removal_edits(text: str, nodes, names) -> List[Edit]:
     """Remove entire environments by name (e.g. htmlonly from the submission)."""
     return [

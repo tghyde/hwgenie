@@ -91,6 +91,21 @@ def test_submission_inlines_sty_and_coursedata(tmp_path):
     assert "Secret." not in sub
 
 
+def test_hwvariant_injected_when_no_header_marker():
+    text = doc().replace("%HEADER\n", "")
+    v = make_variants(text)
+    assert "\\hwvariant{Solutions}" in v["solutions"]
+    assert "\\hwvariant{Submission}" in v["submission"]
+    assert "\\hwvariant" not in v["handout"]
+    assert "\\blue{SOLUTIONS}" not in v["solutions"]
+
+
+def test_header_marker_still_uses_banner():
+    v = make_variants(doc())
+    assert "\\blue{SOLUTIONS}" in v["solutions"]
+    assert "\\hwvariant" not in v["solutions"]
+
+
 def test_no_metadata_still_errors():
     with pytest.raises(MetadataError, match="No metadata"):
         parse_metadata("\\documentclass{article}\\begin{document}\\end{document}")

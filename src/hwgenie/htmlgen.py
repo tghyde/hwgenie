@@ -63,7 +63,7 @@ SKIP_MACROS = {
     "qed": 0, "pushQED": 1, "popQED": 0,
     "theoremstyle": 1,
     "hwnumber": 1, "hwtitle": 1, "hwsolutions": 1, "hwrelease": 1,
-    "hwmaketitle": 0, "hwcourse": 0, "hwsemester": 0,
+    "hwmaketitle": 0, "hwcourse": 0, "hwsemester": 0, "hwvariant": 1,
     "!": 0, ";": 0, ":": 0,
 }
 
