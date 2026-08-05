@@ -103,33 +103,50 @@ def test_punctuation_clings_to_inline_math():
     assert '<span class="nw">$y = 2$.</span>' in html
 
 
-def test_qedhere_text_mode_suppresses_tombstone():
+def test_solutions_carry_no_qed_marks():
     _c, html = convert(
         "\\begin{problem}\nP.\n\\begin{solution}\n"
         "\\begin{enumerate}\n\\item[(c)] $(q,r) = (19,14)$\\qedhere\n"
-        "\\end{enumerate}\n\\end{solution}\n\\end{problem}"
+        "\\end{enumerate}\n"
+        "Also \\[\nx = 1.\\qedhere\n\\]\n\\end{solution}\n\\end{problem}"
     )
-    assert '<span class="qedbox"></span>' in html
-    assert 'class="solution-body has-qedhere"' in html
+    assert "qedbox" not in html
+    assert "\\qedhere" not in html
+    assert "\\tag*" not in html
+    assert "\\square" not in html
 
 
-def test_qedhere_in_display_math_becomes_tag():
+def test_qedhere_in_proof_display_math_becomes_tag():
     _c, html = convert(
-        "\\begin{problem}\nP.\n\\begin{solution}\nSo\n"
-        "\\[\n(-51,-2), (42,84).\\qedhere\n\\]\n\\end{solution}\n\\end{problem}"
+        "\\begin{proof}\nSo\n\\[\n(-51,-2), (42,84).\\qedhere\n\\]\n\\end{proof}"
     )
     assert "\\qedhere" not in html
     assert "\\tag*{$\\square$}" in html
-    assert 'has-qedhere' in html
+    assert 'class="proof has-qedhere"' in html
 
 
-def test_qedhere_in_align_star_stays_on_its_line():
+def test_qedhere_in_proof_align_star_stays_on_its_line():
     _c, html = convert(
-        "\\begin{solution}\n\\begin{align*}\nx &= 1 \\\\\ny &= 2\\qedhere\n"
-        "\\end{align*}\n\\end{solution}"
+        "\\begin{proof}\n\\begin{align*}\nx &= 1 \\\\\ny &= 2\\qedhere\n"
+        "\\end{align*}\n\\end{proof}"
     )
     assert "y &amp;= 2\\qquad\\square" in html
     assert "\\tag*" not in html
+
+
+def test_epigraph_macro():
+    _c, html = convert(
+        "\\epigraph{Number is the ruler of forms and ideas.}"
+        "{Attributed to \\textit{Pythagoras}}"
+    )
+    assert '<blockquote class="epigraph">' in html
+    assert "<p>Number is the ruler of forms and ideas.</p>" in html
+    assert "<footer>Attributed to <em>Pythagoras</em></footer>" in html
+
+
+def test_separate_emits_nothing():
+    _c, html = convert("Before.\n\\separate\nAfter.")
+    assert "<hr" not in html
 
 
 def test_problem_is_collapsible_details():

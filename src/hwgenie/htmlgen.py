@@ -142,6 +142,8 @@ class HtmlConverter:
         self._label_ctx: List[Tuple[str, str]] = []
         self._collecting = False
         self._saw_qedhere = False
+        self._in_solution = False
+        self.problem_anchors: List[Tuple[str, str]] = []  # (number, anchor id)
         self.theorems = self._parse_newtheorems()
         self.eq_prefix = self._parse_eq_prefix()
 
@@ -187,6 +189,7 @@ class HtmlConverter:
         self.counters = defaultdict(int)
         self.eq_counter = 0
         self._label_ctx = []
+        self.problem_anchors = []
 
     def convert(self) -> str:
         masked = texscan.mask_verbatim(self.text)
@@ -255,6 +258,10 @@ class HtmlConverter:
             if "\\qedhere" in raw:
                 self._saw_qedhere = True
                 raw = raw.replace("\\qedhere", "")
+                if self._in_solution:
+                    # HTML solutions carry no tombstone; drop the qed mark.
+                    flow.inline(esc(raw))
+                    return i + 1
                 if raw.lstrip().startswith("\\["):
                     inner = raw[raw.find("\\[") + 2 : raw.rfind("\\]")]
                     raw = f"\\[{inner.rstrip()} \\tag*{{$\\square$}}\\]"
@@ -442,8 +449,20 @@ class HtmlConverter:
             return i + 1
         if name == "qedhere":
             self._saw_qedhere = True
-            flow.inline('<span class="qedbox"></span>')
+            if not self._in_solution:
+                flow.inline('<span class="qedbox"></span>')
             return i + 1
+        if name == "epigraph":
+            args, j = self._macro_args(nodes, i, 2)
+            if len(args) == 2:
+                quote = self.convert_inline(args[0].nodelist)
+                attribution = self.convert_inline(args[1].nodelist)
+                flow.block(
+                    '<blockquote class="epigraph">'
+                    f"<p>{quote}</p>"
+                    f"<footer>{attribution}</footer></blockquote>"
+                )
+            return j
         if name in self.theorems:
             self.warnings.append(f"\\{name} macro shadowing theorem name; dropped.")
             return i + 1
@@ -519,6 +538,7 @@ class HtmlConverter:
                 else str(self.problem_counter)
             )
             self._label_ctx.append(("problem", num))
+            self.problem_anchors.append((num, f"problem-{_anchor_slug(num)}"))
             inner = Flow()
             self.walk(n.nodelist, inner)
             self._label_ctx.pop()
@@ -530,15 +550,14 @@ class HtmlConverter:
             )
         elif name in ("solution", "solution*"):
             if self.include_solutions:
-                outer_qed = self._saw_qedhere
-                self._saw_qedhere = False
+                outer = self._in_solution
+                self._in_solution = True
                 inner = Flow()
                 self.walk(n.nodelist, inner)
-                cls = "solution-body has-qedhere" if self._saw_qedhere else "solution-body"
-                self._saw_qedhere = outer_qed
+                self._in_solution = outer
                 flow.block(
                     '<details class="solution" open><summary>Solution</summary>\n'
-                    f'<div class="{cls}">\n{inner.result()}\n</div></details>'
+                    f'<div class="solution-body">\n{inner.result()}\n</div></details>'
                 )
         elif name in self.theorems:
             flow.block(self._theorem_html(n))
@@ -780,7 +799,10 @@ class HtmlConverter:
         has_qedhere = "\\qedhere" in body
         if has_qedhere:
             self._saw_qedhere = True
-            if inner_env:
+            if self._in_solution:
+                body = body.replace("\\qedhere", "")
+                has_qedhere = False  # no qed marks inside HTML solutions
+            elif inner_env:
                 # Keep the square on the line where \qedhere sits (amsthm-like).
                 body = body.replace("\\qedhere", "\\qquad\\square")
             else:

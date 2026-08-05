@@ -20,7 +20,7 @@ from . import compile as texcompile
 from . import texscan, transforms
 from .courseconfig import find_course_config, load_course_config
 from .htmlgen import HtmlConverter
-from .htmltemplate import render_page
+from .htmltemplate import render_page, scrollbar_html
 from .katexmacros import extract_macros
 from .metadata import Metadata, parse_metadata
 
@@ -174,6 +174,7 @@ def build_html(
     result: BuildResult,
     nav: str = "",
     image_dir: Optional[Path] = None,
+    sb_home: Optional[tuple] = None,   # (href, label) for the sticky bar
 ) -> None:
     conv = HtmlConverter(variant_text, include_solutions=include_solutions,
                          section=meta.number)
@@ -194,6 +195,15 @@ def build_html(
     if include_solutions:
         title += " (Solutions)"
 
+    scrollbar = ""
+    if sb_home:
+        label = f"PS {meta.number}"
+        if include_solutions:
+            label += " · Solutions"
+        scrollbar = scrollbar_html(
+            sb_home[0], sb_home[1], label, conv.problem_anchors
+        )
+
     page = render_page(
         title=title,
         course_line=course_line,
@@ -202,6 +212,7 @@ def build_html(
         macros=extract_macros(variant_text),
         solutions=include_solutions,
         nav=nav,
+        scrollbar=scrollbar,
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(page, encoding="utf-8")

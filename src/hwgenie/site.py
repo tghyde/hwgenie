@@ -48,6 +48,7 @@ from .htmltemplate import (
     NAV_CSS,
     file_box,
     katex_block,
+    view_box,
 )
 from .katexmacros import extract_macros
 from .metadata import Metadata, MetadataError, parse_metadata
@@ -218,10 +219,11 @@ def _build_assignment(
     # A per-assignment BuildResult to collect html warnings.
     br = BuildResult(meta=meta, out_dir=ps_dir)
 
-    home = f'<a href="../../">← {html_mod.escape(cfg.get("course", "Course home"))}</a>'
-    dot = '<span class="sep-dot">·</span>'
+    course_name = cfg.get("course", "Course home")
+    home = f'<a href="../../">← {html_mod.escape(course_name)}</a>'
+    sb_home = ("../../", course_name)
     boxes = [
-        file_box(names["handout_pdf"], "Handout PDF"),
+        file_box(names["handout_pdf"], "Problem Set PDF"),
         file_box(names["submission"], "LaTeX source"),
     ]
     if released:
@@ -229,19 +231,19 @@ def _build_assignment(
 
     handout_nav = [home]
     if released:
-        handout_nav += [dot, '<a href="solutions.html">Solutions</a>']
-    handout_nav += [dot] + boxes
+        handout_nav.append(view_box("solutions.html", "Solutions"))
+    handout_nav += boxes
     build_html(
         variants["handout"], meta, False, ps_dir / "index.html",
-        src.parent, br, nav=" ".join(handout_nav),
+        src.parent, br, nav=" ".join(handout_nav), sb_home=sb_home,
     )
     ab.files["handout_html"] = ps_dir / "index.html"
 
     if released:
-        sol_nav = [home, dot, '<a href="./">Handout</a>', dot] + boxes
+        sol_nav = [home, view_box("./", "Problem Set")] + boxes
         build_html(
             variants["solutions_web"], meta, True, ps_dir / "solutions.html",
-            src.parent, br, nav=" ".join(sol_nav),
+            src.parent, br, nav=" ".join(sol_nav), sb_home=sb_home,
         )
         ab.files["solutions_html"] = ps_dir / "solutions.html"
 
@@ -316,23 +318,19 @@ def render_index(
         label = f"Problem Set {n}"
         if a.meta.title:
             label += f": {e(a.meta.title)}"
-        dot = '<span class="sep-dot">·</span>'
         slug = _slug(a.meta.number)
         names = _file_names(a.meta, slug)
-        links = [f'<a href="{a.rel_url}">View</a>']
+        links = []
         if a.released:
-            links += [dot, f'<a href="{a.rel_url}solutions.html">Solutions</a>']
+            links.append(view_box(f"{a.rel_url}solutions.html", "Solutions"))
         links += [
-            dot,
-            file_box(f'{a.rel_url}{names["handout_pdf"]}', "Handout PDF"),
+            file_box(f'{a.rel_url}{names["handout_pdf"]}', "Problem Set PDF"),
             file_box(f'{a.rel_url}{names["submission"]}', "LaTeX source"),
         ]
         if a.released:
             links.append(
                 file_box(f'{a.rel_url}{names["solutions_pdf"]}', "Solutions PDF")
             )
-        else:
-            links += [dot, '<span class="pending">Solutions not yet released</span>']
         cards.append(
             f'<div class="assignment">\n'
             f'<h2><a href="{a.rel_url}">{label}</a></h2>\n'

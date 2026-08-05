@@ -81,14 +81,17 @@ def test_build_site_structure_and_gating(repo):
     assert (site / "ps/2/PS2-submission-Math261-Fall2025.tex").exists()
     assert (site / ".nojekyll").exists()
 
-    # index links reflect release state
+    # index links reflect release state; unreleased solutions simply absent
     assert 'ps/1/solutions.html' in index
     assert 'ps/2/solutions.html' not in index
-    assert index.count("Solutions not yet released") == 2
+    assert "not yet released" not in index
+    assert "PS2-solutions" not in index
 
-    # grouped file boxes with download buttons; KaTeX for math in titles
-    assert 'class="filebox"' in index and 'class="dl"' in index
-    assert "Handout PDF" in index and "LaTeX source" in index
+    # single-anchor download boxes; no View link (title is the link)
+    assert 'class="filebox"' in index
+    assert ">View</a>" not in index
+    assert "Problem Set PDF" in index and "LaTeX source" in index
+    assert "Handout PDF" not in index
     assert 'ps/1/PS1-Math261-Fall2025.pdf' in index
     assert "katex" in index and "renderMathInElement" in index
     assert 'href="https://github.com/tghyde/hwgenie">hwGenie</a>' in index

@@ -40,11 +40,16 @@ NEWCMD_RE = re.compile(
 DECLOP_RE = re.compile(r"\\DeclareMathOperator(\*?)\s*\{\\([A-Za-z]+)\}\s*(?=\{)")
 
 
+# LaTeX built-ins KaTeX lacks; \ensuremath is a no-op inside math, which is
+# the only context KaTeX renders.
+DEFAULT_MACROS = {"\\ensuremath": "#1"}
+
+
 def extract_macros(text: str) -> Dict[str, str]:
     """Scan the preamble (text before \\begin{document}) for macro definitions."""
     end = text.find("\\begin{document}")
     preamble = text[: end if end >= 0 else len(text)]
-    macros: Dict[str, str] = {}
+    macros: Dict[str, str] = dict(DEFAULT_MACROS)
 
     for m in DEF_RE.finditer(preamble):
         body = _match_braced(preamble, m.end())

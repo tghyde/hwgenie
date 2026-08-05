@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import html as html_mod
 import json
-from typing import Dict, List
+from typing import Dict, List, Optional, Tuple
 
 KATEX_VERSION = "0.16.21"
 
@@ -89,10 +89,23 @@ hr.sep {
   margin: 2.2rem auto;
 }
 .center { text-align: center; margin: 1.2rem 0; }
+blockquote.epigraph {
+  margin: 1.8rem auto;
+  max-width: 34rem;
+  text-align: center;
+  font-style: italic;
+}
+blockquote.epigraph footer {
+  margin-top: .5rem;
+  font-style: normal;
+  font-size: .9rem;
+  color: var(--muted);
+}
 .task { color: var(--accent); }
 .alert { color: var(--alert); }
 
 details.problem {
+  scroll-margin-top: 3.2rem;
   background: var(--card-bg);
   border: 1px solid var(--border);
   border-left: 4px solid var(--accent);
@@ -140,8 +153,7 @@ details.solution summary {
   color: var(--sol-accent);
 }
 .solution-body { margin-top: .6rem; }
-/* amsthm-style tombstone: hollow square at the right margin of the last line */
-.solution-body > :last-child::after,
+/* amsthm-style tombstone (proofs only; solution boxes need no qed in HTML) */
 .proof > :last-child::after {
   content: "";
   float: right;
@@ -151,7 +163,6 @@ details.solution summary {
   margin-left: .5em;
   border: 1.2px solid currentColor;
 }
-.solution-body.has-qedhere > :last-child::after,
 .proof.has-qedhere > :last-child::after { content: none; }
 .qedbox {
   float: right;
@@ -253,20 +264,17 @@ DOWNLOAD_ICON = (
 )
 
 
-def download_link(href: str, label: str, filename: str = "") -> str:
-    dl = f'download="{filename}"' if filename else "download"
+def file_box(href: str, label: str) -> str:
+    """A single bordered download button: label + icon, one click target."""
     return (
-        f'<a class="dl" href="{href}" {dl} aria-label="Download {label}" '
-        f'title="Download {label}">{DOWNLOAD_ICON}</a>'
+        f'<a class="filebox" href="{href}" download '
+        f'aria-label="Download {label}">{label} {DOWNLOAD_ICON}</a>'
     )
 
 
-def file_box(href: str, label: str, filename: str = "") -> str:
-    """A bordered group: text link + download button for one file."""
-    return (
-        f'<span class="filebox"><a href="{href}">{label}</a>'
-        f"{download_link(href, label, filename)}</span>"
-    )
+def view_box(href: str, label: str) -> str:
+    """A bordered navigation button (no download)."""
+    return f'<a class="filebox viewbox" href="{href}">{label}</a>'
 
 
 def katex_block(macros_json: str) -> str:
@@ -317,26 +325,44 @@ if (window.ResizeObserver) {{
 
 
 NAV_CSS = """
-.dl {
-  display: inline-flex;
-  align-items: center;
-  padding: .15rem .3rem;
-  color: var(--accent);
-}
-.dl:hover { color: var(--fg); }
 .filebox {
   display: inline-flex;
   align-items: center;
-  gap: .25rem;
+  gap: .4rem;
   border: 1px solid var(--border);
-  padding: .1rem .2rem .1rem .5rem;
+  padding: .2rem .55rem;
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   font-size: .85rem;
   white-space: nowrap;
+  color: var(--accent);
+  text-decoration: none;
 }
-.filebox > a:first-child { color: var(--accent); text-decoration: none; }
-.filebox > a:first-child:hover { text-decoration: underline; }
-.filebox .dl { border-left: 1px solid var(--border); }
+.filebox:hover { border-color: var(--accent); }
+.filebox svg { flex-shrink: 0; }
+
+.scrollbar {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: .9rem;
+  padding: .45rem .9rem;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: .85rem;
+  overflow-x: auto;
+  transform: translateY(-100%);
+  transition: transform .18s ease;
+  white-space: nowrap;
+}
+.scrollbar.visible { transform: translateY(0); }
+.scrollbar a { color: var(--accent); text-decoration: none; }
+.scrollbar a:hover { text-decoration: underline; }
+.scrollbar .sb-label { color: var(--muted); }
+.scrollbar .sb-jumps { display: flex; gap: .7rem; }
+.scrollbar .sb-top { margin-left: auto; }
 nav.site {
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   font-size: .85rem;
@@ -352,6 +378,59 @@ a { color: var(--accent); }
 """
 
 
+SCROLLBAR_JS = """
+<script>
+(function() {
+  var bar = document.getElementById("scrollnav");
+  if (!bar) return;
+  var shown = false;
+  window.addEventListener("scroll", function() {
+    var want = window.scrollY > 350;
+    if (want !== shown) {
+      shown = want;
+      bar.classList.toggle("visible", want);
+    }
+  }, {passive: true});
+  bar.addEventListener("click", function(ev) {
+    var a = ev.target.closest("a");
+    if (!a) return;
+    var href = a.getAttribute("href");
+    if (href === "#top") {
+      ev.preventDefault();
+      window.scrollTo({top: 0, behavior: "smooth"});
+    } else if (href && href.charAt(0) === "#") {
+      var t = document.querySelector(href);
+      if (t && t.tagName === "DETAILS") t.open = true;
+    }
+  });
+})();
+</script>
+"""
+
+
+def scrollbar_html(
+    home_href: str,
+    home_label: str,
+    page_label: str,
+    jump_links: Optional[List[Tuple[str, str]]] = None,
+) -> str:
+    jumps = ""
+    if jump_links:
+        items = " ".join(
+            f'<a href="#{html_mod.escape(anchor)}">{html_mod.escape(num)}</a>'
+            for num, anchor in jump_links
+        )
+        jumps = f'<span class="sb-jumps">{items}</span>'
+    return (
+        f'<div class="scrollbar" id="scrollnav">'
+        f'<a href="{home_href}">← {html_mod.escape(home_label)}</a>'
+        f'<span class="sb-label">{html_mod.escape(page_label)}</span>'
+        f"{jumps}"
+        f'<a class="sb-top" href="#top" aria-label="Back to top">↑ Top</a>'
+        f"</div>"
+    )
+
+
 def render_page(
     title: str,
     course_line: str,
@@ -360,6 +439,7 @@ def render_page(
     macros: Dict[str, str],
     solutions: bool = False,
     nav: str = "",
+    scrollbar: str = "",
 ) -> str:
     badge = '<div><span class="badge">Solutions</span></div>' if solutions else ""
     nav_html = f'<nav class="site">{nav}</nav>' if nav else ""
@@ -375,6 +455,7 @@ def render_page(
 <style>{CSS}{NAV_CSS}</style>
 </head>
 <body>
+{scrollbar}
 <main>
 {nav_html}
 <header class="doc">
@@ -385,6 +466,7 @@ def render_page(
 {body}
 <footer class="doc">{FOOTER_HTML}</footer>
 </main>
+{SCROLLBAR_JS if scrollbar else ""}
 </body>
 </html>
 """
