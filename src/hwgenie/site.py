@@ -179,6 +179,21 @@ def build_site(
     )
     theme = theme_from_config(cfg)
     custom_css_on = (repo_root / "static" / "custom.css").exists()
+    intro_path = repo_root / "static" / "intro.html"
+    intro_html = (
+        intro_path.read_text(encoding="utf-8") if intro_path.exists() else ""
+    )
+
+    # Every file in handouts/ is published at handouts/<name> and listed in
+    # the index's Handouts section.
+    handout_files = []
+    handouts_dir = repo_root / "handouts"
+    if handouts_dir.is_dir():
+        (out / "handouts").mkdir(parents=True, exist_ok=True)
+        for f in sorted(handouts_dir.iterdir()):
+            if f.is_file() and not f.name.startswith("."):
+                shutil.copyfile(f, out / "handouts" / f.name)
+                handout_files.append(f.name)
 
     macro_pool: Dict[str, str] = {}
     if extra_preamble:
@@ -197,6 +212,7 @@ def build_site(
     index = render_index(
         cfg, result.assignments, macro_pool, theme=theme,
         custom_css="custom.css" if custom_css_on else "",
+        intro_html=intro_html, handout_files=handout_files,
     )
     (out / "index.html").write_text(index, encoding="utf-8")
 
@@ -437,6 +453,8 @@ def render_index(
     macros: Optional[Dict[str, str]] = None,
     theme: str = "",
     custom_css: str = "",
+    intro_html: str = "",
+    handout_files: Optional[List[str]] = None,
 ) -> str:
     if not theme:
         theme = theme_from_config(cfg)
@@ -460,6 +478,14 @@ def render_index(
             f'<h2><a href="{a.rel_url}">Syllabus</a></h2>\n'
             f'<div class="links">'
             f'{file_box(f"{a.rel_url}{pdf}", "Syllabus PDF")}</div>\n</div>'
+        )
+    for fname in handout_files or []:
+        pretty = re.sub(r"[-_]+", " ", fname.rsplit(".", 1)[0]).strip().title()
+        top_cards.append(
+            f'<div class="assignment">\n'
+            f'<h2>{e(pretty)}</h2>\n'
+            f'<div class="links">'
+            f'{file_box(f"handouts/{fname}", e(fname))}</div>\n</div>'
         )
 
     lesson_cards = []
@@ -503,16 +529,21 @@ def render_index(
         )
 
     sections = []
+    if intro_html:
+        sections.append(f'<div class="intro">\n{intro_html}\n</div>')
     if top_cards:
-        sections.append("\n".join(top_cards))
+        sections.append(
+            '<h2 style="font-size:1.15rem" id="handouts">Handouts</h2>\n'
+            + "\n".join(top_cards)
+        )
     if lesson_cards:
         sections.append(
-            '<h2 style="font-size:1.15rem">Lessons</h2>\n'
+            '<h2 style="font-size:1.15rem" id="lessons">Lessons</h2>\n'
             + "\n".join(lesson_cards)
         )
     if cards:
         sections.append(
-            '<h2 style="font-size:1.15rem">Problem Sets</h2>\n'
+            '<h2 style="font-size:1.15rem" id="problem-sets">Problem Sets</h2>\n'
             + "\n".join(cards)
         )
     body = "\n".join(sections) if sections else "<p>Nothing posted yet.</p>"

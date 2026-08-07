@@ -15,6 +15,7 @@ DEFAULT_THEME_CSS = _theme_css()
 CSS = """
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
+[id] { scroll-margin-top: 4.5rem; }
 body {
   margin: 0;
   background: var(--bg);
