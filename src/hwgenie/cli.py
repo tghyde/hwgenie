@@ -90,10 +90,16 @@ def main(argv=None) -> int:
         help="Override today's date (YYYY-MM-DD) for release gating.",
     )
 
+    from .new_course import add_parser as add_new_course_parser
+    add_new_course_parser(sub)
+
     args = parser.parse_args(argv)
 
     if args.command == "build-site":
         return run_build_site(args)
+    if args.command == "new-course":
+        from .new_course import run_new_course
+        return run_new_course(args)
 
     try:
         result = build(
