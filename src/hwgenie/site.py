@@ -191,7 +191,8 @@ def build_site(
     if handouts_dir.is_dir():
         (out / "handouts").mkdir(parents=True, exist_ok=True)
         for f in sorted(handouts_dir.iterdir()):
-            if f.is_file() and not f.name.startswith("."):
+            if (f.is_file() and not f.name.startswith(".")
+                    and not f.name.lower().startswith("readme")):
                 shutil.copyfile(f, out / "handouts" / f.name)
                 handout_files.append(f.name)
 
