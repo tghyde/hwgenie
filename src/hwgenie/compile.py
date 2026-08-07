@@ -42,7 +42,7 @@ def compile_pdf(
     stdout = ""
     for cmd in cmds:
         result = subprocess.run(
-            cmd, cwd=workdir, capture_output=True, text=True, timeout=300, env=env
+            cmd, cwd=workdir, capture_output=True, text=True, errors="replace", timeout=300, env=env
         )
         stdout = result.stdout or ""
         if result.returncode != 0:

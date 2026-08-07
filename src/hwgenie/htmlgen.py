@@ -48,6 +48,9 @@ WRAP_MACROS = {
     "underline": ("<u>", "</u>"),
     "blue": ('<span class="task">', "</span>"),
     "red": ('<span class="alert">', "</span>"),
+    "hl": ("<mark>", "</mark>"),
+    "ul": ("<u>", "</u>"),
+    "st": ("<s>", "</s>"),
 }
 
 # Macros to silently drop, with the number of {}-arguments to consume when
@@ -62,7 +65,7 @@ SKIP_MACROS = {
     "setlength": 2, "addtolength": 2,
     "qed": 0, "pushQED": 1, "popQED": 0,
     "theoremstyle": 1,
-    "hwnumber": 1, "hwtitle": 1, "hwsolutions": 1, "hwrelease": 1,
+    "hwnumber": 1, "hwtitle": 1, "hwsolutions": 1, "hwrelease": 1, "hwtype": 1,
     "hwmaketitle": 0, "hwcourse": 0, "hwsemester": 0, "hwvariant": 1,
     "!": 0, ";": 0, ":": 0,
 }
@@ -258,6 +261,9 @@ class HtmlConverter:
             return i + 1
         if isinstance(n, LatexMathNode):
             raw = self.text[n.pos : n.pos + n.len]
+            raw, mathnotes = _extract_math_footnotes(raw)
+            for note in mathnotes:
+                self.footnotes.append(self.convert_fragment(note))
             if "\\qedhere" in raw:
                 self._saw_qedhere = True
                 raw = raw.replace("\\qedhere", "")
@@ -294,6 +300,11 @@ class HtmlConverter:
                         flow.inline(esc(part))
                     return i + 2
             flow.inline(math_html)
+            for k in range(len(self.footnotes) - len(mathnotes) + 1,
+                           len(self.footnotes) + 1):
+                flow.inline(
+                    f'<sup class="fn"><a href="#fn-{k}" id="fnref-{k}">{k}</a></sup>'
+                )
             return i + 1
         if isinstance(n, LatexGroupNode):
             self.walk(n.nodelist, flow)
@@ -378,8 +389,9 @@ class HtmlConverter:
                 fname = _group_text(args[-1]).strip()
             if fname:
                 self.images.append(fname)
+                base = fname.rsplit("/", 1)[-1]
                 flow.block(
-                    f'<figure class="fig"><img src="{html_mod.escape(fname)}" '
+                    f'<figure class="fig"><img src="{html_mod.escape(base)}" '
                     f'alt="{html_mod.escape(_alt_from_filename(fname))}"></figure>'
                 )
             return j
@@ -591,6 +603,16 @@ class HtmlConverter:
             flow.block(self._code_html(n))
         elif name in MATH_ENVS:
             flow.block(self._math_env_html(n))
+        elif name in ("tikzpicture", "tikzcd"):
+            # TikZ can't be rendered client-side; point readers at the PDF.
+            flow.block(
+                '<div class="thmblock" style="text-align:center">'
+                "<em>(diagram — see the PDF version)</em></div>"
+            )
+            if not self._collecting:
+                self.warnings.append(
+                    f"{{{name}}} rendered as a see-the-PDF placeholder."
+                )
         elif name == "htmlonly":
             inner = Flow()
             self.walk(n.nodelist, inner)
@@ -676,8 +698,18 @@ class HtmlConverter:
                 continue
             i += 1
         self.images.extend(imgs)
+        if not imgs and "tikzpicture" in self.text[n.pos : n.pos + n.len]:
+            if not self._collecting:
+                self.warnings.append(
+                    "figure with tikzpicture rendered as a see-the-PDF "
+                    "placeholder."
+                )
+            return (
+                '<div class="thmblock" style="text-align:center">'
+                "<em>(diagram — see the PDF version)</em></div>"
+            )
         parts = [
-            f'<img src="{html_mod.escape(f)}" '
+            f'<img src="{html_mod.escape(f.rsplit("/", 1)[-1])}" '
             f'alt="{html_mod.escape(_alt_from_filename(f))}">'
             for f in imgs
         ]
@@ -803,6 +835,9 @@ class HtmlConverter:
         body = env_text[
             len(f"\\begin{{{name}}}") : env_text.rfind(f"\\end{{{name}}}")
         ]
+        body, mathnotes = _extract_math_footnotes(body)
+        for note in mathnotes:
+            self.footnotes.append(self.convert_fragment(note))
         label_keys = re.findall(r"\\label\s*\{([^{}]*)\}", body)
         body = re.sub(r"\\label\s*\{[^{}]*\}", "", body)
         has_qedhere = "\\qedhere" in body
@@ -840,7 +875,21 @@ class HtmlConverter:
             tex = f"\\[\\begin{{{inner_env}}}{body}\\end{{{inner_env}}}{qed_tag}\\]"
         else:
             tex = f"\\[{body}{qed_tag}\\]"
-        return f'<div class="math-display"{anchor}>{esc(tex)}</div>'
+        marks = "".join(
+            f'<sup class="fn"><a href="#fn-{k}" id="fnref-{k}">{k}</a></sup>'
+            for k in range(len(self.footnotes) - len(mathnotes) + 1,
+                           len(self.footnotes) + 1)
+        )
+        return f'<div class="math-display"{anchor}>{esc(tex)}</div>{marks}'
+
+
+FOOTNOTE_RE = re.compile(r"\\footnote\{((?:[^{}]|\{[^{}]*\})*)\}")
+
+
+def _extract_math_footnotes(raw: str):
+    """KaTeX cannot render \footnote inside math; pull the notes out."""
+    notes = [m.group(1) for m in FOOTNOTE_RE.finditer(raw)]
+    return FOOTNOTE_RE.sub("", raw), notes
 
 
 # ------------------------------------------------------------------- helpers

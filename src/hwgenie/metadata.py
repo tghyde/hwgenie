@@ -33,7 +33,7 @@ V2_END = re.compile(r"^%\s*={2,}\s*$")
 KV_LINE = re.compile(r"^%\s*([A-Za-z][\w-]*)\s*=\s*(.*?)\s*$")
 LEGACY_START = re.compile(r"^%\s*Problem Set Data\s*$", re.IGNORECASE)
 # LaTeX-variable metadata (defined in hwgenie.sty): \hwnumber{3} etc.
-HWCMD_RE = re.compile(r"\\hw(number|title|solutions|release)\s*\{([^{}]*)\}")
+HWCMD_RE = re.compile(r"\\hw(type|number|title|solutions|release)\s*\{([^{}]*)\}")
 
 
 class MetadataError(ValueError):
@@ -126,7 +126,8 @@ def parse_metadata(text: str) -> Metadata:
 
 
 def _build(raw: dict, fmt: str, span: Tuple[int, int]) -> Metadata:
-    if not raw.get("number"):
+    doc_type = raw.get("type", "problemset").lower()
+    if not raw.get("number") and doc_type in ("problemset", "lesson"):
         raise MetadataError("Metadata block is missing the required 'number' key.")
 
     # course/semester may instead come from course.yml (merged at build time).
@@ -135,10 +136,10 @@ def _build(raw: dict, fmt: str, span: Tuple[int, int]) -> Metadata:
         course = f"Math {course}"
 
     return Metadata(
-        number=raw["number"],
+        number=raw.get("number", ""),
         course=course,
         semester=raw.get("semester"),
-        doc_type=raw.get("type", "problemset").lower(),
+        doc_type=doc_type,
         title=raw.get("title"),
         solutions_release=raw.get("solutions"),
         release=raw.get("release"),
@@ -147,3 +148,13 @@ def _build(raw: dict, fmt: str, span: Tuple[int, int]) -> Metadata:
         span=span,
         raw=raw,
     )
+
+
+def latex_plain(s):
+    """Down-convert simple LaTeX escapes in short text (titles) for HTML use."""
+    if not s:
+        return s
+    for a, b in (("\\&", "&"), ("\\%", "%"), ("\\#", "#"),
+                 ("\\_", "_"), ("~", " ")):
+        s = s.replace(a, b)
+    return s

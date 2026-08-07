@@ -481,9 +481,13 @@ def render_page(
     nav: str = "",
     scrollbar: str = "",
     theme: str = DEFAULT_THEME_CSS,
+    custom_css: str = "",
 ) -> str:
     badge = '<div><span class="badge">Solutions</span></div>' if solutions else ""
     nav_html = f'<nav class="site">{nav}</nav>' if nav else ""
+    css_link = (
+        f'<link rel="stylesheet" href="{custom_css}">' if custom_css else ""
+    )
     macros_json = json.dumps(macros, ensure_ascii=False)
     e = html_mod.escape
     return f"""<!DOCTYPE html>

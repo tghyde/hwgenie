@@ -33,8 +33,11 @@ def run_build_site(args) -> int:
 
     print(f"Site built in: {result.out_dir}")
     for a in result.assignments:
+        kind = {"lesson": "Lesson", "syllabus": "Syllabus"}.get(
+            a.meta.doc_type, "Problem Set")
+        label = f"{kind} {a.meta.number}".strip()
         status = "released" if a.released else "solutions hidden"
-        print(f"  Problem Set {a.meta.number} ({status}) -> {a.rel_url}")
+        print(f"  {label} ({status}) -> {a.rel_url}")
     for w in result.warnings:
         print(f"warning: {w}", file=sys.stderr)
     for e in result.errors:

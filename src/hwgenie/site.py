@@ -54,7 +54,7 @@ from .htmltemplate import (
     view_box,
 )
 from .katexmacros import extract_macros
-from .metadata import Metadata, MetadataError, parse_metadata
+from .metadata import Metadata, MetadataError, latex_plain, parse_metadata
 from .themes import theme_from_config
 from . import texscan
 
@@ -118,6 +118,17 @@ def _slug(number: str) -> str:
     return re.sub(r"[^A-Za-z0-9.-]+", "-", number.strip()).strip("-").lower()
 
 
+def _tag(meta: Metadata) -> str:
+    return re.sub(r"\s+", "", f"{meta.course}") + "-" + re.sub(
+        r"\s+", "", f"{meta.semester}")
+
+
+def _page_pdf_name(meta: Metadata, n: str) -> str:
+    if meta.doc_type == "lesson":
+        return f"Lesson{n}-{_tag(meta)}.pdf"
+    return f"Syllabus-{_tag(meta)}.pdf"
+
+
 def _file_names(meta: Metadata, n: str) -> Dict[str, str]:
     """Descriptive download names, e.g. PS1-Math261-Fall2025.pdf"""
     tag = re.sub(r"\s+", "", f"{meta.course}") + "-" + re.sub(
@@ -167,6 +178,7 @@ def build_site(
         sty_path.read_text(encoding="utf-8") if sty_path.exists() else ""
     )
     theme = theme_from_config(cfg)
+    custom_css_on = (repo_root / "static" / "custom.css").exists()
 
     macro_pool: Dict[str, str] = {}
     if extra_preamble:
@@ -176,13 +188,23 @@ def build_site(
             _build_assignment(
                 src, cfg, out, compile_pdfs, today, result, macro_pool,
                 extra_preamble=extra_preamble, theme=theme, repo_root=repo_root,
+                custom_css_on=custom_css_on,
             )
         except (BuildError, MetadataError) as e:
             result.errors.append(f"{src.relative_to(repo_root)}: {e}")
 
     result.assignments.sort(key=_sort_key)
-    index = render_index(cfg, result.assignments, macro_pool, theme=theme)
+    index = render_index(
+        cfg, result.assignments, macro_pool, theme=theme,
+        custom_css="custom.css" if custom_css_on else "",
+    )
     (out / "index.html").write_text(index, encoding="utf-8")
+
+    # Files in static/ are published verbatim at the site root, after the
+    # generated site, so they can add pages or override generated ones.
+    static_dir = repo_root / "static"
+    if static_dir.is_dir():
+        shutil.copytree(static_dir, out, dirs_exist_ok=True)
     return result
 
 
@@ -204,6 +226,7 @@ def _build_assignment(
     extra_preamble: str = "",
     theme: str = "",
     repo_root: Optional[Path] = None,
+    custom_css_on: bool = False,
 ) -> None:
     text = src.read_text(encoding="utf-8")
     if macro_pool is not None:
@@ -212,7 +235,7 @@ def _build_assignment(
     meta.course = meta.course or cfg.get("course")
     meta.semester = meta.semester or cfg.get("semester")
     require_course_fields(meta)
-    if meta.doc_type != "problemset":
+    if meta.doc_type not in ("problemset", "lesson", "syllabus"):
         result.warnings.append(
             f"{src.name}: type {meta.doc_type!r} not supported yet; skipped."
         )
@@ -228,6 +251,13 @@ def _build_assignment(
                 "not built into the site."
             )
             return
+
+    if meta.doc_type in ("lesson", "syllabus"):
+        _build_page_doc(
+            src, cfg, out, compile_pdfs, result, meta, text,
+            extra_preamble, theme, repo_root, custom_css_on,
+        )
+        return
 
     released = is_released(meta.solutions_release, today)
     if released is None:
@@ -274,6 +304,8 @@ def _build_assignment(
         variants["handout"], meta, False, ps_dir / "index.html",
         src.parent, br, nav=" ".join(handout_nav), sb_home=sb_home,
         extra_preamble=extra_preamble, theme=theme,
+        image_search=[repo_root] if repo_root else None,
+        custom_css="../../custom.css" if custom_css_on else "",
     )
     ab.files["handout_html"] = ps_dir / "index.html"
 
@@ -283,6 +315,8 @@ def _build_assignment(
             variants["solutions_web"], meta, True, ps_dir / "solutions.html",
             src.parent, br, nav=" ".join(sol_nav), sb_home=sb_home,
             extra_preamble=extra_preamble, theme=theme,
+            image_search=[repo_root] if repo_root else None,
+            custom_css="../../custom.css" if custom_css_on else "",
         )
         ab.files["solutions_html"] = ps_dir / "solutions.html"
 
@@ -306,6 +340,67 @@ def _build_assignment(
                 ab.files["solutions_pdf"] = pdf_path
             if error:
                 result.errors.append(f"{src.name}: {error}")
+
+    result.warnings.extend(f"{src.name}: {w}" for w in br.warnings)
+    result.assignments.append(ab)
+
+
+def _build_page_doc(
+    src: Path,
+    cfg: Dict[str, str],
+    out: Path,
+    compile_pdfs: bool,
+    result: SiteResult,
+    meta: Metadata,
+    text: str,
+    extra_preamble: str,
+    theme: str,
+    repo_root: Optional[Path],
+    custom_css_on: bool,
+) -> None:
+    """Lessons and the syllabus: one PDF + one HTML page, no variants."""
+    from . import transforms
+
+    search_dirs = [src.parent] + ([repo_root] if repo_root else [])
+    text = transforms.expand_inputs(text, search_dirs)
+
+    if meta.doc_type == "lesson":
+        n = _slug(meta.number)
+        rel_url = f"lessons/{n}/"
+        page_dir = out / "lessons" / n
+        depth = 2
+    else:
+        n = ""
+        rel_url = "syllabus/"
+        page_dir = out / "syllabus"
+        depth = 1
+    page_dir.mkdir(parents=True, exist_ok=True)
+    pdf_name = _page_pdf_name(meta, n)
+
+    ab = AssignmentBuild(meta=meta, source_path=src, rel_url=rel_url,
+                         released=True)
+    br = BuildResult(meta=meta, out_dir=page_dir)
+    course_name = cfg.get("course", "Course home")
+    home = view_box("../" * depth, f"← {html_mod.escape(course_name)}")
+    nav = " ".join([home, file_box(pdf_name, "PDF")])
+    build_html(
+        text, meta, True, page_dir / "index.html", src.parent, br,
+        nav=nav, sb_home=("../" * depth, course_name),
+        extra_preamble=extra_preamble, theme=theme,
+        image_search=[repo_root] if repo_root else None,
+        custom_css=("../" * depth + "custom.css") if custom_css_on else "",
+    )
+    ab.files["html"] = page_dir / "index.html"
+
+    if compile_pdfs:
+        pdf_path, error = compile_variant_pdf(
+            text, page_dir, src.parent, pdf_name, "_hwg_page",
+            extra_inputs=repo_root if extra_preamble else None,
+        )
+        if pdf_path:
+            ab.files["pdf"] = pdf_path
+        if error:
+            result.errors.append(f"{src.name}: {error}")
 
     result.warnings.extend(f"{src.name}: {w}" for w in br.warnings)
     result.assignments.append(ab)
@@ -341,6 +436,7 @@ def render_index(
     assignments: List[AssignmentBuild],
     macros: Optional[Dict[str, str]] = None,
     theme: str = "",
+    custom_css: str = "",
 ) -> str:
     if not theme:
         theme = theme_from_config(cfg)
@@ -352,12 +448,41 @@ def render_index(
     heading = f"{course}: {title}" if title else course
     sub = " · ".join(x for x in (semester, instructor) if x)
 
+    problemsets = [a for a in assignments if a.meta.doc_type == "problemset"]
+    lessons = [a for a in assignments if a.meta.doc_type == "lesson"]
+    syllabi = [a for a in assignments if a.meta.doc_type == "syllabus"]
+
+    top_cards = []
+    for a in syllabi:
+        pdf = _page_pdf_name(a.meta, "")
+        top_cards.append(
+            f'<div class="assignment">\n'
+            f'<h2><a href="{a.rel_url}">Syllabus</a></h2>\n'
+            f'<div class="links">'
+            f'{file_box(f"{a.rel_url}{pdf}", "Syllabus PDF")}</div>\n</div>'
+        )
+
+    lesson_cards = []
+    for a in lessons:
+        num = e(a.meta.number)
+        label = f"Lesson {num}"
+        if a.meta.title:
+            label += f": {e(latex_plain(a.meta.title))}"
+        slug = _slug(a.meta.number)
+        pdf = _page_pdf_name(a.meta, slug)
+        lesson_cards.append(
+            f'<div class="assignment">\n'
+            f'<h2><a href="{a.rel_url}">{label}</a></h2>\n'
+            f'<div class="links">'
+            f'{file_box(f"{a.rel_url}{pdf}", "Lesson PDF")}</div>\n</div>'
+        )
+
     cards = []
-    for a in assignments:
+    for a in problemsets:
         n = e(a.meta.number)
         label = f"Problem Set {n}"
         if a.meta.title:
-            label += f": {e(a.meta.title)}"
+            label += f": {e(latex_plain(a.meta.title))}"
         slug = _slug(a.meta.number)
         names = _file_names(a.meta, slug)
         links = []
@@ -377,7 +502,20 @@ def render_index(
             f'<div class="links">{" ".join(links)}</div>\n</div>'
         )
 
-    body = "\n".join(cards) if cards else "<p>No assignments posted yet.</p>"
+    sections = []
+    if top_cards:
+        sections.append("\n".join(top_cards))
+    if lesson_cards:
+        sections.append(
+            '<h2 style="font-size:1.15rem">Lessons</h2>\n'
+            + "\n".join(lesson_cards)
+        )
+    if cards:
+        sections.append(
+            '<h2 style="font-size:1.15rem">Problem Sets</h2>\n'
+            + "\n".join(cards)
+        )
+    body = "\n".join(sections) if sections else "<p>Nothing posted yet.</p>"
     macros_json = json.dumps(macros or {}, ensure_ascii=False)
     plain_heading = re.sub(r"\$", "", heading)
     return f"""<!DOCTYPE html>
@@ -389,6 +527,7 @@ def render_index(
 {THEME_HEAD_SCRIPT}
 {katex_block(macros_json)}
 <style>{theme}{CSS}{NAV_CSS}{INDEX_CSS}</style>
+{f'<link rel="stylesheet" href="{custom_css}">' if custom_css else ""}
 </head>
 <body>
 {THEME_TOGGLE_HTML}
@@ -398,7 +537,6 @@ def render_index(
 <h1>{e(heading)}</h1>
 </header>
 <section>
-<h2 style="font-size:1.15rem">Problem Sets</h2>
 {body}
 </section>
 <footer class="doc">{FOOTER_HTML}</footer>

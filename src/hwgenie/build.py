@@ -22,7 +22,7 @@ from .courseconfig import find_course_config, load_course_config
 from .htmlgen import HtmlConverter
 from .htmltemplate import DEFAULT_THEME_CSS, render_page, scrollbar_html
 from .katexmacros import extract_macros
-from .metadata import Metadata, parse_metadata
+from .metadata import Metadata, latex_plain, parse_metadata
 from .themes import theme_from_config
 
 
@@ -195,30 +195,43 @@ def build_html(
     sb_home: Optional[tuple] = None,   # (href, label) for the sticky bar
     extra_preamble: str = "",
     theme: str = DEFAULT_THEME_CSS,
+    image_search: Optional[list] = None,
+    custom_css: str = "",
 ) -> None:
+    # An explicit \setcounter{section}{N} wins over the assignment number
+    # (some lessons deliberately use a different theorem-numbering base).
+    sec_m = re.search(r"\\setcounter\{section\}\{(\d+)\}", variant_text)
+    section = sec_m.group(1) if sec_m else meta.number
     conv = HtmlConverter(variant_text, include_solutions=include_solutions,
-                         section=meta.number, extra_preamble=extra_preamble)
+                         section=section, extra_preamble=extra_preamble)
     body = conv.convert()
     result.warnings.extend(sorted(set(conv.warnings)))
 
+    label = {"lesson": f"Lesson {meta.number}",
+             "syllabus": "",
+             }.get(meta.doc_type, f"Problem Set {meta.number}")
     if conv.title_lines:
         course_line = conv.title_lines[0]
-        heading = " — ".join(conv.title_lines[1:]) or f"Problem Set {meta.number}"
+        heading = " — ".join(conv.title_lines[1:]) or label
     else:
         course_line = f"{meta.course}, {meta.semester}"
-        heading = f"Problem Set {meta.number}" + (
-            f": {meta.title}" if meta.title else ""
-        )
+        if label and meta.title:
+            heading = f"{label}: {latex_plain(meta.title)}"
+        else:
+            heading = label or latex_plain(meta.title) or ""
 
     title = f"{re.sub('<[^>]+>', '', heading)} — {re.sub('<[^>]+>', '', course_line)}"
     title = re.sub(r"\$", "", title)  # <title> is plain text; drop math delimiters
-    if include_solutions:
+    solutions_page = include_solutions and meta.doc_type == "problemset"
+    if solutions_page:
         title += " (Solutions)"
 
     scrollbar = ""
     if sb_home:
-        label = f"PS {meta.number}"
-        if include_solutions:
+        kind = {"lesson": "Lesson", "syllabus": "Syllabus"}.get(
+            meta.doc_type, "PS")
+        label = f"{kind} {meta.number}".strip()
+        if include_solutions and meta.doc_type == "problemset":
             label += " · Solutions"
         scrollbar = scrollbar_html(
             sb_home[0], sb_home[1], label, conv.problem_anchors
@@ -230,19 +243,22 @@ def build_html(
         heading=heading,
         body=body,
         macros=extract_macros(extra_preamble + "\n" + variant_text),
-        solutions=include_solutions,
+        solutions=solutions_page,
         nav=nav,
         scrollbar=scrollbar,
         theme=theme,
+        custom_css=custom_css,
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(page, encoding="utf-8")
 
     img_dest = image_dir if image_dir is not None else out_path.parent
     img_dest.mkdir(parents=True, exist_ok=True)
+    search = [source_dir] + list(image_search or [])
     for img in sorted(set(conv.images)):
-        src = source_dir / img
-        if src.exists():
+        src = next((Path(d) / img for d in search if (Path(d) / img).exists()),
+                   None)
+        if src is not None:
             shutil.copyfile(src, img_dest / Path(img).name)
         else:
             result.warnings.append(f"Image not found, not copied: {img}")
