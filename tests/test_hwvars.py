@@ -84,11 +84,26 @@ def test_submission_inlines_sty_and_coursedata(tmp_path):
     v = make_variants(doc(), search_dirs=[tmp_path])
     sub = v["submission"]
     assert "\\usepackage{hwgenie}" not in sub
-    assert "hwgenie.sty (inlined" in sub
     assert "\\ProvidesPackage" not in sub
     assert "\\renewcommand{\\hwcourse}{Math 261}" in sub
     assert "\\InputIfFileExists{coursedata}" not in sub
     assert "Secret." not in sub
+
+
+def test_submission_prefers_student_preamble(tmp_path):
+    (tmp_path / "hwgenie.sty").write_text(STY)
+    (tmp_path / "submission-preamble.tex").write_text(
+        "% student preamble\n\\usepackage{amsmath}\n"
+        "\\InputIfFileExists{coursedata}{}{}\n"
+    )
+    (tmp_path / "coursedata.tex").write_text(
+        "\\renewcommand{\\hwcourse}{Math 261}\n"
+    )
+    v = make_variants(doc(), search_dirs=[tmp_path])
+    sub = v["submission"]
+    assert "% student preamble" in sub
+    assert "\\ProvidesPackage" not in sub          # sty NOT inlined
+    assert "\\renewcommand{\\hwcourse}{Math 261}" in sub
 
 
 def test_hwvariant_injected_when_no_header_marker():

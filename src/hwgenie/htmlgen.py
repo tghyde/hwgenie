@@ -603,6 +603,22 @@ class HtmlConverter:
             flow.block(self._code_html(n))
         elif name in MATH_ENVS:
             flow.block(self._math_env_html(n))
+        elif name == "card":
+            kids = [c for c in (n.nodelist or []) if c is not None]
+            k = 0
+            while (k < len(kids) and isinstance(kids[k], LatexCharsNode)
+                   and not kids[k].chars.strip()):
+                k += 1
+            title = ""
+            if k < len(kids) and isinstance(kids[k], LatexGroupNode):
+                title = self.convert_inline(kids[k].nodelist).strip()
+                kids = kids[:k] + kids[k + 1:]
+            inner = Flow()
+            self.walk(kids, inner)
+            flow.block(
+                f'<div class="htmlcard"><p class="card-title">{title}</p>\n'
+                f"{inner.result()}\n</div>"
+            )
         elif name in ("tikzpicture", "tikzcd"):
             # TikZ can't be rendered client-side; point readers at the PDF.
             flow.block(

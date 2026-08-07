@@ -127,6 +127,22 @@ details.problem:not([open]) > summary { margin-bottom: .3rem; }
   display: inline;
 }
 
+.htmlcard {
+  background: var(--card-bg);
+  padding: 1.15rem 1.35rem;
+  margin: 1.6rem 0;
+}
+.htmlcard > :last-child { margin-bottom: 0; }
+.card-title {
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: .95rem;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin: 0 0 .7rem;
+}
+
 details.solution {
   background: var(--sol-bg);
   padding: .65rem .95rem;

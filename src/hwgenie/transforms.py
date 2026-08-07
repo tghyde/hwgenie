@@ -124,22 +124,32 @@ USEPACKAGE_HWGENIE_RE = re.compile(r"\\usepackage\{hwgenie\}")
 
 
 def inline_sty(text: str, search_dirs: Sequence[Path]) -> str:
-    """Replace \\usepackage{hwgenie} with the .sty contents (and inline
-    coursedata.tex) so the student submission compiles standalone."""
+    """Replace \\usepackage{hwgenie} so the student submission compiles
+    standalone.  A repo-root submission-preamble.tex (a minimal, commented,
+    student-facing preamble) is preferred; the full hwgenie.sty is the
+    fallback."""
     m = USEPACKAGE_HWGENIE_RE.search(text)
     if not m:
         return text
-    sty_path = next(
-        (Path(d) / "hwgenie.sty" for d in search_dirs
-         if (Path(d) / "hwgenie.sty").exists()),
+    pre_path = next(
+        (Path(d) / "submission-preamble.tex" for d in search_dirs
+         if (Path(d) / "submission-preamble.tex").exists()),
         None,
     )
-    if sty_path is None:
-        return text
-    sty = sty_path.read_text(encoding="utf-8")
-    sty = re.sub(r"\\NeedsTeXFormat\{[^{}]*\}[^\n]*\n", "", sty)
-    sty = re.sub(r"\\ProvidesPackage\{[^{}]*\}(\[[^\]]*\])?[^\n]*\n", "", sty)
-    sty = sty.replace("\\endinput", "")
+    if pre_path is not None:
+        sty = pre_path.read_text(encoding="utf-8")
+    else:
+        sty_path = next(
+            (Path(d) / "hwgenie.sty" for d in search_dirs
+             if (Path(d) / "hwgenie.sty").exists()),
+            None,
+        )
+        if sty_path is None:
+            return text
+        sty = sty_path.read_text(encoding="utf-8")
+        sty = re.sub(r"\\NeedsTeXFormat\{[^{}]*\}[^\n]*\n", "", sty)
+        sty = re.sub(r"\\ProvidesPackage\{[^{}]*\}(\[[^\]]*\])?[^\n]*\n", "", sty)
+        sty = sty.replace("\\endinput", "")
     cd_path = next(
         (Path(d) / "coursedata.tex" for d in search_dirs
          if (Path(d) / "coursedata.tex").exists()),
@@ -152,9 +162,7 @@ def inline_sty(text: str, search_dirs: Sequence[Path]) -> str:
         )
     return (
         text[: m.start()]
-        + "% ---------- hwgenie.sty (inlined by hwgenie) ----------\n"
         + sty.strip("\n")
-        + "\n% ---------- end hwgenie.sty ----------"
         + text[m.end():]
     )
 
