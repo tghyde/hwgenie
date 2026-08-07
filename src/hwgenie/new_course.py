@@ -206,6 +206,8 @@ def _create_course(req: CreateRequest, log) -> CreateResult:
           f"Fill in course data for {req.course}, {req.semester}"],
          log, cwd=local, quiet=True)
     _run(["git", "push", "-q"], log, cwd=local, quiet=True)
+    pushed_sha = _run(["git", "rev-parse", "HEAD"], log, cwd=local,
+                      quiet=True).stdout.strip()
 
     log("Enabling GitHub Pages (source: GitHub Actions)...")
     proc = _run(["gh", "api", "-X", "POST", f"repos/{full}/pages",
@@ -226,7 +228,7 @@ def _create_course(req: CreateRequest, log) -> CreateResult:
 
     build_state = "skipped"
     if req.wait_for_build:
-        build_state = _wait_for_build(full, log)
+        build_state = _wait_for_build(full, pushed_sha, log)
     else:
         log("Not waiting for the build — check the repo's Actions tab.")
 
@@ -256,29 +258,61 @@ def _create_course(req: CreateRequest, log) -> CreateResult:
     return result
 
 
-def _wait_for_build(full: str, log, timeout_s: int = 25 * 60) -> str:
+def _wait_for_build(full: str, sha: str, log,
+                    timeout_s: int = 25 * 60) -> str:
+    """Wait for the run that builds *our* pushed commit.
+
+    Tracks the run by head SHA (the repo's auto-generated "Initial commit"
+    may spawn its own run around the same time), and re-dispatches the
+    workflow if our run goes missing or gets cancelled.
+    """
     log("Waiting for the first site build (TeX Live setup makes the first "
         "run slow — typically 5-10 minutes)...")
     start = time.time()
     last = ""
+    dispatched = False
     while time.time() - start < timeout_s:
-        proc = _run(["gh", "run", "list", "-R", full, "--limit", "1",
-                     "--json", "status,conclusion"], log, check=False,
-                    quiet=True)
+        proc = _run(["gh", "run", "list", "-R", full, "--limit", "10",
+                     "--json", "status,conclusion,headSha"], log,
+                    check=False, quiet=True)
+        run = None
         if proc.returncode == 0 and proc.stdout.strip():
             try:
                 runs = json.loads(proc.stdout)
             except ValueError:
                 runs = []
-            if runs:
-                status = runs[0].get("status", "")
-                if status != last:
-                    log(f"  build status: {status}")
-                    last = status
-                if status == "completed":
-                    conclusion = runs[0].get("conclusion", "")
+            ours = [r for r in runs if r.get("headSha") == sha]
+            # Prefer a live/successful run over a cancelled one.
+            ours.sort(key=lambda r: (r.get("status") == "completed" and
+                                     r.get("conclusion") != "success"))
+            run = ours[0] if ours else None
+        if run:
+            status = run.get("status", "")
+            conclusion = run.get("conclusion", "")
+            if status != last:
+                log(f"  build status: {status}")
+                last = status
+            if status == "completed":
+                if conclusion == "success":
+                    log("  build finished: success")
+                    return "success"
+                if conclusion == "cancelled" and not dispatched:
+                    log("  our run was cancelled (initial-commit race); "
+                        "re-dispatching the workflow...")
+                    _run(["gh", "workflow", "run", "build.yml", "-R", full],
+                         log, check=False)
+                    dispatched = True
+                    last = ""
+                    time.sleep(10)
+                    continue
+                if conclusion != "cancelled":
                     log(f"  build finished: {conclusion}")
-                    return "success" if conclusion == "success" else "failure"
+                    return "failure"
+        elif time.time() - start > 90 and not dispatched:
+            log("  no run picked up our push; dispatching the workflow...")
+            _run(["gh", "workflow", "run", "build.yml", "-R", full],
+                 log, check=False)
+            dispatched = True
         time.sleep(15)
     log("  gave up waiting; the build is still running.")
     return "running"
