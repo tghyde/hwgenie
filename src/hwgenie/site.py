@@ -46,11 +46,13 @@ from .htmltemplate import (
     CSS,
     FOOTER_HTML,
     NAV_CSS,
+    SCROLLBAR_JS,
     THEME_HEAD_SCRIPT,
     THEME_TOGGLE_HTML,
     THEME_TOGGLE_JS,
     file_box,
     katex_block,
+    scrollbar_html,
     view_box,
 )
 from .katexmacros import extract_macros
@@ -567,6 +569,16 @@ def render_index(
             + "\n".join(cards)
         )
     body = "\n".join(sections) if sections else "<p>Nothing posted yet.</p>"
+    # Sticky nav (appears on scroll, same component as assignment pages):
+    # section jumps for whichever sections exist.
+    jumps = []
+    if top_cards:
+        jumps.append(("Handouts", "handouts"))
+    if lesson_cards:
+        jumps.append(("Lessons", "lessons"))
+    if cards:
+        jumps.append(("Problem Sets", "problem-sets"))
+    scrollbar = scrollbar_html(None, "", course, jumps) if jumps else ""
     macros_json = json.dumps(macros or {}, ensure_ascii=False)
     plain_heading = re.sub(r"\$", "", heading)
     return f"""<!DOCTYPE html>
@@ -580,8 +592,9 @@ def render_index(
 <style>{theme}{CSS}{NAV_CSS}{INDEX_CSS}</style>
 {f'<link rel="stylesheet" href="{custom_css}">' if custom_css else ""}
 </head>
-<body>
+<body id="top">
 {THEME_TOGGLE_HTML}
+{scrollbar}
 <main>
 <header class="doc">
 <p class="course">{e(sub)}</p>
@@ -593,6 +606,7 @@ def render_index(
 <footer class="doc">{FOOTER_HTML}</footer>
 </main>
 {THEME_TOGGLE_JS}
+{SCROLLBAR_JS}
 </body>
 </html>
 """

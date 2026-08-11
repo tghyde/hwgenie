@@ -514,11 +514,15 @@ SCROLLBAR_JS = """
 
 
 def scrollbar_html(
-    home_href: str,
+    home_href: Optional[str],
     home_label: str,
     page_label: str,
     jump_links: Optional[List[Tuple[str, str]]] = None,
 ) -> str:
+    home = (
+        f'<a href="{home_href}">← {html_mod.escape(home_label)}</a>'
+        if home_href else ""
+    )
     jumps = ""
     if jump_links:
         items = " ".join(
@@ -528,7 +532,7 @@ def scrollbar_html(
         jumps = f'<span class="sb-jumps">{items}</span>'
     return (
         f'<div class="scrollbar" id="scrollnav">'
-        f'<a href="{home_href}">← {html_mod.escape(home_label)}</a>'
+        f"{home}"
         f'<span class="sb-label">{html_mod.escape(page_label)}</span>'
         f"{jumps}"
         f'<a class="sb-top" href="#top" aria-label="Back to top">↑ Top</a>'
