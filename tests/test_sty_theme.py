@@ -23,7 +23,7 @@ def test_theorems_and_macros_from_extra_preamble():
         extra_preamble=STY,
     )
     html = conv.convert()
-    assert '<span class="thm-head">Theorem 2.1.</span>' in html
+    assert '<p class="thm-head">Theorem 2.1</p>' in html
     assert "\\tag{2.0.1}" in html
 
 

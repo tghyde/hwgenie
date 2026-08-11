@@ -25,10 +25,10 @@ def test_theorem_numbering_shared_counters():
         "\\begin{proposition}\nC.\n\\end{proposition}\n"
         "\\begin{remark}\nD.\n\\end{remark}"
     )
-    assert '<span class="thm-head">Theorem 1.1.</span>' in html
-    assert '<span class="thm-head">Definition 1.2.</span>' in html
-    assert '<span class="thm-head">Proposition 1.3.</span>' in html
-    assert '<span class="thm-head">Remark.</span>' in html
+    assert '<p class="thm-head">Theorem 1.1</p>' in html
+    assert '<p class="thm-head">Definition 1.2</p>' in html
+    assert '<p class="thm-head">Proposition 1.3</p>' in html
+    assert '<p class="thm-head">Remark</p>' in html
 
 
 def test_theorem_optional_title_and_ref():
@@ -37,7 +37,7 @@ def test_theorem_optional_title_and_ref():
         "\\end{theorem}\n"
         "By Theorem \\ref{thm div} we win."
     )
-    assert "Theorem 1.1 (Division with Remainder)." in html
+    assert 'Theorem 1.1 <span class="thm-note">(Division with Remainder)</span>' in html
     assert 'id="thm-1.1"' in html
     assert 'By Theorem <a class="xref" href="#thm-1.1">1.1</a> we win.' in html
 
@@ -65,7 +65,8 @@ def test_equation_numbering_and_eqref():
 def test_proof_block():
     _c, html = convert("\\begin{proof}\nObvious.\n\\end{proof}")
     assert '<div class="proof">' in html
-    assert '<span class="proof-label">Proof.</span> Obvious.' in html
+    assert '<p class="proof-label">Proof</p>' in html
+    assert 'Obvious.' in html
 
 
 def test_footnotes():
@@ -153,3 +154,38 @@ def test_problem_is_collapsible_details():
     _c, html = convert("\\begin{problem}\nDo.\n\\end{problem}")
     assert '<details class="problem" open id="problem-1.1">' in html
     assert "<summary><h2" in html
+
+
+def test_subsection_becomes_centered_heading():
+    _c, html = convert(
+        "\\subsection{Modular Arithmetic}\nText.\n"
+        "\\subsection{Orders modulo $m$}\nMore."
+    )
+    assert ('<h2 class="sec-head" id="sec-1.1">'
+            '<span class="sec-num">1.1</span>Modular Arithmetic</h2>') in html
+    assert '<span class="sec-num">1.2</span>' in html
+
+
+def test_problem_optional_title_in_summary():
+    _c, html = convert(
+        "\\begin{problem}[Chinese Remainder Theorem]\nDo it.\n\\end{problem}"
+    )
+    assert ('Problem 1.1 <span class="problem-note">'
+            "· Chinese Remainder Theorem</span>") in html
+    assert "[Chinese Remainder Theorem]" not in html
+
+
+def test_proof_custom_label():
+    _c, html = convert(
+        "\\begin{proof}[Proof of Theorem 3]\nEasy.\n\\end{proof}"
+    )
+    assert '<p class="proof-label">Proof of Theorem 3</p>' in html
+
+
+def test_problem_brace_protected_title():
+    _c, html = convert(
+        "\\begin{problem}[{CRT for $\\ZZ[i]$}]\nDo it.\n\\end{problem}"
+    )
+    assert "problem-note" in html
+    assert "CRT for" in html
+    assert "[CRT" not in html and "[{CRT" not in html

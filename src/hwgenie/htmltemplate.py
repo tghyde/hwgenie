@@ -126,6 +126,11 @@ details.problem:not([open]) > summary { margin-bottom: .3rem; }
   margin: 0;
   display: inline;
 }
+.problem-title .problem-note {
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: 600;
+}
 
 .htmlcard {
   background: var(--card-bg);
@@ -227,13 +232,63 @@ code {
 .al-right { text-align: right; }
 
 .thmblock {
-  background: var(--bg);
-  padding: .9rem 1.1rem;
-  margin: 1.2rem 0;
+  background: var(--card-bg);
+  padding: 1.05rem 1.25rem;
+  margin: 1.5rem 0;
 }
-.thm-head { font-weight: 700; }
-.proof { margin: 1rem 0 1.2rem; }
-.proof-label { font-style: italic; }
+.thm-head {
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: .85rem;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin: 0 0 .55rem;
+}
+.thm-head .thm-note {
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: 400;
+  font-size: .95rem;
+  color: var(--muted);
+}
+.proof {
+  background: var(--sol-bg);
+  padding: 1.05rem 1.25rem;
+  margin: 1.5rem 0 1.7rem;
+}
+.proof-label {
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: .85rem;
+  font-weight: 700;
+  font-style: normal;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--sol-accent);
+  margin: 0 0 .55rem;
+}
+/* A proof inside a solution box is already on green — no box-in-box. */
+.solution-body .proof { background: transparent; padding: 0; margin: 1rem 0; }
+
+/* Centered section banners (lesson subsections etc.). Titles keep normal
+   case — many contain math. */
+h2.sec-head, h3.sec-head {
+  text-align: center;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-weight: 700;
+  color: var(--accent);
+  font-size: 1.15rem;
+  margin: 2.6rem 0 1.3rem;
+}
+h3.sec-head { font-size: 1.02rem; }
+h2.sec-head::after, h3.sec-head::after {
+  content: "";
+  display: block;
+  width: 2.4rem;
+  margin: .5rem auto 0;
+  border-top: 2px solid var(--accent);
+}
+.sec-num::after { content: " · "; }
 .xref { color: var(--accent); }
 sup.fn a { color: var(--accent); font-weight: 600; }
 section.footnotes { font-size: .9rem; color: var(--muted); }

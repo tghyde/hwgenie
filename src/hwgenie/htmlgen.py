@@ -143,6 +143,8 @@ class HtmlConverter:
         self.footnotes: List[str] = []
         self.labels: Dict[str, Tuple[str, str]] = {}  # key -> (kind, display)
         self.problem_counter = 0
+        self.subsec_counter = 0
+        self._last_sec: Optional[Tuple[str, str]] = None
         self.counters: Dict[str, int] = defaultdict(int)
         self.eq_counter = 0
         self._label_ctx: List[Tuple[str, str]] = []
@@ -192,6 +194,8 @@ class HtmlConverter:
         self.title_lines = []
         self.footnotes = []
         self.problem_counter = 0
+        self.subsec_counter = 0
+        self._last_sec = None
         self.counters = defaultdict(int)
         self.eq_counter = 0
         self._label_ctx = []
@@ -429,6 +433,10 @@ class HtmlConverter:
                 key = _group_text(args[0]).strip()
                 if self._label_ctx:
                     self.labels[key] = self._label_ctx[-1]
+                elif self._last_sec:
+                    # LaTeX semantics: a bare \label binds to the current
+                    # sectional unit.
+                    self.labels[key] = self._last_sec
                 elif key not in self.labels:
                     self.warnings.append(
                         f"\\label{{{key}}} outside a numbered environment; "
@@ -477,6 +485,23 @@ class HtmlConverter:
                     f"<p>{quote}</p>"
                     f"<footer>{attribution}</footer></blockquote>"
                 )
+            return j
+        if name.rstrip("*") in ("section", "subsection", "subsubsection"):
+            args, j = self._macro_args(nodes, i, 1)
+            title = self.convert_inline(args[0].nodelist) if args else ""
+            base = name.rstrip("*")
+            num = ""
+            if base == "subsection" and not name.endswith("*"):
+                self.subsec_counter += 1
+                num = (f"{self.section}.{self.subsec_counter}"
+                       if self.section else str(self.subsec_counter))
+            tag = "h3" if base == "subsubsection" else "h2"
+            num_html = f'<span class="sec-num">{esc(num)}</span>' if num else ""
+            anchor = f' id="sec-{_anchor_slug(num)}"' if num else ""
+            if num:
+                self._last_sec = ("sec", num)
+            flow.block(
+                f'<{tag} class="sec-head"{anchor}>{num_html}{title}</{tag}>')
             return j
         if name in self.theorems:
             self.warnings.append(f"\\{name} macro shadowing theorem name; dropped.")
@@ -554,13 +579,26 @@ class HtmlConverter:
             )
             self._label_ctx.append(("problem", num))
             self.problem_anchors.append((num, f"problem-{_anchor_slug(num)}"))
+            # \begin{problem}[Optional Title] joins the summary line.
+            title = ""
+            if n.nodeargd and n.nodeargd.argnlist:
+                for a in n.nodeargd.argnlist:
+                    if a is not None and getattr(a, "nodelist", None):
+                        title = self.convert_inline(a.nodelist).strip()
+                        break
+            if title:
+                content_nodes = [c for c in (n.nodelist or []) if c is not None]
+            else:
+                content_nodes, title = self._extract_bracket_title(n.nodelist)
             inner = Flow()
-            self.walk(n.nodelist, inner)
+            self.walk(content_nodes, inner)
             self._label_ctx.pop()
+            title_html = (f' <span class="problem-note">· {title}</span>'
+                          if title else "")
             flow.block(
                 f'<details class="problem" open id="problem-{_anchor_slug(num)}">\n'
-                f'<summary><h2 class="problem-title">Problem {esc(num)}</h2>'
-                "</summary>\n"
+                f'<summary><h2 class="problem-title">Problem {esc(num)}'
+                f"{title_html}</h2></summary>\n"
                 f"{inner.result()}\n</details>"
             )
         elif name in ("solution", "solution*"):
@@ -579,14 +617,25 @@ class HtmlConverter:
         elif name == "proof":
             outer_qed = self._saw_qedhere
             self._saw_qedhere = False
+            # \begin{proof}[Proof of Theorem 3] overrides the label.
+            label = ""
+            if n.nodeargd and n.nodeargd.argnlist:
+                for a in n.nodeargd.argnlist:
+                    if a is not None and getattr(a, "nodelist", None):
+                        label = self.convert_inline(a.nodelist).strip()
+                        break
+            if label:
+                content_nodes = [c for c in (n.nodelist or []) if c is not None]
+            else:
+                content_nodes, label = self._extract_bracket_title(n.nodelist)
             inner = Flow()
-            self.walk(n.nodelist, inner)
+            self.walk(content_nodes, inner)
             cls = "proof has-qedhere" if self._saw_qedhere else "proof"
             self._saw_qedhere = outer_qed
-            body = _merge_head(
-                inner.result(), '<span class="proof-label">Proof.</span>'
-            )
-            flow.block(f'<div class="{cls}">\n{body}\n</div>')
+            flow.block(
+                f'<div class="{cls}">\n'
+                f'<p class="proof-label">{label or "Proof"}</p>\n'
+                f"{inner.result()}\n</div>")
         elif name in ("enumerate", "itemize"):
             flow.block(self._list_html(n, ordered=(name == "enumerate")))
         elif name == "center":
@@ -810,16 +859,15 @@ class HtmlConverter:
         else:
             content_nodes, title = self._extract_bracket_title(n.nodelist)
         if title:
-            head += f" ({title})"
+            head += f' <span class="thm-note">({title})</span>'
         anchor = f' id="thm-{_anchor_slug(display)}"' if display else ""
         self._label_ctx.append(("thm", display or spec["label"]))
         inner = Flow()
         self.walk(content_nodes, inner)
         self._label_ctx.pop()
-        body = _merge_head(
-            inner.result(), f'<span class="thm-head">{head}.</span>'
-        )
-        return f'<div class="thmblock"{anchor}>\n{body}\n</div>'
+        return (f'<div class="thmblock"{anchor}>\n'
+                f'<p class="thm-head">{head}</p>\n'
+                f"{inner.result()}\n</div>")
 
     def _extract_bracket_title(self, nodelist):
         """Pull a leading [Optional Title] out of an environment's content."""
@@ -842,6 +890,21 @@ class HtmlConverter:
                         pos=nodes[k].pos, len=nodes[k].len,
                     )
                     return nodes[:k] + [rest] + nodes[k + 1 :], title
+                # "[{Protected Title}]" — a group protects a ']' inside the
+                # title (e.g. [{CRT for $\ZZ[i]$}]); pylatexenc splits it
+                # into "[", {group}, "]...".
+                if chars.strip() == "[" and k + 2 < len(nodes) + 1:
+                    grp = nodes[k + 1] if k + 1 < len(nodes) else None
+                    after = nodes[k + 2] if k + 2 < len(nodes) else None
+                    if (isinstance(grp, LatexGroupNode)
+                            and isinstance(after, LatexCharsNode)
+                            and after.chars.lstrip().startswith("]")):
+                        title = self.convert_inline(grp.nodelist).strip()
+                        rest = LatexCharsNode(
+                            chars=after.chars.lstrip()[1:],
+                            pos=after.pos, len=after.len,
+                        )
+                        return nodes[:k] + [rest] + nodes[k + 3 :], title
         return nodes, ""
 
     def _math_env_html(self, n) -> str:
@@ -942,13 +1005,6 @@ def _apply_accent(inner: str, combining: str) -> str:
         first = unicodedata.normalize("NFC", first + combining)
         return first + rest
     return inner
-
-
-def _merge_head(body_html: str, head_html: str) -> str:
-    """Inject a bold run-in heading into the first paragraph of a block."""
-    if body_html.startswith("<p>"):
-        return body_html.replace("<p>", f"<p>{head_html} ", 1)
-    return f"<p>{head_html}</p>\n{body_html}"
 
 
 def _alt_from_filename(fname: str) -> str:
