@@ -304,8 +304,9 @@ def _build_assignment(
     br = BuildResult(meta=meta, out_dir=ps_dir)
 
     course_name = cfg.get("course", "Course home")
-    home = view_box("../../", f"← {html_mod.escape(course_name)}")
-    sb_home = ("../../", course_name)
+    # Back links land on the matching section of the course home page.
+    home = view_box("../../#problem-sets", f"← {html_mod.escape(course_name)}")
+    sb_home = ("../../#problem-sets", course_name)
     boxes = [
         file_box(names["handout_pdf"], "Problem Set PDF"),
         file_box(names["submission"], "LaTeX source"),
@@ -398,11 +399,14 @@ def _build_page_doc(
                          released=True)
     br = BuildResult(meta=meta, out_dir=page_dir)
     course_name = cfg.get("course", "Course home")
-    home = view_box("../" * depth, f"← {html_mod.escape(course_name)}")
+    # Back links land on the matching section of the course home page.
+    section = "#lessons" if meta.doc_type == "lesson" else "#handouts"
+    home_href = "../" * depth + section
+    home = view_box(home_href, f"← {html_mod.escape(course_name)}")
     nav = " ".join([home, file_box(pdf_name, "PDF")])
     build_html(
         text, meta, True, page_dir / "index.html", src.parent, br,
-        nav=nav, sb_home=("../" * depth, course_name),
+        nav=nav, sb_home=(home_href, course_name),
         extra_preamble=extra_preamble, theme=theme,
         image_search=[repo_root] if repo_root else None,
         custom_css=("../" * depth + "custom.css") if custom_css_on else "",
@@ -445,6 +449,21 @@ INDEX_CSS = """
   gap: .3rem .6rem;
 }
 .assignment .links .sep-dot, .assignment .links .pending { color: var(--muted); }
+/* Section headers: centered, flanked by long dashes. */
+h2.index-head {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: .9rem;
+  font-size: 1.15rem;
+  margin: 2.6rem 0 1.2rem;
+}
+h2.index-head::before, h2.index-head::after {
+  content: "";
+  width: 4.5rem;
+  border-top: 1px solid var(--muted);
+  opacity: .6;
+}
 """
 
 
@@ -534,17 +553,17 @@ def render_index(
         sections.append(f'<div class="intro">\n{intro_html}\n</div>')
     if top_cards:
         sections.append(
-            '<h2 style="font-size:1.15rem" id="handouts">Handouts</h2>\n'
+            '<h2 class="index-head" id="handouts">Handouts</h2>\n'
             + "\n".join(top_cards)
         )
     if lesson_cards:
         sections.append(
-            '<h2 style="font-size:1.15rem" id="lessons">Lessons</h2>\n'
+            '<h2 class="index-head" id="lessons">Lessons</h2>\n'
             + "\n".join(lesson_cards)
         )
     if cards:
         sections.append(
-            '<h2 style="font-size:1.15rem" id="problem-sets">Problem Sets</h2>\n'
+            '<h2 class="index-head" id="problem-sets">Problem Sets</h2>\n'
             + "\n".join(cards)
         )
     body = "\n".join(sections) if sections else "<p>Nothing posted yet.</p>"

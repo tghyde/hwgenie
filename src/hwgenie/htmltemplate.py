@@ -281,13 +281,6 @@ h2.sec-head, h3.sec-head {
   margin: 2.6rem 0 1.3rem;
 }
 h3.sec-head { font-size: 1.02rem; }
-h2.sec-head::after, h3.sec-head::after {
-  content: "";
-  display: block;
-  width: 2.4rem;
-  margin: .5rem auto 0;
-  border-top: 2px solid var(--accent);
-}
 .sec-num::after { content: " · "; }
 .xref { color: var(--accent); }
 sup.fn a { color: var(--accent); font-weight: 600; }
