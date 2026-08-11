@@ -64,3 +64,46 @@ def test_fill_placeholders_leaves_missing_values(tmp_path: Path):
     f.write_text("@@COURSE@@ / @@EMAIL@@")
     fill_placeholders(tmp_path, {"course": "Math 2", "email": ""})
     assert f.read_text() == "Math 2 / @@EMAIL@@"
+
+
+def _fake_course(tmp_path: Path) -> Path:
+    (tmp_path / "source" / "lessons").mkdir(parents=True)
+    (tmp_path / "source" / "problem-sets" / "ps01").mkdir(parents=True)
+    (tmp_path / "static").mkdir()
+    (tmp_path / "static" / "intro.html").write_text(
+        '<p>Hi</p>\n<nav class="site" style="justify-content:center">\n'
+        '  <a class="filebox viewbox" href="#handouts">Handouts</a>\n'
+        '  <a class="filebox viewbox" href="#lessons">Lessons</a>\n'
+        '  <a class="filebox viewbox" href="#problem-sets">Problem Sets</a>\n'
+        "</nav>\n")
+    return tmp_path
+
+
+def test_disable_sections_default_keeps_everything(tmp_path: Path):
+    from hwgenie.new_course import disable_sections
+    root = _fake_course(tmp_path)
+    assert disable_sections(root) == []
+    assert (root / "source" / "lessons").is_dir()
+    assert (root / "source" / "problem-sets").is_dir()
+
+
+def test_disable_lessons(tmp_path: Path):
+    from hwgenie.new_course import disable_sections
+    root = _fake_course(tmp_path)
+    removed = disable_sections(root, lessons=False)
+    assert removed == ["lessons"]
+    assert not (root / "source" / "lessons").exists()
+    assert (root / "source" / "problem-sets").is_dir()
+    intro = (root / "static" / "intro.html").read_text()
+    assert "#lessons" not in intro
+    assert "#handouts" in intro and "#problem-sets" in intro
+
+
+def test_disable_both_sections(tmp_path: Path):
+    from hwgenie.new_course import disable_sections
+    root = _fake_course(tmp_path)
+    removed = disable_sections(root, lessons=False, problem_sets=False)
+    assert sorted(removed) == ["lessons", "problem sets"]
+    intro = (root / "static" / "intro.html").read_text()
+    assert "#lessons" not in intro and "#problem-sets" not in intro
+    assert "#handouts" in intro

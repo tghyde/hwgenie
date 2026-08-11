@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -72,6 +73,29 @@ def fill_placeholders(root: Path, values: Dict[str, str]) -> List[Path]:
     return changed
 
 
+def disable_sections(root: Path, *, problem_sets: bool = True,
+                     lessons: bool = True) -> List[str]:
+    """Remove folders + home-page nav buttons for sections a course
+    doesn't use. Handouts/syllabus are always kept."""
+    targets = []
+    if not lessons:
+        targets.append(("lessons", "source/lessons", "#lessons"))
+    if not problem_sets:
+        targets.append(("problem sets", "source/problem-sets",
+                        "#problem-sets"))
+    removed = []
+    intro = root / "static" / "intro.html"
+    for label, folder, anchor in targets:
+        shutil.rmtree(root / folder, ignore_errors=True)
+        removed.append(label)
+        if intro.is_file():
+            lines = intro.read_text(encoding="utf-8").splitlines(keepends=True)
+            kept = [ln for ln in lines if f'href="{anchor}"' not in ln]
+            if kept != lines:
+                intro.write_text("".join(kept), encoding="utf-8")
+    return removed
+
+
 def load_defaults() -> Dict[str, str]:
     try:
         return json.loads(DEFAULTS_PATH.read_text(encoding="utf-8"))
@@ -106,6 +130,8 @@ class CreateRequest:
     parent_dir: str = ""           # local folder to clone into
     deploy: bool = True            # set DEPLOY_PAGES=true
     wait_for_build: bool = True    # poll the first Actions run
+    use_problem_sets: bool = True  # keep the problem-sets section
+    use_lessons: bool = True       # keep the lessons section
     template: str = DEFAULT_TEMPLATE
 
     def resolved_repo(self) -> str:
@@ -199,6 +225,11 @@ def _create_course(req: CreateRequest, log) -> CreateResult:
         yml.write_text(yml.read_text(encoding="utf-8").replace(
             "theme: slate", f"theme: {req.theme}"), encoding="utf-8")
         log(f"  updated course.yml (theme: {req.theme})")
+
+    for section in disable_sections(local,
+                                    problem_sets=req.use_problem_sets,
+                                    lessons=req.use_lessons):
+        log(f"  removed {section} (section turned off)")
 
     log("Committing and pushing course data...")
     _run(["git", "add", "-A"], log, cwd=local, quiet=True)
@@ -338,6 +369,8 @@ def run_new_course(args) -> int:
         parent_dir=args.dir or defaults.get("parent_dir", ""),
         deploy=not args.no_deploy,
         wait_for_build=not args.no_wait,
+        use_problem_sets=not args.no_problem_sets,
+        use_lessons=not args.no_lessons,
         template=args.template,
     )
     result = create_course(req, print)
@@ -376,6 +409,12 @@ def add_parser(sub) -> None:
                                   "math301-spring2026).")
     p.add_argument("--dir", help="Parent folder for the local clone "
                                  "(default: last used, else cwd).")
+    p.add_argument("--no-problem-sets", action="store_true",
+                   help="This course has no problem sets (removes the "
+                        "folder and the home-page section).")
+    p.add_argument("--no-lessons", action="store_true",
+                   help="This course has no lessons (removes the folder "
+                        "and the home-page section).")
     p.add_argument("--no-deploy", action="store_true",
                    help="Do not set DEPLOY_PAGES (site stays offline).")
     p.add_argument("--no-wait", action="store_true",

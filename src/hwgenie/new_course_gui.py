@@ -89,6 +89,8 @@ class Handler(BaseHTTPRequestHandler):
                 parent_dir=data.get("parent_dir", ""),
                 deploy=bool(data.get("deploy", True)),
                 wait_for_build=bool(data.get("wait_for_build", True)),
+                use_problem_sets=bool(data.get("use_problem_sets", True)),
+                use_lessons=bool(data.get("use_lessons", True)),
             )
             threading.Thread(target=_worker, args=(req,), daemon=True).start()
             self._send(b'{"ok": true}', "application/json")
@@ -265,6 +267,18 @@ PAGE = """<!doctype html>
     <input type="text" id="parent" value="__PARENT__" spellcheck="false">
     <label for="theme">Site theme</label>
     <select id="theme">__THEMES__</select>
+    <label>Sections</label>
+    <div class="check">
+      <input type="checkbox" id="psets" checked>
+      <label for="psets">Problem sets</label>
+    </div>
+    <div class="check">
+      <input type="checkbox" id="lessons" checked>
+      <label for="lessons">Lessons</label>
+    </div>
+    <div class="hint" style="margin-left:1.6rem">Handouts and the syllabus
+      are always included. Uncheck a section this course won&rsquo;t use —
+      its folder and home-page section are left out entirely.</div>
     <div class="check">
       <input type="checkbox" id="deploy" checked>
       <label for="deploy">Publish the site right away</label>
@@ -334,6 +348,8 @@ PAGE = """<!doctype html>
       parent_dir: $("parent").value.trim(),
       deploy: $("deploy").checked,
       wait_for_build: $("wait").checked,
+      use_problem_sets: $("psets").checked,
+      use_lessons: $("lessons").checked,
     };
     await fetch("/create", {method: "POST", body: JSON.stringify(body)});
     poll = setInterval(refresh, 1000);
