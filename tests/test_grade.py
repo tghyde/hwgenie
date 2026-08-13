@@ -1,0 +1,376 @@
+"""Tests for hwgenie grade (data model + grading web app)."""
+
+import json
+import threading
+import urllib.request
+from http.server import ThreadingHTTPServer
+from pathlib import Path
+
+import pytest
+
+from hwgenie.cli import main
+from hwgenie.grade import (
+    GradeError,
+    GradeStore,
+    body_is_empty,
+    extract_solution_bodies,
+    infer_n_parts,
+    load_groups,
+    load_manifest,
+    load_rubric,
+    split_preamble,
+)
+
+STUDENT_TEX = "\n".join([
+    r"\documentclass[11pt]{article}",
+    r"% type each answer between \begin{solution} and \end{solution}",
+    r"\newcommand{\ZZ}{\mathbb{Z}}",
+    r"\newcommand{\yourcollaborators}{None}",
+    r"\begin{document}",
+    r"\begin{solution}",
+    r"We have $x \in \ZZ$.  % a kept comment",
+    r"",
+    r"Second paragraph.",
+    r"\end{solution}",
+    r"Interlude text.",
+    r"\begin{solution}",
+    "    %Write your solution here",
+    r"\end{solution}",
+    r"\begin{solution}inline body\end{solution}",
+    r"\end{document}",
+])
+
+
+def make_grading_folder(root: Path) -> Path:
+    dest = root / "grading"
+    manifest = {
+        "created": "2026-08-13T00:00:00+00:00",
+        "source": "moodle.zip",
+        "template": {"path": "template.tex", "parts": 3},
+        "units": [
+            {"slug": "Doe-Jane", "moodle_folder": "Doe-Jane_111_x",
+             "moodle_id": "111", "pdf": "jane.pdf", "tex": "jane.tex",
+             "tex_source": "original", "extras": [], "anomalies": [],
+             "sha256": {}, "parts_found": 3, "collaborators": "None"},
+            {"slug": "Roe-Rick", "moodle_folder": "Roe-Rick_222_x",
+             "moodle_id": "222", "pdf": "rick.pdf", "tex": "recon.tex",
+             "tex_source": "reconstructed", "extras": [], "anomalies": [],
+             "sha256": {}, "parts_found": 3,
+             "collaborators": "Jane D., course notes"},
+            {"slug": "Poe-Pat", "moodle_folder": "Poe-Pat_333_x",
+             "moodle_id": "333", "pdf": "pat.pdf", "tex": None,
+             "tex_source": None, "extras": [],
+             "anomalies": ["no tex submitted"], "sha256": {},
+             "parts_found": None, "collaborators": None},
+        ],
+    }
+    for u in manifest["units"]:
+        d = dest / "submissions" / u["slug"]
+        d.mkdir(parents=True)
+        (d / "submission.pdf").write_bytes(b"%PDF-1.4 " + u["slug"].encode())
+        if u["tex"]:
+            (d / "submission.tex").write_text(STUDENT_TEX)
+    (dest / "manifest.json").write_text(json.dumps(manifest))
+    (dest / "rubric.yml").write_text("\n".join([
+        "# test rubric",
+        "parts:",
+        "- 1.1: 4",
+        "- 1.2: 2.5",
+        "- 2.1a",          # no max
+    ]) + "\n")
+    (dest / "groups.yml").write_text("\n".join([
+        "# groups",
+        "Doe-Jane:",
+        "- Jane Doe",
+        "- Extra Member",
+    ]) + "\n")
+    return dest
+
+
+@pytest.fixture
+def grading_folder(tmp_path):
+    return make_grading_folder(tmp_path)
+
+
+# ------------------------------------------------------------ tex parsing --
+
+def test_extract_solution_bodies():
+    bodies = extract_solution_bodies(STUDENT_TEX)
+    assert len(bodies) == 3          # the commented mention doesn't count
+    assert "$x \\in \\ZZ$" in bodies[0]
+    assert "% a kept comment" in bodies[0]      # body keeps its comments
+    assert "Second paragraph." in bodies[0]
+    assert "Interlude text." not in bodies[0]
+    assert bodies[2] == "inline body"
+
+
+def test_extract_ignores_commented_delimiters():
+    tex = "\n".join([
+        r"% \begin{solution} in a comment",
+        r"\begin{solution}",
+        r"real % \end{solution} faked-out end",
+        r"\end{solution}",
+    ])
+    bodies = extract_solution_bodies(tex)
+    assert len(bodies) == 1
+    assert "real" in bodies[0]
+    assert "faked-out end" in bodies[0]  # comment text stays in the body
+
+
+def test_body_is_empty():
+    bodies = extract_solution_bodies(STUDENT_TEX)
+    assert not body_is_empty(bodies[0])
+    assert body_is_empty(bodies[1])      # only the template marker comment
+    assert body_is_empty("\n   \n  % note\n")
+    assert not body_is_empty("x")
+
+
+def test_split_preamble():
+    pre = split_preamble(STUDENT_TEX)
+    assert r"\newcommand{\ZZ}" in pre
+    assert "Second paragraph" not in pre
+
+
+# ----------------------------------------------------------- rubric/groups --
+
+def test_load_rubric(grading_folder):
+    rubric = load_rubric(grading_folder, 3)
+    assert [rp.label for rp in rubric] == ["1.1", "1.2", "2.1a"]
+    assert [rp.max for rp in rubric] == [4, 2.5, None]
+
+
+def test_load_rubric_pads_defaults(grading_folder):
+    (grading_folder / "rubric.yml").unlink()
+    rubric = load_rubric(grading_folder, 2)
+    assert [rp.label for rp in rubric] == ["Part 1", "Part 2"]
+    assert all(rp.max is None for rp in rubric)
+
+
+def test_load_rubric_too_long(grading_folder):
+    with pytest.raises(GradeError, match="3 parts"):
+        load_rubric(grading_folder, 2)
+
+
+def test_load_rubric_bad_max(tmp_path):
+    (tmp_path / "rubric.yml").write_text("parts:\n- 1.1: four\n")
+    with pytest.raises(GradeError, match="bad max"):
+        load_rubric(tmp_path, 1)
+
+
+def test_load_groups(grading_folder):
+    groups = load_groups(grading_folder)
+    assert groups == {"Doe-Jane": ["Jane Doe", "Extra Member"]}
+
+
+def test_load_groups_missing(tmp_path):
+    assert load_groups(tmp_path) == {}
+
+
+def test_infer_n_parts(grading_folder):
+    manifest = load_manifest(grading_folder)
+    assert infer_n_parts(manifest) == 3
+    manifest["template"] = None
+    assert infer_n_parts(manifest) == 3      # falls back to parts_found
+    for u in manifest["units"]:
+        u["parts_found"] = None
+    with pytest.raises(GradeError):
+        infer_n_parts(manifest)
+
+
+def test_load_manifest_missing(tmp_path):
+    with pytest.raises(GradeError, match="collect"):
+        load_manifest(tmp_path)
+
+
+# ------------------------------------------------------------ grades store --
+
+@pytest.fixture
+def store(grading_folder):
+    rubric = load_rubric(grading_folder, 3)
+    return GradeStore(grading_folder, rubric)
+
+
+def test_store_defaults(store):
+    data = store.load("Doe-Jane")
+    assert set(data["parts"]) == {"1", "2", "3"}
+    p1 = data["parts"]["1"]
+    assert p1 == {"score": None, "max": 4, "status": "ungraded",
+                  "comments": [], "ai_draft": None}
+
+
+def test_store_update_roundtrip(store):
+    store.update("Doe-Jane", 1, {
+        "score": 3.5,
+        "comments": [{"anchor": "$x \\in \\ZZ$", "text": "nice"},
+                     {"anchor": "", "text": "general note"}],
+    })
+    data = store.load("Doe-Jane")
+    p1 = data["parts"]["1"]
+    assert p1["score"] == 3.5
+    assert p1["status"] == "graded"
+    assert p1["comments"][0] == {"anchor": "$x \\in \\ZZ$", "text": "nice"}
+    assert p1["comments"][1]["anchor"] is None   # empty anchor normalized
+    # clearing the score flips status back
+    store.update("Doe-Jane", 1, {"score": None})
+    assert store.load("Doe-Jane")["parts"]["1"]["status"] == "ungraded"
+
+
+def test_store_integer_scores_stay_integers(store):
+    store.update("Doe-Jane", 1, {"score": 4.0})
+    raw = json.loads(store.path("Doe-Jane").read_text())
+    assert raw["parts"]["1"]["score"] == 4
+    assert isinstance(raw["parts"]["1"]["score"], int)
+
+
+def test_store_rejects_bad_input(store):
+    with pytest.raises(GradeError):
+        store.update("Doe-Jane", 9, {"score": 1})
+    with pytest.raises(GradeError):
+        store.update("Doe-Jane", 1, {"score": "abc"})
+    with pytest.raises(GradeError):
+        store.update("Doe-Jane", 1, {"score": -1})
+    with pytest.raises(GradeError):
+        store.update("Doe-Jane", 1, {"comments": "not a list"})
+
+
+def test_store_preserves_ai_draft(store):
+    # the AI-review skill writes ai_draft into the same file; app writes
+    # must never clobber it (or any unknown future field)
+    store.update("Doe-Jane", 1, {"score": 2})
+    path = store.path("Doe-Jane")
+    raw = json.loads(path.read_text())
+    raw["parts"]["1"]["ai_draft"] = {
+        "suggested_score": 3, "feedback": "check the base case",
+        "issues": ["missing induction step"]}
+    raw["reviewed_by"] = "grade-review-skill"
+    path.write_text(json.dumps(raw))
+
+    store.update("Doe-Jane", 1, {"score": 3, "comments": []})
+    after = json.loads(path.read_text())
+    assert after["parts"]["1"]["ai_draft"]["suggested_score"] == 3
+    assert after["reviewed_by"] == "grade-review-skill"
+
+
+def test_store_max_follows_rubric(grading_folder, store):
+    store.update("Doe-Jane", 1, {"score": 2})
+    (grading_folder / "rubric.yml").write_text("parts:\n- 1.1: 10\n- b: 1\n- c: 1\n")
+    rubric = load_rubric(grading_folder, 3)
+    store2 = GradeStore(grading_folder, rubric)
+    assert store2.load("Doe-Jane")["parts"]["1"]["max"] == 10
+
+
+def test_progress(store):
+    slugs = ["Doe-Jane", "Roe-Rick", "Poe-Pat"]
+    assert store.progress(slugs) == (0, 9)
+    store.update("Doe-Jane", 1, {"score": 1})
+    store.update("Poe-Pat", 2, {"score": 0})     # zero still counts as graded
+    assert store.progress(slugs) == (2, 9)
+
+
+# ------------------------------------------------------------- cli summary --
+
+def test_cli_summary(grading_folder, capsys):
+    rubric = load_rubric(grading_folder, 3)
+    GradeStore(grading_folder, rubric).update("Doe-Jane", 1, {"score": 4})
+    assert main(["grade", str(grading_folder)]) == 0
+    out = capsys.readouterr().out
+    assert "Doe-Jane" in out and "1/3" in out
+    assert "[tex*]" in out and "[no tex]" in out
+    assert "Graded 1/9 parts" in out
+
+
+def test_cli_summary_bad_folder(tmp_path, capsys):
+    assert main(["grade", str(tmp_path)]) == 1
+    assert "error:" in capsys.readouterr().err
+
+
+# ----------------------------------------------------------------- web app --
+
+@pytest.fixture
+def client(grading_folder):
+    from hwgenie.grade_gui import GradingApp, make_handler
+
+    app = GradingApp(grading_folder)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(app))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+
+    class Client:
+        def get(self, path, expect=200):
+            return self._req(urllib.request.Request(base + path), expect)
+
+        def post(self, path, obj, expect=200):
+            req = urllib.request.Request(
+                base + path, data=json.dumps(obj).encode(), method="POST")
+            return self._req(req, expect)
+
+        def _req(self, req, expect):
+            try:
+                with urllib.request.urlopen(req) as r:
+                    code, body, ctype = (r.status, r.read(),
+                                         r.headers.get("Content-Type", ""))
+            except urllib.error.HTTPError as e:
+                code, body, ctype = (e.code, e.read(),
+                                     e.headers.get("Content-Type", ""))
+            assert code == expect, body
+            if ctype.startswith("application/json"):
+                return json.loads(body)
+            return body
+
+    yield Client()
+    server.shutdown()
+
+
+def test_api_state(client):
+    s = client.get("/api/state")
+    assert s["n_parts"] == 3
+    assert [r["label"] for r in s["rubric"]] == ["1.1", "1.2", "2.1a"]
+    assert s["progress"] == [0, 9]
+    jane, rick, pat = s["units"]
+    assert jane["members"] == ["Jane Doe", "Extra Member"]
+    assert rick["tex_source"] == "reconstructed"
+    assert rick["collaborators"] == "Jane D., course notes"
+    assert pat["tex"] is False
+    assert set(jane["parts"]) == {"1", "2", "3"}
+
+
+def test_api_part(client):
+    p = client.get("/api/part?slug=Doe-Jane&part=1")
+    assert "Second paragraph." in p["tex"]
+    assert p["html"] and "Second paragraph." in p["html"]
+    assert p["empty"] is False
+    assert p["macros"].get("\\ZZ") == "\\mathbb{Z}"
+    p2 = client.get("/api/part?slug=Doe-Jane&part=2")
+    assert p2["empty"] is True
+    p3 = client.get("/api/part?slug=Poe-Pat&part=1")   # no tex
+    assert p3["tex"] is None and p3["html"] is None
+    client.get("/api/part?slug=Nobody&part=1", expect=404)
+
+
+def test_api_grade_and_progress(client, grading_folder):
+    r = client.post("/api/grade", {
+        "slug": "Doe-Jane", "part": 1, "score": 4,
+        "comments": [{"anchor": "inline body", "text": "ok"}]})
+    assert r["ok"] is True
+    assert r["parts"]["1"]["status"] == "graded"
+    assert r["progress"] == [1, 9]
+    # persisted to disk for the export step
+    raw = json.loads((grading_folder / "grades" / "Doe-Jane.json").read_text())
+    assert raw["parts"]["1"]["score"] == 4
+    # validation errors surface as 400s
+    err = client.post("/api/grade", {"slug": "Doe-Jane", "part": 1,
+                                    "score": "abc"}, expect=400)
+    assert err["ok"] is False
+    err = client.post("/api/grade", {"slug": "Nobody", "part": 1, "score": 1},
+                      expect=400)
+    assert "unknown" in err["error"]
+
+
+def test_pdf_and_page(client):
+    body = client.get("/pdf/Doe-Jane")
+    assert body.startswith(b"%PDF")
+    client.get("/pdf/Nobody", expect=404)
+    client.get("/pdf/..%2Fmanifest.json", expect=404)   # no traversal
+    page = client.get("/")
+    assert b"hwgenie grading" in page
+    assert b"katex" in page

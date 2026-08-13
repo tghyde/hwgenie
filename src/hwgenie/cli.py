@@ -96,6 +96,8 @@ def main(argv=None) -> int:
     add_sync_parser(sub)
     from .collect import add_parser as add_collect_parser
     add_collect_parser(sub)
+    from .grade import add_parser as add_grade_parser
+    add_grade_parser(sub)
 
     args = parser.parse_args(argv)
 
@@ -110,6 +112,9 @@ def main(argv=None) -> int:
     if args.command == "collect":
         from .collect import run_collect
         return run_collect(args)
+    if args.command == "grade":
+        from .grade import run_grade
+        return run_grade(args)
 
     try:
         result = build(
