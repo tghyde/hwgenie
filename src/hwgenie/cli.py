@@ -94,6 +94,8 @@ def main(argv=None) -> int:
     add_new_course_parser(sub)
     from .sync_template import add_parser as add_sync_parser
     add_sync_parser(sub)
+    from .collect import add_parser as add_collect_parser
+    add_collect_parser(sub)
 
     args = parser.parse_args(argv)
 
@@ -105,6 +107,9 @@ def main(argv=None) -> int:
     if args.command == "sync-template":
         from .sync_template import run_sync_template
         return run_sync_template(args)
+    if args.command == "collect":
+        from .collect import run_collect
+        return run_collect(args)
 
     try:
         result = build(
