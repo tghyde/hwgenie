@@ -98,6 +98,8 @@ def main(argv=None) -> int:
     add_collect_parser(sub)
     from .grade import add_parser as add_grade_parser
     add_grade_parser(sub)
+    from .feedback import add_parser as add_return_parser
+    add_return_parser(sub)
 
     args = parser.parse_args(argv)
 
@@ -115,6 +117,9 @@ def main(argv=None) -> int:
     if args.command == "grade":
         from .grade import run_grade
         return run_grade(args)
+    if args.command == "return":
+        from .feedback import run_return
+        return run_return(args)
 
     try:
         result = build(
