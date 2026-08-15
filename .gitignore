@@ -4,3 +4,14 @@ __pycache__/
 .pytest_cache/
 dist/
 .DS_Store
+
+# Student data must never enter this public repo. Grading folders live in
+# grading-lab/ OUTSIDE the repo; these patterns are a safety net in case a
+# collect/grade/return run ever targets a path inside it.
+grading/
+submissions/
+grades/
+return/
+moodle-feedback.zip
+Grades-*.csv
+*.moodle.zip

@@ -40,9 +40,9 @@ def returned(grading_folder):
 
 
 def test_display_name():
-    assert display_name("Atkins-Bennett") == "Bennett Atkins"
-    assert display_name("Pitt Stoller-Beatrice") == "Beatrice Pitt Stoller"
-    assert display_name("Barrera-Vinha-Valentin") == "Valentin Barrera-Vinha"
+    assert display_name("Doe-Jane") == "Jane Doe"
+    assert display_name("Van Der Berg-Alex") == "Alex Van Der Berg"
+    assert display_name("Smith-Jones-Ana") == "Ana Smith-Jones"
     assert display_name("Mononym") == "Mononym"
 
 
@@ -72,9 +72,18 @@ def test_return_overview_and_nav(returned):
     assert 'href="#part-1"' in html and 'id="part-1"' in html
     assert html.count('class="pie"') >= 3
     assert "pie-ok" in html          # 4/4 -> green
-    # sticky nav with jump chips and a top button
+    # sticky nav: jump chips carry pies, no student name, top button last
     assert 'id="fnav"' in html and 'class="jump"' in html
     assert 'id="totop"' in html
+    fnav = html.split('id="fnav"')[1].split("</div>")[0]
+    assert 'class="pie"' in fnav
+    assert 'class="nm"' not in fnav
+    # part headers say "Problem <label>", and the template statement is
+    # folded into each card behind the header toggle
+    assert "Problem 1.1</span>" in html
+    assert 'class="stoggle"' in html and 'class="pstmt"' in html
+    assert "Do part one." in html          # segment for box 1
+    assert "Do part two." in html          # segment for box 2
 
 
 def test_return_zip_uses_moodle_folders(returned):
@@ -100,6 +109,68 @@ def test_return_gradebook_fans_out_groups(returned):
     assert rick[3:] == ["", "", "0", "0", "11.5"]
 
 
+WORKSHEET_HEADER = ["Identifier", "Full name", "Email address", "Status",
+                    "Grade", "Maximum grade", "Grade can be changed",
+                    "Last modified (submission)", "Last modified (grade)"]
+
+
+def _write_worksheet(folder, max_grade="11.50"):
+    rows = [
+        ["Participant 111", "Jane Doe", "jd@x.edu", "Submitted", "",
+         max_grade, "Yes", "-", "-"],
+        ["Participant 222", "Rick Roe", "rr@x.edu", "Submitted", "3.00",
+         max_grade, "No", "-", "-"],
+        ["Participant 333", "Pat Poe", "pp@x.edu", "Submitted", "",
+         max_grade, "Yes", "-", "-"],
+        ["Participant 999", "No Submission", "ns@x.edu", "No submission",
+         "", max_grade, "Yes", "-", "-"],
+    ]
+    path = folder / "Grades-TEST-Problem Set 1--42.csv"
+    with path.open("w", newline="", encoding="utf-8-sig") as f:
+        w = csv.writer(f)
+        w.writerow(WORKSHEET_HEADER)
+        w.writerows(rows)
+    return path
+
+
+def test_worksheet_fill(grading_folder):
+    _seed_grades(grading_folder)
+    _write_worksheet(grading_folder)          # auto-detected
+    result = build_feedback(grading_folder)
+    ws = result.worksheet
+    assert ws is not None and ws["filled"] == 1     # Jane
+    assert ws["locked"] == ["Roe-Rick"]             # "changeable" = No
+    assert ws["unmatched"] == []
+    out = (result.out_dir / "grading-worksheet-upload.csv")
+    raw = out.read_bytes()
+    assert raw.startswith(b"\xef\xbb\xbf")          # BOM survives
+    rows = list(csv.reader(out.open(encoding="utf-8-sig")))
+    assert rows[0] == WORKSHEET_HEADER
+    jane = next(r for r in rows if r[0] == "Participant 111")
+    assert jane[4] == "6.00"                        # total filled
+    assert jane[1] == "Jane Doe"                    # rest untouched
+    rick = next(r for r in rows if r[0] == "Participant 222")
+    assert rick[4] == "3.00"                        # locked: unchanged
+    pat = next(r for r in rows if r[0] == "Participant 333")
+    assert pat[4] == ""                             # ungraded: untouched
+
+
+def test_worksheet_max_mismatch_warns(grading_folder):
+    _seed_grades(grading_folder)
+    _write_worksheet(grading_folder, max_grade="100.00")
+    result = build_feedback(grading_folder)
+    assert any("Maximum grade" in w for w in result.warnings)
+
+
+def test_worksheet_bad_file_warns_not_fails(grading_folder):
+    _seed_grades(grading_folder)
+    (grading_folder / "Grades-bad.csv").write_text("just,some,junk\n1,2,3\n")
+    result = build_feedback(grading_folder)
+    assert result.ok
+    assert result.worksheet is None
+    assert any("worksheet not filled" in w for w in result.warnings)
+
+
 def test_return_nothing_graded(grading_folder):
     with pytest.raises(GradeError, match="nothing to export"):
         build_feedback(grading_folder, pdf=False)
@@ -114,7 +185,7 @@ def test_return_include_ungraded(grading_folder):
 
 def test_return_cli(grading_folder, capsys):
     _seed_grades(grading_folder)
-    assert main(["return", str(grading_folder), "--no-pdf"]) == 0
+    assert main(["return", str(grading_folder)]) == 0
     out = capsys.readouterr().out
     assert "Exported 2 submissions" in out
     assert "1 submissions had nothing graded" in out

@@ -36,10 +36,14 @@ import zipfile
 from pathlib import Path
 
 from .grade import GradeError, split_preamble
+from .htmlgen import HtmlConverter
 from .htmltemplate import KATEX_VERSION
+from .katexmacros import extract_macros
 
 RETURN_DIR = "return"
 ZIP_NAME = "moodle-feedback.zip"
+
+SEG_RE = re.compile(r"\\begin\{solution\}HWGRADERBOX(\d+)\\end\{solution\}")
 
 
 @dataclasses.dataclass
@@ -49,6 +53,7 @@ class ReturnResult:
     skipped: list[str]
     pdf_failures: list[str]
     warnings: list[str]
+    worksheet: dict | None = None   # {"out", "filled", "locked", "unmatched"}
 
     @property
     def ok(self) -> bool:
@@ -63,11 +68,11 @@ def _tex_escape(s: str) -> str:
 
 
 def display_name(slug: str) -> str:
-    """'Atkins-Bennett' -> 'Bennett Atkins'.
+    """'Doe-Jane' -> 'Jane Doe'.
 
     Moodle folder names are Lastname-Firstname; the last hyphen is the
     separator (last names may contain hyphens and spaces of their own,
-    e.g. 'Barrera-Vinha-Valentin' -> 'Valentin Barrera-Vinha')."""
+    e.g. 'Smith-Jones-Ana' -> 'Ana Smith-Jones')."""
     last, sep, first = slug.rpartition("-")
     if not sep or not last or not first:
         return slug
@@ -118,6 +123,47 @@ def _gradable(data: dict) -> bool:
                for p in data["parts"].values())
 
 
+def _statement_segments(app) -> tuple[dict, dict]:
+    """Per-part problem-statement HTML from the template: for box n, the
+    statement text between the previous solution box and box n.  Returns
+    ({n: html}, template_katex_macros); empty when there is no template.
+    Segments cut through wrapping environments lose only the wrapper —
+    the converter keeps the content."""
+    from .grade_gui import template_problem_blocks
+
+    tmpl = (app.manifest.get("template") or {}).get("path")
+    path = Path(tmpl) if tmpl else None
+    if path is not None and not path.is_absolute():
+        path = app.folder / path
+    if path is None or not path.is_file():
+        return {}, {}
+    text = path.read_text(errors="replace")
+    preamble = split_preamble(text)
+    m = re.search(r"\\hwnumber\{(\d+)\}", text)
+    section = m.group(1) if m else None
+    try:
+        macros = extract_macros(preamble)
+    except Exception:
+        macros = {}
+    segs: dict = {}
+    for blk in template_problem_blocks(text):
+        pos = 0
+        for sm in SEG_RE.finditer(blk["tex"]):
+            n = int(sm.group(1))
+            seg = blk["tex"][pos:sm.start()]
+            pos = sm.end()
+            if not seg.strip():
+                continue
+            try:
+                conv = HtmlConverter(seg, include_solutions=True,
+                                     extra_preamble=preamble,
+                                     section=section)
+                segs[n] = conv.convert()
+            except Exception:
+                pass
+    return segs, macros
+
+
 # ----------------------------------------------------------- feedback html --
 
 def _pie_svg(pct: float | None) -> str:
@@ -140,6 +186,30 @@ def _pie_svg(pct: float | None) -> str:
             f'class="pie-{cls}"/></svg>')
 
 
+def _ordered_comments(tex: str | None, comments: list) -> list:
+    """Comments in marker order (anchor END position in the tex, unanchored
+    last) — same rule the grader applies, enforced again here so exports
+    are right even for parts graded before that rule existed."""
+    if not tex or len(comments) < 2:
+        return comments
+
+    def key(ic):
+        i, c = ic
+        at = tex.find(c["anchor"]) if c.get("anchor") else -1
+        return (at + len(c["anchor"]) if at != -1 else float("inf"), i)
+
+    return [c for _, c in sorted(enumerate(comments),
+                                 key=lambda ic: key(ic))]
+
+
+def _part_pct(app, data: dict, n: int) -> float | None:
+    p = data["parts"][str(n)]
+    rp = app.rubric[n - 1]
+    if p["score"] is None or not rp.max:
+        return None
+    return max(0.0, min(1.0, p["score"] / rp.max))
+
+
 def _score_overview(app, data: dict) -> str:
     """Per-problem columns of part cards (label + score pie), each a jump
     link to that part's section."""
@@ -155,9 +225,7 @@ def _score_overview(app, data: dict) -> str:
         for n in boxes:
             p = data["parts"][str(n)]
             rp = app.rubric[n - 1]
-            pct = None
-            if p["score"] is not None and rp.max:
-                pct = max(0.0, min(1.0, p["score"] / rp.max))
+            pct = _part_pct(app, data, n)
             cells.append(
                 f'<a class="scard" href="#part-{n}" '
                 f'title="{html_mod.escape(rp.label)}: '
@@ -169,7 +237,8 @@ def _score_overview(app, data: dict) -> str:
     return f'<nav class="scoregrid">{"".join(cols)}</nav>'
 
 
-def _feedback_html(app, unit: dict, data: dict, title: str) -> str:
+def _feedback_html(app, unit: dict, data: dict, title: str,
+                   stmts: dict, tmacros: dict) -> str:
     slug = unit["slug"]
     total = sum(p["score"] or 0 for p in data["parts"].values()
                 if p["score"] is not None)
@@ -187,7 +256,7 @@ def _feedback_html(app, unit: dict, data: dict, title: str) -> str:
         else:
             content = ('<p class="note">(No LaTeX on record for this part — '
                        'see your submitted PDF.)</p>')
-        comments = p["comments"]
+        comments = _ordered_comments(pay["tex"], p["comments"])
         cdata[str(n)] = {"comments": comments, "macros": pay["macros"]}
         clist = ""
         if comments:
@@ -196,13 +265,19 @@ def _feedback_html(app, unit: dict, data: dict, title: str) -> str:
                 for c in comments) + "</ol>"
         score = _fmt_score(p["score"])
         mx = _fmt_score(rp.max)
+        stmt = stmts.get(n)
+        stoggle = ('<button class="stoggle">▸ Problem</button>'
+                   if stmt else "")
+        pstmt = (f'<div class="pstmt" hidden>{stmt}</div>' if stmt else "")
         sections.append(f"""
   <section class="part" data-n="{n}" id="part-{n}">
     <div class="part-head">
-      <span class="plabel">{html_mod.escape(rp.label)}</span>
+      <span class="plabel">Problem {html_mod.escape(rp.label)}</span>
+      {stoggle}
       <span class="sp"></span>
       <span class="pscore">{score} / {mx}</span>
     </div>
+    {pstmt}
     <div class="pcontent">{content}</div>
     {clist}
   </section>""")
@@ -214,8 +289,10 @@ def _feedback_html(app, unit: dict, data: dict, title: str) -> str:
         formatting differences are possible. The comments refer to this
         transcription.</p>""")
 
+    cdata["_tmacros"] = tmacros
     jumps = "".join(
-        f'<a class="jump" href="#part-{n}">{html_mod.escape(rp.label)}</a>'
+        f'<a class="jump" href="#part-{n}">{html_mod.escape(rp.label)}'
+        f'{_pie_svg(_part_pct(app, data, n))}</a>'
         for n, rp in enumerate(app.rubric, start=1))
     return FEEDBACK_PAGE \
         .replace("__KATEX__", KATEX_VERSION) \
@@ -305,8 +382,9 @@ def _compile_pdf(tex: str, dest: Path) -> bool:
 
 # ------------------------------------------------------------------- build --
 
-def build_feedback(folder: Path, out: Path | None = None, pdf: bool = True,
+def build_feedback(folder: Path, out: Path | None = None, pdf: bool = False,
                    include_ungraded: bool = False,
+                   worksheet: Path | None = None,
                    progress=lambda s: None, app=None) -> ReturnResult:
     # GradingApp already knows how to render parts with template labels,
     # macros and caching; reuse it rather than duplicating that stack.
@@ -317,6 +395,7 @@ def build_feedback(folder: Path, out: Path | None = None, pdf: bool = True,
         app = GradingApp(folder)
     out_dir = Path(out) if out else app.folder / RETURN_DIR
     title = _assignment_title(app)
+    stmts, tmacros = _statement_segments(app)
     exported: list[str] = []
     skipped: list[str] = []
     pdf_failures: list[str] = []
@@ -332,11 +411,14 @@ def build_feedback(folder: Path, out: Path | None = None, pdf: bool = True,
         udir = fb_root / slug
         udir.mkdir(parents=True, exist_ok=True)
         (udir / "feedback.html").write_text(
-            _feedback_html(app, unit, data, title))
+            _feedback_html(app, unit, data, title, stmts, tmacros))
         if pdf:
             if not _compile_pdf(_feedback_tex(app, unit, data, title),
                                 udir / "feedback.pdf"):
                 pdf_failures.append(slug)
+        else:
+            # a stale sheet from an earlier run would still get zipped
+            (udir / "feedback.pdf").unlink(missing_ok=True)
         exported.append(slug)
         progress(f"  {slug}")
 
@@ -376,8 +458,107 @@ def build_feedback(folder: Path, out: Path | None = None, pdf: bool = True,
 
     if pdf and shutil.which("pdflatex") is None:
         warnings.append("pdflatex not found — no PDF sheets were produced")
+
+    ws = Path(worksheet) if worksheet else find_worksheet(app.folder)
+    ws_info = None
+    if ws is not None:
+        try:
+            ws_info = fill_worksheet(app, exported, out_dir, ws)
+            if ws_info["max_mismatch"]:
+                got, want = ws_info["max_mismatch"]
+                warnings.append(
+                    f"worksheet Maximum grade is {got} but the rubric "
+                    f"totals {_fmt_score(want)} — check the assignment's "
+                    "grade settings")
+            if ws_info["locked"]:
+                warnings.append(
+                    "grades locked in Moodle, not filled: "
+                    + ", ".join(ws_info["locked"]))
+            if ws_info["unmatched"]:
+                warnings.append(
+                    "graded but not in the worksheet: "
+                    + ", ".join(ws_info["unmatched"]))
+        except GradeError as e:
+            warnings.append(f"worksheet not filled: {e}")
     return ReturnResult(out_dir=out_dir, exported=exported, skipped=skipped,
-                        pdf_failures=pdf_failures, warnings=warnings)
+                        pdf_failures=pdf_failures, warnings=warnings,
+                        worksheet=ws_info)
+
+
+# --------------------------------------------------------- moodle worksheet --
+
+WORKSHEET_OUT = "grading-worksheet-upload.csv"
+
+
+def find_worksheet(folder: Path) -> Path | None:
+    """Moodle grading-worksheet exports are named Grades-<course>-....csv;
+    auto-detect one dropped into the grading folder."""
+    hits = sorted(Path(folder).glob("Grades-*.csv"))
+    return hits[0] if len(hits) == 1 else None
+
+
+def fill_worksheet(app, exported: list[str], out_dir: Path,
+                   path: Path) -> dict:
+    """Copy a Moodle offline grading worksheet with the Grade column set
+    to each exported submission's total, ready to upload back.
+
+    Moodle matches rows by its own Identifier ("Participant <id>", the
+    same id as in the download-zip folder names), so every other column is
+    passed through untouched.  Rows marked "Grade can be changed" = No are
+    left alone and reported.
+    """
+    with open(path, newline="", encoding="utf-8-sig") as f:
+        reader = csv.reader(f)
+        try:
+            header = next(reader)
+        except StopIteration:
+            raise GradeError(f"{path} is empty")
+        rows = list(reader)
+
+    def col(name):
+        return header.index(name) if name in header else None
+
+    ci, cg = col("Identifier"), col("Grade")
+    cmax, clock = col("Maximum grade"), col("Grade can be changed")
+    if ci is None or cg is None:
+        raise GradeError(
+            f"{path.name} has no Identifier/Grade columns — is it a Moodle "
+            "grading worksheet export?")
+
+    by_id = {u["moodle_id"]: u for u in app.units}
+    out_of = sum(rp.max or 0 for rp in app.rubric)
+    filled, locked, seen = 0, [], set()
+    max_mismatch = None
+    for row in rows:
+        m = re.search(r"\d+", row[ci]) if len(row) > ci else None
+        unit = by_id.get(m.group(0)) if m else None
+        if unit is None or unit["slug"] not in exported:
+            continue
+        seen.add(unit["slug"])
+        if clock is not None and row[clock].strip().lower() == "no":
+            locked.append(unit["slug"])
+            continue
+        data = app.store.load(unit["slug"])
+        total = sum(p["score"] for p in data["parts"].values()
+                    if p["score"] is not None)
+        row[cg] = f"{total:.2f}"
+        filled += 1
+        if cmax is not None and max_mismatch is None:
+            try:
+                if abs(float(row[cmax]) - out_of) > 1e-9:
+                    max_mismatch = (row[cmax], out_of)
+            except ValueError:
+                pass
+
+    out_path = Path(out_dir) / WORKSHEET_OUT
+    with out_path.open("w", newline="", encoding="utf-8-sig") as f:
+        w = csv.writer(f)
+        w.writerow(header)
+        w.writerows(rows)
+    info = {"out": str(out_path), "filled": filled, "locked": locked,
+            "unmatched": sorted(set(exported) - seen),
+            "max_mismatch": max_mismatch}
+    return info
 
 
 # --------------------------------------------------------------------- cli --
@@ -392,23 +573,33 @@ def add_parser(sub) -> None:
                    help="Grading folder (default: cwd).")
     p.add_argument("--out", type=Path, default=None,
                    help="Output directory (default: <folder>/return).")
-    p.add_argument("--no-pdf", action="store_true",
-                   help="Skip the compiled PDF feedback sheets.")
+    p.add_argument("--pdf", action="store_true",
+                   help="Also compile PDF feedback sheets (experimental; "
+                        "the HTML is the primary feedback artifact).")
     p.add_argument("--all", action="store_true",
                    help="Also export submissions with nothing graded.")
+    p.add_argument("--worksheet", type=Path, default=None,
+                   help="Moodle offline grading worksheet CSV to fill with "
+                        "totals (default: a single Grades-*.csv found in "
+                        "the grading folder).")
 
 
 def run_return(args: argparse.Namespace) -> int:
     try:
         result = build_feedback(
-            Path(args.folder), out=args.out, pdf=not args.no_pdf,
-            include_ungraded=args.all, progress=print)
+            Path(args.folder), out=args.out, pdf=args.pdf,
+            include_ungraded=args.all, worksheet=args.worksheet,
+            progress=print)
     except (GradeError, OSError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
     print(f"Exported {len(result.exported)} submissions to {result.out_dir}")
     print(f"  Moodle zip: {result.out_dir / ZIP_NAME}")
     print(f"  Gradebook:  {result.out_dir / 'gradebook.csv'}")
+    if result.worksheet:
+        print(f"  Worksheet:  {result.worksheet['out']} "
+              f"({result.worksheet['filled']} grades filled — upload via "
+              "the assignment's 'Upload grading worksheet')")
     if result.skipped:
         print(f"  ({len(result.skipped)} submissions had nothing graded; "
               "use --all to include them)")
@@ -496,23 +687,40 @@ FEEDBACK_PAGE = r"""<!doctype html>
     margin: 0 -1.1rem; }
   #fnav { display: none; align-items: center; gap: .3rem; flex-wrap: wrap;
     background: var(--bar-bg); padding: .35rem 1.1rem;
+    width: fit-content; max-width: 100%; margin: 0 auto;
     font-family: system-ui, sans-serif;
     box-shadow: 0 2px 8px rgba(0,0,0,.18); }
   #fnav.show { display: flex; }
   #fnav .nm { font-weight: 700; font-size: .9rem; margin-right: .3rem; }
-  #fnav .jump { font-size: .74rem; padding: .05rem .5rem;
-    background: var(--bg); color: var(--accent); text-decoration: none; }
+  #fnav .jump { font-size: .74rem; padding: .05rem .4rem;
+    background: var(--bg); color: var(--accent); text-decoration: none;
+    display: inline-flex; align-items: center; gap: .2rem; }
   #fnav .jump:hover { background: var(--hover-bg); }
+  #fnav .pie { width: 12px; height: 12px; }
   #fnav button { font: inherit; font-size: .8rem; border: none;
     cursor: pointer; background: transparent; color: var(--accent);
     padding: .1rem .5rem; }
   #fnav button:hover { background: var(--hover-bg); }
   section.part { background: var(--card-bg); padding: .8rem 1rem;
     margin: 0 0 1rem; scroll-margin-top: 4.6rem; }
-  .part-head { display: flex; align-items: baseline; gap: .6rem;
-    font-family: system-ui, sans-serif; margin-bottom: .4rem; }
-  .plabel { font-weight: 700; }
-  .pscore { font-weight: 600; color: var(--sol-accent); }
+  .part-head { display: flex; align-items: baseline; gap: .7rem;
+    font-family: system-ui, sans-serif; background: var(--bar-bg);
+    margin: -.8rem -1rem .6rem; padding: .45rem 1rem; }
+  .plabel { font-weight: 700; font-size: .95rem; }
+  .pscore { font-weight: 700; color: var(--sol-accent); }
+  .stoggle { font: 600 .78rem/1.4 system-ui, sans-serif; border: none;
+    cursor: pointer; background: transparent; color: var(--accent);
+    padding: .05rem .4rem; }
+  .stoggle:hover { background: var(--hover-bg); }
+  .pstmt { background: var(--bg); padding: .6rem .8rem; margin: 0 0 .8rem;
+    border-left: 3px solid var(--accent); font-size: .92rem; }
+  .pstmt p { margin: 0 0 .55em; }
+  .pstmt .math-display { overflow-x: auto; padding: .15rem 0; }
+  .pstmt .thmblock { border-left: 3px solid var(--border);
+    padding-left: .7rem; margin: .6em 0; }
+  .pstmt .thm-head { font-weight: 700; font-family: system-ui, sans-serif;
+    font-size: .82rem; margin: 0 0 .2em; }
+  .pstmt details.solution > summary { display: none; }
   .pcontent { overflow-x: auto; }
   .pcontent p { margin: 0 0 .55em; }
   .pcontent .math-display { overflow-x: auto; padding: .15rem 0; }
@@ -530,6 +738,9 @@ FEEDBACK_PAGE = r"""<!doctype html>
   .note { color: var(--muted); font-style: italic; }
   .task { color: var(--accent); }
   .alert { color: var(--alert); }
+  /* the converter glues inline math to trailing punctuation with this
+     class; without nowrap a sentence-ending period can wrap alone */
+  .nw { white-space: nowrap; }
   sup.cmark {
     display: inline-block; cursor: pointer; user-select: none;
     background: var(--mark-bg); color: var(--fg); font: 700 .72rem/1.35
@@ -549,9 +760,7 @@ FEEDBACK_PAGE = r"""<!doctype html>
 <body>
 <main>
 <div id="fnav-wrap"><div id="fnav">
-  <span class="nm">__NAME__</span>
   __JUMPS__
-  <span class="sp"></span>
   <button id="totop" title="Back to top">↑ Top</button>
 </div></div>
 <header class="doc">
@@ -645,7 +854,7 @@ function placeMarkers(box, comments) {
       if (off > s && off < e) { off = e; break; }
     inserts.push({ni, off, i: j.i});
   }
-  inserts.sort((a, b) => b.ni - a.ni || b.off - a.off);
+  inserts.sort((a, b) => b.ni - a.ni || b.off - a.off || b.i - a.i);
   for (const ins of inserts) {
     const node = nodes[ins.ni];
     const mark = document.createElement("sup");
@@ -670,8 +879,15 @@ document.querySelectorAll("section.part").forEach(sec => {
   const d = CDATA[sec.dataset.n] || {comments: [], macros: {}};
   const box = sec.querySelector(".pcontent");
   placeMarkers(box, d.comments);
+  const st = sec.querySelector(".stoggle");
+  const ps = sec.querySelector(".pstmt");
+  if (st && ps) st.addEventListener("click", () => {
+    ps.hidden = !ps.hidden;
+    st.textContent = (ps.hidden ? "▸" : "▾") + " Problem";
+  });
   const paint = () => {
     typeset(box, d.macros);
+    if (ps) typeset(ps, CDATA._tmacros || {});
     const cl = sec.querySelector("ol.clist");
     if (cl) typeset(cl, d.macros);
   };

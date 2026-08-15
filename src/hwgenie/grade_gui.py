@@ -543,7 +543,7 @@ def make_handler(holder: AppHolder):
                     self._json({"ok": False,
                                 "error": "export already running"}, 409)
                     return
-                pdf = bool(data.get("pdf", True))
+                pdf = bool(data.get("pdf", False))
                 app.export_state = {"running": True, "error": None,
                                     "summary": None}
 
@@ -559,6 +559,8 @@ def make_handler(holder: AppHolder):
                                 "pdf_failures": len(res.pdf_failures),
                                 "out": str(res.out_dir),
                                 "warnings": res.warnings,
+                                "worksheet": (res.worksheet or {}).get(
+                                    "filled"),
                             }}
                     except Exception as e:
                         app.export_state = {"running": False,
@@ -775,6 +777,7 @@ __BASE__
   #stunav {
     display: none; align-items: center; gap: .3rem; flex-wrap: wrap;
     background: var(--bar-bg); padding: .35rem 1.2rem;
+    width: fit-content; max-width: 100%; margin: 0 auto;
     box-shadow: 0 2px 8px rgba(0,0,0,.18);
   }
   #stunav.show { display: flex; }
@@ -845,6 +848,8 @@ __BASE__
   }
   .task { color: var(--accent); font-weight: 600; }
   .alert { color: var(--alert); }
+  /* inline math + trailing punctuation glue from the converter */
+  .nw { white-space: nowrap; }
 
   .vdiv { width: 5px; flex-shrink: 0; cursor: col-resize; display: none; }
   .vdiv:hover { background: var(--hover-bg); }
@@ -1661,8 +1666,9 @@ function placeMarkersRendered(box, comments) {
       if (off > s && off < e) { off = e; break; }
     inserts.push({ni, off, i: j.i});
   }
-  // insert back-to-front so earlier offsets stay valid
-  inserts.sort((a, b) => b.ni - a.ni || b.off - a.off);
+  // insert back-to-front so earlier offsets stay valid; ties by index
+  // DESCENDING so same-position markers end up left-to-right ascending
+  inserts.sort((a, b) => b.ni - a.ni || b.off - a.off || b.i - a.i);
   for (const ins of inserts) {
     const node = nodes[ins.ni];
     const mark = document.createElement("sup");
@@ -1699,7 +1705,9 @@ function orderComments(slug, n) {
   if (!pay || pay.tex === null || cs.length < 2) return false;
   const keyed = cs.map((c, i) => {
     const at = c.anchor ? pay.tex.indexOf(c.anchor) : -1;
-    return {c, i, at: at === -1 ? Infinity : at};
+    // markers sit at the anchor's END — sort by that, or a comment whose
+    // anchor is a prefix of a longer one at the same spot lists backwards
+    return {c, i, at: at === -1 ? Infinity : at + c.anchor.length};
   });
   keyed.sort((a, b) => a.at - b.at || a.i - b.i);
   if (keyed.every((k, j) => k.i === j)) return false;
@@ -1914,7 +1922,6 @@ function showStudent(slug) {
     <div id="stunav-wrap"><div id="stunav">
       <span class="nm">${esc(slug)}</span>
       ${jumps}
-      <span class="sp"></span>
       <button class="ghost" id="totop" title="Back to top">↑ Top</button>
     </div></div>` +
     unitHeader(u) +
@@ -2145,7 +2152,7 @@ $("#notice").addEventListener("click", () =>
 $("#export").addEventListener("click", async () => {
   await settleSaves();
   if (saveState() !== "clean") { updateSaveStat(); return; }
-  try { await api("/api/export", {pdf: true}); }
+  try { await api("/api/export", {pdf: false}); }
   catch (e) { notice("Export: " + e.message); return; }
   $("#export").disabled = true;
   $("#export").textContent = "Exporting…";
@@ -2161,6 +2168,8 @@ $("#export").addEventListener("click", async () => {
     notice(`Exported ${s.exported} submissions` +
       (s.skipped ? ` (${s.skipped} with nothing graded were skipped)` : "") +
       (s.pdf_failures ? `; ${s.pdf_failures} PDF sheets failed` : "") +
+      (s.worksheet != null ?
+        `; grading worksheet filled with ${s.worksheet} totals` : "") +
       `. Files are in ${s.out}` +
       (s.warnings && s.warnings.length ? ` — ${s.warnings.join("; ")}` : "") +
       ". Click to dismiss.");
