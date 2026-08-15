@@ -42,7 +42,12 @@ DECLOP_RE = re.compile(r"\\DeclareMathOperator(\*?)\s*\{\\([A-Za-z]+)\}\s*(?=\{)
 
 # LaTeX built-ins KaTeX lacks; \ensuremath is a no-op inside math, which is
 # the only context KaTeX renders.
-DEFAULT_MACROS = {"\\ensuremath": "#1"}
+DEFAULT_MACROS = {
+    "\\ensuremath": "#1",
+    # foldeq break marker: prints its relation when it survives to KaTeX
+    # (the fold script normally consumes these before rendering).
+    "\\fold": "#1",
+}
 
 
 def extract_macros(text: str) -> Dict[str, str]:

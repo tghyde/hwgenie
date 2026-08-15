@@ -102,6 +102,10 @@ MATH_ENVS = {
 
 CODE_ENVS = ("lstlisting", "verbatim", "verbatim*", "Verbatim")
 
+# Foldable displays: single line in the PDF, re-broken at \fold{rel} markers
+# by the fold script in the page template when the viewport is too narrow.
+FOLD_ENVS = ("foldeq", "foldeq*")
+
 
 class Flow:
     """Accumulates inline content into paragraphs between block elements."""
@@ -650,6 +654,8 @@ class HtmlConverter:
             flow.block(self._tabular_html(n))
         elif name in CODE_ENVS:
             flow.block(self._code_html(n))
+        elif name in FOLD_ENVS:
+            flow.block(self._foldeq_html(n))
         elif name in MATH_ENVS:
             flow.block(self._math_env_html(n))
         elif name == "card":
@@ -960,6 +966,52 @@ class HtmlConverter:
                            len(self.footnotes) + 1)
         )
         return f'<div class="math-display"{anchor}>{esc(tex)}</div>{marks}'
+
+    def _foldeq_html(self, n) -> str:
+        """foldeq/foldeq*: emit the raw body (with \\fold markers and the &
+        anchor intact) in a data-tex attribute; the fold script in the page
+        template picks a fold level and renders it with KaTeX."""
+        name = n.environmentname
+        env_text = self.text[n.pos : n.pos + n.len]
+        body = env_text[
+            len(f"\\begin{{{name}}}") : env_text.rfind(f"\\end{{{name}}}")
+        ]
+        body, mathnotes = _extract_math_footnotes(body)
+        for note in mathnotes:
+            self.footnotes.append(self.convert_fragment(note))
+        label_keys = re.findall(r"\\label\s*\{([^{}]*)\}", body)
+        body = re.sub(r"\\label\s*\{[^{}]*\}", "", body)
+        if "\\qedhere" in body:
+            self._saw_qedhere = True
+            body = body.replace("\\qedhere", "")
+            if not self._in_solution:  # no qed marks inside HTML solutions
+                body = body.rstrip() + " \\;\\square"
+        anchor = ""
+        tag = ""
+        if name == "foldeq":
+            self.eq_counter += 1
+            display = f"{self.eq_prefix}{self.eq_counter}"
+            for key in label_keys:
+                self.labels[key.strip()] = ("eq", display)
+            tag = f"\\tag{{{display}}}"
+            anchor = f' id="eq-{_anchor_slug(display)}"'
+        elif label_keys and not self._collecting:
+            self.warnings.append(
+                f"\\label in {{{name}}}: equation numbers in this "
+                "environment are not preserved in HTML; references will "
+                "not resolve."
+            )
+        body = " ".join(body.split())
+        marks = "".join(
+            f'<sup class="fn"><a href="#fn-{k}" id="fnref-{k}">{k}</a></sup>'
+            for k in range(len(self.footnotes) - len(mathnotes) + 1,
+                           len(self.footnotes) + 1)
+        )
+        attr = html_mod.escape(body, quote=True)
+        tag_attr = (f' data-tag="{html_mod.escape(tag, quote=True)}"'
+                    if tag else "")
+        return (f'<div class="math-display foldeq"{anchor}'
+                f' data-tex="{attr}"{tag_attr}></div>{marks}')
 
 
 FOOTNOTE_RE = re.compile(r"\\footnote\{((?:[^{}]|\{[^{}]*\})*)\}")

@@ -104,6 +104,39 @@ def test_align_env_wrapped_for_katex():
     assert "\\end{aligned}\\]" in html
 
 
+def test_foldeq_star_emits_data_tex():
+    _c, html = convert(
+        "\\begin{foldeq*}\n"
+        "    a + b &= (2j + 1) + (2k + 1) \\fold{=} 2(j + k + 1).\n"
+        "\\end{foldeq*}"
+    )
+    assert '<div class="math-display foldeq"' in html
+    # body is preserved verbatim (whitespace-collapsed) with markers intact
+    assert ("data-tex=\"a + b &amp;= (2j + 1) + (2k + 1) "
+            "\\fold{=} 2(j + k + 1).\"") in html
+    assert "data-tag" not in html
+
+
+def test_foldeq_numbered_tag_and_label():
+    conv, html = convert(
+        "\\begin{foldeq}\n\\label{eq fold}\nx &= y \\fold{=} z\n\\end{foldeq}\n"
+        "See \\eqref{eq fold}."
+    )
+    assert 'data-tag="\\tag{1}"' in html
+    assert 'id="eq-1"' in html
+    assert conv.labels["eq fold"] == ("eq", "1")
+
+
+def test_foldeq_qedhere_stripped_in_solutions():
+    _c, html = convert(
+        "\\begin{problem}\n\\begin{solution}\n"
+        "\\begin{foldeq*}\na &= b \\fold{=} c\\qedhere\n\\end{foldeq*}\n"
+        "\\end{solution}\n\\end{problem}"
+    )
+    assert "qedhere" not in html
+    assert "\\square" not in html
+
+
 def test_katex_macro_extraction():
     macros = extract_macros(
         "\\def\\ZZ{\\mathbb{Z}}\n"

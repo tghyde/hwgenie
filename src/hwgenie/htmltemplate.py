@@ -383,12 +383,121 @@ def view_box(href: str, label: str) -> str:
     return f'<a class="filebox viewbox" href="{href}">{label}</a>'
 
 
+# foldeq support: displays emitted as <div class="foldeq" data-tex="..."> are
+# re-broken at their \fold{rel} markers to fit the viewport.  Fold levels
+# activate from the END of the line; folded rows align under the last
+# relation still on row 1 (an author & in the lead segment anchors the fully
+# folded form).  Past max fold: shrink font to 70%, then scroll.
+FOLD_JS = r"""
+function foldParse(tex) {
+  var parts = [], rels = [], depth = 0, start = 0;
+  for (var i = 0; i < tex.length; i++) {
+    var c = tex[i];
+    if (c === "\\" && tex.slice(i, i + 5) === "\\fold" && depth === 0) {
+      parts.push(tex.slice(start, i).trim());
+      i += 5;
+      while (i < tex.length && /\s/.test(tex[i])) i++;
+      if (tex[i] !== "{") { rels.push(""); start = i; continue; }
+      var d = 1, j = i + 1;
+      while (j < tex.length && d > 0) {
+        if (tex[j] === "{") d++;
+        else if (tex[j] === "}") d--;
+        j++;
+      }
+      rels.push(tex.slice(i + 1, j - 1).trim());
+      start = j;
+      i = j - 1;
+    } else if (c === "{") depth++;
+    else if (c === "}") depth--;
+    else if (c === "\\") i++;
+  }
+  parts.push(tex.slice(start).trim());
+  return { parts: parts, rels: rels };
+}
+function foldStripAnchors(s) {
+  return s.replace(/(^|[^\\])&/g, "$1");
+}
+function foldBuild(parts, rels, level) {
+  var k = rels.length;
+  if (level === 0) {
+    return foldStripAnchors(parts.map(function(p, i) {
+      return i ? rels[i - 1] + " " + p : p;
+    }).join(" "));
+  }
+  var firstActive = k - level;
+  var row1, indent = false;
+  if (firstActive === 0) {
+    if (/(^|[^\\])&/.test(parts[0])) {
+      row1 = parts[0];
+    } else {
+      row1 = "&" + parts[0];
+      indent = true;
+    }
+  } else {
+    var s = foldStripAnchors(parts[0]);
+    for (var i = 0; i < firstActive - 1; i++)
+      s += " " + rels[i] + " " + foldStripAnchors(parts[i + 1]);
+    row1 = s + " &" + rels[firstActive - 1] + " "
+             + foldStripAnchors(parts[firstActive]);
+  }
+  var body = row1;
+  for (var i = firstActive; i < k; i++)
+    body += " \\\\ &" + (indent ? "\\quad " : "")
+          + rels[i] + " " + foldStripAnchors(parts[i + 1]);
+  return "\\begin{aligned}" + body + "\\end{aligned}";
+}
+var foldMeasurer = null;
+function foldWidth(tex) {
+  if (!foldMeasurer) {
+    foldMeasurer = document.createElement("div");
+    foldMeasurer.style.cssText =
+      "position:absolute;left:-10000px;top:0;visibility:hidden;width:max-content;";
+    document.body.appendChild(foldMeasurer);
+  }
+  katex.render(tex, foldMeasurer,
+               { displayMode: true, throwOnError: false, macros: katexMacros });
+  var k = foldMeasurer.querySelector(".katex");
+  return k ? k.scrollWidth : foldMeasurer.scrollWidth;
+}
+function fitFolds() {
+  if (typeof katex === "undefined") return;
+  document.querySelectorAll(".foldeq").forEach(function(el) {
+    var src = el.getAttribute("data-tex");
+    if (!src) return;
+    var parsed = foldParse(src);
+    var tag = el.getAttribute("data-tag") || "";
+    var target = el.clientWidth - 2;
+    var level = parsed.rels.length; // nothing fits: max fold, then shrink
+    for (var j = 0; j <= parsed.rels.length; j++) {
+      if (foldWidth(foldBuild(parsed.parts, parsed.rels, j) + tag) <= target) {
+        level = j;
+        break;
+      }
+    }
+    if (el._foldLevel !== level) {
+      el._foldLevel = level;
+      katex.render(foldBuild(parsed.parts, parsed.rels, level) + tag, el,
+                   { displayMode: true, throwOnError: false,
+                     macros: katexMacros });
+    }
+    el.style.fontSize = "";
+    if (el.scrollWidth > el.clientWidth + 1) {
+      var scale = el.clientWidth / el.scrollWidth;
+      if (scale >= 0.7) el.style.fontSize = (scale * 100).toFixed(1) + "%";
+      // below 70% keep full size; the container scrolls horizontally
+    }
+  });
+}
+"""
+
+
 def katex_block(macros_json: str) -> str:
-    """KaTeX assets + auto-render + wide-display auto-scaling."""
+    """KaTeX assets + auto-render + fold + wide-display auto-scaling."""
     return f"""<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@{KATEX_VERSION}/dist/katex.min.css">
 <script defer src="https://cdn.jsdelivr.net/npm/katex@{KATEX_VERSION}/dist/katex.min.js"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/katex@{KATEX_VERSION}/dist/contrib/auto-render.min.js"></script>
 <script>
+var katexMacros = {macros_json};
 document.addEventListener("DOMContentLoaded", function() {{
   renderMathInElement(document.body, {{
     delimiters: [
@@ -397,13 +506,15 @@ document.addEventListener("DOMContentLoaded", function() {{
       {{left: "$", right: "$", display: false}},
       {{left: "\\\\(", right: "\\\\)", display: false}}
     ],
-    macros: {macros_json},
+    macros: katexMacros,
     throwOnError: false
   }});
-  fitDisplays();
+  fitAll();
 }});
+{FOLD_JS}
 function fitDisplays() {{
   document.querySelectorAll(".katex-display").forEach(function(d) {{
+    if (d.closest(".foldeq")) return; // foldeq manages its own fitting
     d.style.fontSize = "";
     if (d.scrollWidth > d.clientWidth + 1) {{
       var scale = d.clientWidth / d.scrollWidth;
@@ -412,20 +523,26 @@ function fitDisplays() {{
     }}
   }});
 }}
+function fitAll() {{
+  fitFolds();
+  fitDisplays();
+}}
 var fitTimer = null;
 window.addEventListener("resize", function() {{
   clearTimeout(fitTimer);
-  fitTimer = setTimeout(fitDisplays, 150);
+  fitTimer = setTimeout(fitAll, 150);
 }});
-window.addEventListener("load", fitDisplays);
+window.addEventListener("load", fitAll);
 if (document.fonts && document.fonts.ready) {{
-  document.fonts.ready.then(fitDisplays);
+  document.fonts.ready.then(fitAll);
 }}
 if (window.ResizeObserver) {{
-  new ResizeObserver(function() {{
-    clearTimeout(fitTimer);
-    fitTimer = setTimeout(fitDisplays, 150);
-  }}).observe(document.body);
+  document.addEventListener("DOMContentLoaded", function() {{
+    new ResizeObserver(function() {{
+      clearTimeout(fitTimer);
+      fitTimer = setTimeout(fitAll, 150);
+    }}).observe(document.body);
+  }});
 }}
 </script>"""
 
