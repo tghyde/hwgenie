@@ -3,6 +3,7 @@
 import json
 import threading
 import urllib.request
+import zipfile
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
@@ -41,6 +42,33 @@ STUDENT_TEX = "\n".join([
 ])
 
 
+TEMPLATE_TEX = "\n".join([
+    r"\documentclass{article}",
+    r"% students type between \begin{solution} and \end{solution}",
+    r"\newcommand{\blue}[1]{\textcolor{blue}{#1}}",
+    r"\begin{document}",
+    r"Assignment intro text.",
+    r"\begin{problem}",
+    r"    Statement one. \blue{Do part one.}",
+    r"    \begin{solution}",
+    "        %Write your solution here",
+    r"    \end{solution}",
+    r"    \blue{Do part two.}",
+    r"    \begin{solution}",
+    "        %Write your solution here",
+    r"    \end{solution}",
+    r"\end{problem}",
+    r"Between problems.",
+    r"\begin{problem}",
+    r"    Statement two.",
+    r"    \begin{solution}",
+    "        %Write your solution here",
+    r"    \end{solution}",
+    r"\end{problem}",
+    r"\end{document}",
+])
+
+
 def make_grading_folder(root: Path) -> Path:
     dest = root / "grading"
     manifest = {
@@ -71,6 +99,7 @@ def make_grading_folder(root: Path) -> Path:
         if u["tex"]:
             (d / "submission.tex").write_text(STUDENT_TEX)
     (dest / "manifest.json").write_text(json.dumps(manifest))
+    (dest / "template.tex").write_text(TEMPLATE_TEX)
     (dest / "rubric.yml").write_text("\n".join([
         "# test rubric",
         "parts:",
@@ -136,14 +165,14 @@ def test_split_preamble():
 def test_load_rubric(grading_folder):
     rubric = load_rubric(grading_folder, 3)
     assert [rp.label for rp in rubric] == ["1.1", "1.2", "2.1a"]
-    assert [rp.max for rp in rubric] == [4, 2.5, None]
+    assert [rp.max for rp in rubric] == [4, 2.5, 5]  # no max -> default 5
 
 
 def test_load_rubric_pads_defaults(grading_folder):
     (grading_folder / "rubric.yml").unlink()
     rubric = load_rubric(grading_folder, 2)
     assert [rp.label for rp in rubric] == ["Part 1", "Part 2"]
-    assert all(rp.max is None for rp in rubric)
+    assert all(rp.max == 5 for rp in rubric)
 
 
 def test_load_rubric_too_long(grading_folder):
@@ -286,12 +315,10 @@ def test_cli_summary_bad_folder(tmp_path, capsys):
 
 # ----------------------------------------------------------------- web app --
 
-@pytest.fixture
-def client(grading_folder):
-    from hwgenie.grade_gui import GradingApp, make_handler
+def _start_server(holder):
+    from hwgenie.grade_gui import make_handler
 
-    app = GradingApp(grading_folder)
-    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(app))
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(holder))
     threading.Thread(target=server.serve_forever, daemon=True).start()
     base = f"http://127.0.0.1:{server.server_address[1]}"
 
@@ -317,7 +344,28 @@ def client(grading_folder):
                 return json.loads(body)
             return body
 
-    yield Client()
+    return server, Client()
+
+
+@pytest.fixture
+def client(grading_folder):
+    from hwgenie.grade_gui import AppHolder, GradingApp
+
+    holder = AppHolder(root=grading_folder)
+    holder.current = GradingApp(grading_folder)
+    server, client = _start_server(holder)
+    yield client
+    server.shutdown()
+
+
+@pytest.fixture
+def picker_client(grading_folder, tmp_path, monkeypatch):
+    import hwgenie.grade_gui as gg
+
+    monkeypatch.setattr(gg, "RECENTS_PATH", tmp_path / "recents.json")
+    holder = gg.AppHolder(root=tmp_path)
+    server, client = _start_server(holder)
+    yield client
     server.shutdown()
 
 
@@ -366,11 +414,117 @@ def test_api_grade_and_progress(client, grading_folder):
     assert "unknown" in err["error"]
 
 
+def test_template_problem_blocks():
+    from hwgenie.grade_gui import template_problem_blocks
+
+    blocks = template_problem_blocks(TEMPLATE_TEX)
+    assert [b["num"] for b in blocks] == [1, 2]
+    assert blocks[0]["boxes"] == [1, 2]
+    assert blocks[1]["boxes"] == [3]
+    assert "HWGRADERBOX1" in blocks[0]["tex"]
+    assert "HWGRADERBOX3" in blocks[1]["tex"]
+    assert "%Write your solution here" not in blocks[0]["tex"]
+    assert "Do part two." in blocks[0]["tex"]
+    for b in blocks:                       # only problem bodies are kept
+        assert "Between problems." not in b["tex"]
+        assert "Assignment intro" not in b["tex"]
+
+
+def test_api_problems(client):
+    p = client.get("/api/problems")
+    assert [pr["boxes"] for pr in p["problems"]] == [[1, 2], [3]]
+    assert "Do part one." in p["problems"][0]["html"]
+    assert "HWGRADERBOX1" in p["problems"][0]["html"]
+
+
+def test_problems_payload_missing_template(grading_folder):
+    from hwgenie.grade_gui import GradingApp
+
+    (grading_folder / "template.tex").unlink()
+    app = GradingApp(grading_folder)
+    payload = app.problems_payload()
+    assert payload["problems"] == []
+
+
+def test_api_pdfmap(client):
+    # the fixture PDFs are fake bytes: the map must degrade to empty, not 500
+    m = client.get("/api/pdfmap?slug=Doe-Jane")
+    assert m == {"parts": {}}
+    client.get("/api/pdfmap?slug=Nobody", expect=404)
+
+
 def test_pdf_and_page(client):
     body = client.get("/pdf/Doe-Jane")
     assert body.startswith(b"%PDF")
     client.get("/pdf/Nobody", expect=404)
     client.get("/pdf/..%2Fmanifest.json", expect=404)   # no traversal
     page = client.get("/")
-    assert b"hwgenie grading" in page
+    assert b"hwGrader" in page
     assert b"katex" in page
+
+
+def test_ping_bye_endpoints(client):
+    assert client.post("/ping", {})["ok"] is True
+    assert client.post("/bye", {})["ok"] is True
+
+
+def test_watchdog_decision():
+    from hwgenie.grade_gui import _watchdog_should_exit as should_exit
+
+    # tab closed: /bye then silence -> exit after the grace period
+    assert not should_exit(now=105, started=0, last_ping=99, bye_at=100)
+    assert should_exit(now=111, started=0, last_ping=99, bye_at=100)
+    # reload: /bye but a newer ping cancels it
+    assert not should_exit(now=200, started=0, last_ping=101, bye_at=100)
+    # browser gone without /bye: long ping timeout
+    assert not should_exit(now=100, started=0, last_ping=20, bye_at=None)
+    assert should_exit(now=300, started=0, last_ping=20, bye_at=None)
+    # browser never connected at all
+    assert not should_exit(now=100, started=0, last_ping=None, bye_at=None)
+    assert should_exit(now=301, started=0, last_ping=None, bye_at=None)
+
+
+# ------------------------------------------------------------------ picker --
+
+def test_picker_flow(picker_client, grading_folder):
+    # nothing open: / serves the picker, grading APIs refuse politely
+    page = picker_client.get("/")
+    assert b"Pick the assignment" in page
+    err = picker_client.get("/api/state", expect=409)
+    assert "no assignment open" in err["error"]
+    # the scan finds the grading folder under the root
+    scan = picker_client.get("/api/scan")
+    assert [f["path"] for f in scan["folders"]] == [str(grading_folder)]
+    assert scan["folders"][0]["units"] == 3
+    # opening it switches to the grading app and records a recent
+    r = picker_client.post("/api/open", {"path": str(grading_folder)})
+    assert r["ok"] is True
+    assert b"hwGrader" in picker_client.get("/")
+    assert picker_client.get("/api/state")["n_parts"] == 3
+    assert picker_client.get("/api/scan")["recents"] == [str(grading_folder)]
+    # closing returns to the picker
+    picker_client.post("/api/close", {})
+    assert b"Pick the assignment" in picker_client.get("/")
+
+
+def test_picker_open_errors(picker_client, tmp_path):
+    err = picker_client.post("/api/open", {"path": str(tmp_path / "nope")},
+                             expect=400)
+    assert err["ok"] is False
+
+
+def test_picker_opens_moodle_zip(picker_client, tmp_path):
+    from test_collect import make_moodle_dir
+
+    src = make_moodle_dir(tmp_path / "zipsrc")
+    zpath = tmp_path / "PS1 downloads.zip"
+    with zipfile.ZipFile(zpath, "w") as z:
+        for p in src.rglob("*"):
+            z.write(p, p.relative_to(src))
+    r = picker_client.post("/api/open", {"path": str(zpath)})
+    assert r["ok"] is True
+    dest = tmp_path / "PS1 downloads-grading"
+    assert (dest / "manifest.json").is_file()
+    assert r["folder"] == str(dest)
+    state = picker_client.get("/api/state")
+    assert {u["slug"] for u in state["units"]} == {"Doe-Jane", "Pitt Roe-Rick"}

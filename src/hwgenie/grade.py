@@ -16,7 +16,7 @@ Schema of ``grades/<slug>.json``::
       "parts": {
         "1": {                       # keys are solution-box numbers, 1-based
           "score": 3.5,              # null until graded
-          "max": 4,                  # from rubric.yml (null if unset)
+          "max": 4,                  # from rubric.yml (default 5)
           "status": "graded",        # derived: "graded" iff score is set
           "comments": [              # anchored inline comments
             {"anchor": "exact tex substring or null", "text": "..."}
@@ -125,10 +125,13 @@ def split_preamble(text: str) -> str:
 
 # ----------------------------------------------------------- rubric/groups --
 
+DEFAULT_MAX = 5
+
+
 @dataclasses.dataclass
 class RubricPart:
     label: str
-    max: float | None = None
+    max: float = DEFAULT_MAX
 
 
 def _parse_rubric(text: str) -> list[RubricPart]:
@@ -148,7 +151,7 @@ def _parse_rubric(text: str) -> list[RubricPart]:
                 label, maxval = maxval, ""
             label = label.strip().strip("\"'")
             maxval = maxval.split("#", 1)[0].strip()
-            mx: float | None = None
+            mx: float = DEFAULT_MAX
             if maxval:
                 try:
                     mx = float(maxval)
@@ -163,7 +166,7 @@ def _parse_rubric(text: str) -> list[RubricPart]:
 
 
 def load_rubric(folder: Path, n_parts: int) -> list[RubricPart]:
-    """Rubric padded/truncated to n_parts; default labels 'Part k'."""
+    """Rubric padded to n_parts; default labels 'Part k', default max 5."""
     path = folder / RUBRIC_NAME
     parts = _parse_rubric(path.read_text()) if path.is_file() else []
     if len(parts) > n_parts > 0:
@@ -316,13 +319,18 @@ def add_parser(sub) -> None:
         help="Grade a collected submissions folder (web app with --gui).",
     )
     p.add_argument("folder", nargs="?", default=".",
-                   help="Grading folder with manifest.json (default: cwd).")
+                   help="Grading folder with manifest.json (default: cwd). "
+                        "With --gui, anything else opens the assignment "
+                        "picker rooted there.")
     p.add_argument("--gui", action="store_true",
-                   help="Open the grading web app in a browser.")
+                   help="Open the grading web app (hwGrader) in a browser.")
     p.add_argument("--port", type=int, default=0,
                    help="Port for --gui (default: an unused one).")
     p.add_argument("--no-browser", action="store_true",
                    help="With --gui: print the URL instead of opening it.")
+    p.add_argument("--auto-exit", action="store_true",
+                   help="With --gui: shut down when the browser tab closes "
+                        "(used by the hwGrader app launcher).")
 
 
 def run_grade(args: argparse.Namespace) -> int:
@@ -331,7 +339,8 @@ def run_grade(args: argparse.Namespace) -> int:
         if args.gui:
             from .grade_gui import serve_app
             return serve_app(folder, port=args.port,
-                             open_browser=not args.no_browser)
+                             open_browser=not args.no_browser,
+                             auto_exit=args.auto_exit)
         return _print_summary(folder)
     except GradeError as e:
         print(f"error: {e}", file=sys.stderr)
