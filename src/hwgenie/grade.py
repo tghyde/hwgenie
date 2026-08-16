@@ -24,7 +24,11 @@ Schema of ``grades/<slug>.json``::
           "ai_draft": {              # written ONLY by the AI-review skill;
             "suggested_score": 3,    # the app displays it as a draft and
             "feedback": "...",       # never auto-copies it into the fields
-            "issues": ["..."]        # above
+            "issues": ["..."],       # above; issues are grader-facing
+            "comments": [            # suggested anchored comments, each
+              {"anchor": "...",      # accepted individually in the app
+               "text": "..."}
+            ]
           }
         }, ...
       }

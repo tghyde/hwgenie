@@ -459,8 +459,17 @@ def test_pdf_and_page(client):
     client.get("/pdf/Nobody", expect=404)
     client.get("/pdf/..%2Fmanifest.json", expect=404)   # no traversal
     page = client.get("/")
-    assert b"hwGrader" in page
+    assert b"hwGenie" in page
     assert b"katex" in page
+
+
+def test_manifest_and_icons(client):
+    # installable as a Chrome app: manifest + real icon PNGs
+    m = json.loads(client.get("/manifest.webmanifest"))
+    assert m["name"] == "hwGenie" and m["display"] == "standalone"
+    png = client.get("/icon-192.png")
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"
+    assert b'rel="manifest"' in client.get("/")
 
 
 def test_ping_bye_endpoints(client):
@@ -499,7 +508,7 @@ def test_picker_flow(picker_client, grading_folder):
     # opening it switches to the grading app and records a recent
     r = picker_client.post("/api/open", {"path": str(grading_folder)})
     assert r["ok"] is True
-    assert b"hwGrader" in picker_client.get("/")
+    assert b"hwGenie" in picker_client.get("/")
     assert picker_client.get("/api/state")["n_parts"] == 3
     assert picker_client.get("/api/scan")["recents"] == [str(grading_folder)]
     # closing returns to the picker

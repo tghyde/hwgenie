@@ -22,8 +22,10 @@ cannot be located in a view.
 
 from __future__ import annotations
 
+import errno
 import json
 import re
+import subprocess
 import threading
 import time
 import urllib.parse
@@ -51,6 +53,59 @@ from .htmltemplate import KATEX_VERSION
 from .katexmacros import extract_macros
 
 RECENTS_PATH = Path.home() / ".hwgenie" / "grader.json"
+
+# Web app manifest: lets Chrome install the page as a standalone
+# "hwGenie" app (needs a FIXED port so the origin is stable — the
+# hwGrader.app launcher uses 8461).
+MANIFEST = {
+    "name": "hwGenie",
+    "short_name": "hwGenie",
+    "start_url": "/",
+    "display": "standalone",
+    "background_color": "#15171c",
+    "theme_color": "#24589f",
+    "icons": [
+        {"src": "/icon-192.png", "sizes": "192x192", "type": "image/png"},
+        {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png"},
+    ],
+}
+
+
+# One Apple Event per window ("URL of tabs of w" returns the whole list)
+# — querying tabs individually makes Dock-click refocusing visibly slow.
+_FOCUS_SCRIPT = """
+tell application "Google Chrome"
+  set found to false
+  repeat with w in windows
+    set urls to URL of tabs of w
+    repeat with i from 1 to count of urls
+      if item i of urls starts with "%s" then
+        set active tab index of w to i
+        set index of w to 1
+        set found to true
+        exit repeat
+      end if
+    end repeat
+    if found then exit repeat
+  end repeat
+  if found then activate
+  return found
+end tell"""
+
+
+def _open_ui(url: str) -> None:
+    """Show the grading UI: focus an existing hwGenie tab in Chrome if
+    one is open (so a Dock click never piles up duplicate tabs), else
+    open a fresh one in the default browser."""
+    try:
+        proc = subprocess.run(
+            ["osascript", "-e", _FOCUS_SCRIPT % url.rstrip("/")],
+            capture_output=True, timeout=8, text=True)
+        if proc.returncode == 0 and "true" in proc.stdout:
+            return
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    webbrowser.open(url)
 
 # A PDF text run that is exactly a problem heading ("Problem 3." or the
 # section-numbered "Problem 1.3."); the last number is the problem ordinal.
@@ -500,6 +555,13 @@ def make_handler(holder: AppHolder):
                     self._json({"error": f"unknown submission {slug!r}"}, 404)
                     return
                 self._json(app.pdf_map(slug))
+            elif url.path == "/manifest.webmanifest":
+                self._send(json.dumps(MANIFEST).encode("utf-8"),
+                           "application/manifest+json")
+            elif url.path in ("/icon-192.png", "/icon-512.png"):
+                from .appicon import icon_png
+                size = 192 if "192" in url.path else 512
+                self._send(icon_png(size), "image/png")
             elif url.path.startswith("/pdf/"):
                 if not (app := self._app()):
                     return
@@ -574,9 +636,6 @@ def make_handler(holder: AppHolder):
             elif self.path == "/bye":
                 holder.bye_at = time.monotonic()
                 self._json({"ok": True})
-            elif self.path == "/quit":
-                self._json({"ok": True})
-                holder.shutdown.set()
             else:
                 self._send(b"not found", code=404)
 
@@ -613,14 +672,25 @@ def serve_app(folder: Path | None, port: int = 0,
     except GradeError:
         print(f"note: {folder} is not a grading folder — "
               "opening the assignment picker instead")
-    server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(holder))
+    try:
+        server = ThreadingHTTPServer(("127.0.0.1", port),
+                                     make_handler(holder))
+    except OSError as e:
+        if port and e.errno == errno.EADDRINUSE:
+            # a second launch while one is running: just show that one
+            url = f"http://127.0.0.1:{port}/"
+            print(f"hwGenie is already running at {url}")
+            if open_browser:
+                _open_ui(url)
+            return 0
+        raise
     url = f"http://127.0.0.1:{server.server_address[1]}/"
-    print(f"hwGrader: {url}")
+    print(f"hwGenie: {url}")
     if auto_exit:
         print("(Closes by itself when the browser tab does.)")
     else:
-        print("(Leave this window open; it closes when you click "
-              "'Close hwGrader' in the browser, or press Ctrl-C.)")
+        print("(Leave this window open; press Ctrl-C to stop, or run "
+              "with --auto-exit to stop when the browser tab closes.)")
     threading.Thread(target=server.serve_forever, daemon=True).start()
     if auto_exit:
         def watchdog():
@@ -632,24 +702,27 @@ def serve_app(folder: Path | None, port: int = 0,
                     holder.shutdown.set()
         threading.Thread(target=watchdog, daemon=True).start()
     if open_browser:
-        webbrowser.open(url)
+        _open_ui(url)
     try:
         holder.shutdown.wait()
     except KeyboardInterrupt:
         pass
     server.shutdown()
-    print("hwGrader closed.")
+    print("hwGenie closed.")
     return 0
 
 
 # -------------------------------------------------------------- the pages --
 
 def render_grader() -> str:
-    return GRADER_PAGE.replace("__KATEX__", KATEX_VERSION)
+    from .appicon import LAMP_SVG
+    return GRADER_PAGE.replace("__KATEX__", KATEX_VERSION) \
+                      .replace("__LAMP__", LAMP_SVG)
 
 
 def render_picker() -> str:
-    return PICKER_PAGE
+    from .appicon import LAMP_SVG
+    return PICKER_PAGE.replace("__LAMP__", LAMP_SVG)
 
 
 # Shared flat look, matching the course pages: rectangular blocks of
@@ -702,7 +775,10 @@ GRADER_PAGE = r"""<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>hwGrader</title>
+<title>hwGenie</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon-192.png">
+<meta name="theme-color" content="#24589f">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@__KATEX__/dist/katex.min.css">
 <script defer src="https://cdn.jsdelivr.net/npm/katex@__KATEX__/dist/katex.min.js"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/katex@__KATEX__/dist/contrib/auto-render.min.js"></script>
@@ -715,6 +791,10 @@ __BASE__
     box-shadow: 0 1px 6px rgba(0,0,0,.15);
   }
   header h1 { font-size: 1rem; margin: 0; white-space: nowrap; }
+  /* logo principle: lamp bottom sits ON the text baseline, lamp height
+     matches the text size (inline svg + vertical-align: baseline) */
+  .lamp { height: .72em;  /* cap height: lamp tip = top of G */ width: auto; color: var(--accent);
+          vertical-align: baseline; margin-left: .15rem; }
   #switch { font-size: .8rem; padding: .15rem .5rem; }
   .tabs { display: flex; gap: .25rem; }
   .tabs button {
@@ -946,24 +1026,30 @@ __BASE__
             margin-top: .5rem; }
   .nodata a { color: var(--accent); }
 
-  sup.cmark {
+  sup.cmark, .cpop .cmark {
     display: inline-block; cursor: pointer; user-select: none;
     background: var(--mark-bg); color: var(--fg); font: 700 .72rem/1.35
     system-ui, sans-serif; border-radius: 50%; width: 1.35em; height: 1.35em;
     text-align: center; margin: 0 .1em; vertical-align: super;
   }
   .cpop {
-    display: block; background: var(--hover-bg);
-    padding: .35rem .6rem; margin: .25rem 0;
+    display: flex; gap: .55rem; align-items: flex-start;
+    background: var(--hover-bg);
+    background: color-mix(in srgb, var(--sol-accent) 13%, var(--bg));
+    border-left: 3px solid var(--sol-accent);
+    padding: .45rem .6rem; margin: .3rem 0;
     font: .84rem/1.45 system-ui, sans-serif;
   }
+  .cpop .cmark { flex-shrink: 0; vertical-align: baseline;
+    margin-top: .1em; cursor: default; }
   .pcomments { margin-top: .55rem; font-size: .86rem; }
   .pcomments ol { margin: .2rem 0 .3rem; padding-left: 1.4rem; }
   .pcomments li { margin: .25rem 0; }
   .pcomments .crow { display: flex; gap: .4rem; align-items: flex-start; }
   .pcomments textarea {
     flex: 1; font: inherit; font-size: .86rem; padding: .25rem .45rem;
-    color: var(--fg); background: var(--bg); resize: vertical;
+    color: var(--fg); background: var(--bg); resize: none;
+    overflow: hidden;   /* autosized to fit the text */
     border: 1px solid var(--border); min-height: 1.9rem;
   }
   .pcomments .anchor {
@@ -985,6 +1071,13 @@ __BASE__
   .pdraft .dhead { font-weight: 700; color: var(--draft-accent);
     text-transform: uppercase; font-size: .72rem; letter-spacing: .05em; }
   .pdraft ul { margin: .25rem 0; padding-left: 1.2rem; }
+  .pdraft ol.dclist { margin: .3rem 0; padding-left: 1.2rem; }
+  .pdraft ol.dclist li { margin: .25rem 0; }
+  .pdraft .anchor {
+    display: block; font: .72rem/1.4 ui-monospace, Menlo, monospace;
+    color: var(--muted); white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis; max-width: 30rem;
+  }
   .pdraft button { margin-left: .5rem; }
 
   #partnav { display: flex; align-items: center; gap: .6rem;
@@ -995,7 +1088,7 @@ __BASE__
 </head>
 <body>
 <header>
-  <h1>hwGrader</h1>
+  <h1>hwGenie __LAMP__</h1>
   <button class="ghost" id="switch" title="Grade a different assignment">
     ⇄ <span id="foldname"></span></button>
   <div class="tabs">
@@ -1042,7 +1135,6 @@ __BASE__
     Export</button>
   <span id="saveerr"></span>
   <span id="savestat" title="Save status"></span>
-  <button class="ghost" id="quit">Close hwGrader</button>
 </header>
 <div id="notice" style="display:none"></div>
 <div id="layout">
@@ -1688,9 +1780,14 @@ function togglePopover(mark, comments, macros) {
   if (!c) return;
   const pop = document.createElement("span");
   pop.className = "cpop";
-  pop.textContent = (Number(mark.dataset.ci) + 1) + ". " + c.text;
+  const badge = document.createElement("span");
+  badge.className = "cmark";
+  badge.textContent = Number(mark.dataset.ci) + 1;
+  const body = document.createElement("div");
+  body.textContent = c.text;
+  pop.append(badge, body);
   mark.after(pop);
-  typeset(pop, macros);   // comments may contain $math$ of their own
+  typeset(body, macros);   // comments may contain $math$ of their own
 }
 
 // ---------------------------------------------------------------- comments --
@@ -1714,6 +1811,12 @@ function orderComments(slug, n) {
   cs.length = 0;
   keyed.forEach(k => cs.push(k.c));
   return true;
+}
+
+// comment boxes grow to fit their text (also when AI feedback lands)
+function autosize(t) {
+  t.style.height = "auto";
+  t.style.height = (t.scrollHeight + 2) + "px";
 }
 
 function focusComment(el, idx) {
@@ -1745,7 +1848,9 @@ function renderComments(el, slug, n) {
   // Handlers read the model fresh at event time (never a captured array):
   // a completed autosave must not strand them on stale objects.
   box.querySelectorAll("textarea").forEach(t => {
+    autosize(t);
     t.addEventListener("input", () => {
+      autosize(t);
       const cs = pdata(slug, n).comments;
       cs[Number(t.dataset.ci)].text = t.value;
       queueSave(slug, n, {comments: cs});
@@ -1822,10 +1927,33 @@ function renderDraft(el, slug, n) {
     html += `<div style="margin-top:.25rem">${esc(d.feedback)}
       <button class="ghost use-fb">Add as Comment</button></div>`;
   }
+  if (d.comments && d.comments.length) {
+    html += "<ol class=\"dclist\">" + d.comments.map((c, i) => `
+      <li>${esc(c.text)}
+        <button class="ghost use-dc" data-i="${i}">Add</button>
+        ${c.anchor ? `<span class="anchor" title="${esc(c.anchor)}">⚓ ${esc(c.anchor)}</span>` : ""}
+      </li>`).join("") + "</ol>";
+  }
   if (d.issues && d.issues.length) {
     html += "<ul>" + d.issues.map(i => `<li>${esc(i)}</li>`).join("") + "</ul>";
   }
   box.innerHTML = html;
+  box.querySelectorAll(".use-dc").forEach(b => {
+    b.addEventListener("click", () => {
+      const dc = d.comments[Number(b.dataset.i)];
+      const cs = pdata(slug, n).comments;
+      if (!cs.some(c => c.anchor === (dc.anchor || null) &&
+                        c.text === dc.text)) {
+        cs.push({anchor: dc.anchor || null, text: dc.text});
+        orderComments(slug, n);
+        queueSave(slug, n, {comments: cs});
+        renderComments(el, slug, n);
+        paintContent(el, slug, n);
+      }
+      b.disabled = true;
+      b.textContent = "Added";
+    });
+  });
   const us = box.querySelector(".use-score");
   if (us) us.addEventListener("click", () => {
     const scoreEl = el.querySelector(".score");
@@ -2097,6 +2225,10 @@ document.addEventListener("keydown", e => {
   } else if (k === "t") {
     const b = activeCard && activeCard.querySelector(".toggle-tex");
     if (b && b.style.display !== "none") b.click();
+  } else if (k === "u") {
+    // use the AI draft's suggested score on the active card
+    const b = activeCard && activeCard.querySelector(".use-score");
+    if (b) b.click();
   } else if (e.key === "Enter" || k === "s") {
     if (activeCard) {
       e.preventDefault();
@@ -2122,14 +2254,6 @@ document.addEventListener("keydown", e => {
       activeCard.querySelector(".addc").click();
     }
   }
-});
-
-$("#quit").addEventListener("click", async () => {
-  await settleSaves();
-  if (saveState() !== "clean") { updateSaveStat(); return; }
-  await api("/quit", {});
-  document.body.innerHTML = "<main style='padding:3rem;font-family:system-ui'>" +
-    "<h1>hwGrader closed.</h1><p>You can close this tab.</p></main>";
 });
 
 $("#switch").addEventListener("click", async () => {
@@ -2182,7 +2306,7 @@ $("#export").addEventListener("click", async () => {
   S = await api("/api/state");
   setProgress(...S.progress);
   $("#foldname").textContent = S.folder.split("/").filter(Boolean).slice(-2).join("/");
-  document.title = `hwGrader — ${S.folder.split("/").pop()}`;
+  document.title = `hwGenie — ${S.folder.split("/").pop()}`;
   updateSaveStat();
   setView("student");
   await ensureStmtPane();
@@ -2215,12 +2339,17 @@ PICKER_PAGE = r"""<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>hwGrader</title>
+<title>hwGenie</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon-192.png">
+<meta name="theme-color" content="#24589f">
 <style>
 __BASE__
   body { overflow: auto; display: block; }
   main { max-width: 620px; margin: 0 auto; padding: 2.5rem 1.25rem 4rem; }
   h1 { font-size: 1.6rem; margin: 0 0 .25rem; }
+  .lamp { height: .72em;  /* cap height: lamp tip = top of G */ width: auto; color: var(--accent);
+          vertical-align: baseline; margin-left: .2rem; }
   .sub { color: var(--muted); margin: 0 0 1.75rem; }
   h2 { font-size: .95rem; letter-spacing: .04em; text-transform: uppercase;
        color: var(--muted); margin: 1.6rem 0 .5rem; }
@@ -2246,12 +2375,11 @@ __BASE__
   .hint { color: var(--muted); font-size: .8rem; margin-top: .4rem; }
   #err { color: var(--alert); margin-top: .8rem; display: none; }
   .none { color: var(--muted); font-style: italic; font-size: .9rem; }
-  #quit { margin-top: 2rem; }
 </style>
 </head>
 <body>
 <main>
-  <h1>hwGrader</h1>
+  <h1>hwGenie __LAMP__</h1>
   <p class="sub">Pick the assignment to grade.</p>
   <h2>Recent</h2>
   <div id="recents"><span class="none">nothing yet</span></div>
@@ -2267,7 +2395,6 @@ __BASE__
   collect</code>) or a Moodle &ldquo;Download all submissions&rdquo; .zip
   &mdash; a zip is collected into a folder next to it first.</p>
   <div id="err"></div>
-  <button class="ghost" id="quit">Close hwGrader</button>
 </main>
 <script>
 "use strict";
@@ -2324,12 +2451,6 @@ $("#open").addEventListener("click", () => {
 $("#path").addEventListener("keydown", e => {
   if (e.key === "Enter") $("#open").click();
 });
-$("#quit").addEventListener("click", async () => {
-  await fetch("/quit", {method: "POST", body: "{}"});
-  document.body.innerHTML = "<main><h1>hwGrader closed.</h1>" +
-    "<p class='sub'>You can close this tab.</p></main>";
-});
-
 setInterval(() => {
   fetch("/ping", {method: "POST", body: "{}"}).catch(() => {});
 }, 2000);

@@ -55,6 +55,9 @@ def test_return_outputs(returned):
     assert "Feedback — Jane Doe" in html         # Last-First unpacked
     assert "uses $x^2$ well" in html             # comment in the JSON blob
     assert "general note" in html                # and in the visible list
+    assert 'class="fbcard"' in html              # labelled Feedback card
+    assert ">Feedback</div>" in html
+    assert '<span class="cmark">1</span>' in html  # list shares markers
     assert "Total: 6 / 11.5" in html             # 4 + 2 of 4+2.5+5
     assert "Second paragraph." in html           # rendered student work
     rick = (result.out_dir / "feedback" / "Roe-Rick" /

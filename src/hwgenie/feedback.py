@@ -260,9 +260,12 @@ def _feedback_html(app, unit: dict, data: dict, title: str,
         cdata[str(n)] = {"comments": comments, "macros": pay["macros"]}
         clist = ""
         if comments:
-            clist = "<ol class=\"clist\">" + "".join(
-                f"<li>{html_mod.escape(c['text'], quote=False)}</li>"
-                for c in comments) + "</ol>"
+            items = "".join(
+                f'<li><span class="cmark">{i + 1}</span>'
+                f"<div>{html_mod.escape(c['text'], quote=False)}</div></li>"
+                for i, c in enumerate(comments))
+            clist = ('<div class="fbcard"><div class="fbhead">Feedback</div>'
+                     f'<ul class="clist">{items}</ul></div>')
         score = _fmt_score(p["score"])
         mx = _fmt_score(rp.max)
         stmt = stmts.get(n)
@@ -741,18 +744,36 @@ FEEDBACK_PAGE = r"""<!doctype html>
   /* the converter glues inline math to trailing punctuation with this
      class; without nowrap a sentence-ending period can wrap alone */
   .nw { white-space: nowrap; }
-  sup.cmark {
+  sup.cmark, .clist .cmark, .cpop .cmark {
     display: inline-block; cursor: pointer; user-select: none;
     background: var(--mark-bg); color: var(--fg); font: 700 .72rem/1.35
     system-ui, sans-serif; border-radius: 50%; width: 1.35em; height: 1.35em;
     text-align: center; margin: 0 .1em; vertical-align: super;
   }
-  .cpop { display: block; background: var(--hover-bg);
-    padding: .35rem .6rem; margin: .25rem 0;
+  .cpop { display: flex; gap: .55rem; align-items: flex-start;
+    background: var(--hover-bg);
+    background: color-mix(in srgb, var(--sol-accent) 13%, var(--bg));
+    border-left: 3px solid var(--sol-accent);
+    padding: .45rem .6rem; margin: .3rem 0;
     font: .84rem/1.45 system-ui, sans-serif; }
-  ol.clist { font: .9rem/1.5 system-ui, sans-serif; margin: .6rem 0 0;
-    padding-left: 1.5rem; }
-  ol.clist li { margin: .3rem 0; }
+  .cpop .cmark { flex-shrink: 0; vertical-align: baseline;
+    margin-top: .1em; cursor: default; }
+  /* the Feedback card: comments live here, labelled with the SAME gold
+     markers that sit in the student's work, so the two read as one */
+  .fbcard {
+    margin-top: .7rem; padding: .55rem .8rem;
+    background: color-mix(in srgb, var(--sol-accent) 13%, var(--bg));
+    border-left: 3px solid var(--sol-accent);
+  }
+  .fbhead { font: 700 .72rem/1.4 system-ui, sans-serif;
+    letter-spacing: .06em; text-transform: uppercase;
+    color: var(--sol-accent); margin-bottom: .35rem; }
+  ul.clist { font: .9rem/1.5 system-ui, sans-serif; margin: 0;
+    padding: 0; list-style: none; }
+  ul.clist li { margin: .35rem 0; display: flex; gap: .55rem;
+    align-items: flex-start; }
+  ul.clist .cmark { vertical-align: baseline; margin: .15em 0 0;
+    cursor: default; flex-shrink: 0; }
   footer { text-align: center; color: var(--muted); font-size: .8rem;
     font-family: system-ui, sans-serif; margin-top: 2.5rem; }
 </style>
@@ -888,7 +909,7 @@ document.querySelectorAll("section.part").forEach(sec => {
   const paint = () => {
     typeset(box, d.macros);
     if (ps) typeset(ps, CDATA._tmacros || {});
-    const cl = sec.querySelector("ol.clist");
+    const cl = sec.querySelector(".clist");
     if (cl) typeset(cl, d.macros);
   };
   if (window.renderMathInElement) paint();
@@ -901,9 +922,14 @@ document.querySelectorAll("section.part").forEach(sec => {
       if (!c) return;
       const pop = document.createElement("span");
       pop.className = "cpop";
-      pop.textContent = (Number(m.dataset.ci) + 1) + ". " + c.text;
+      const badge = document.createElement("span");
+      badge.className = "cmark";
+      badge.textContent = Number(m.dataset.ci) + 1;
+      const body = document.createElement("div");
+      body.textContent = c.text;
+      pop.append(badge, body);
       m.after(pop);
-      typeset(pop, d.macros);
+      typeset(body, d.macros);
     });
   });
 });
