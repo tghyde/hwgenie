@@ -198,6 +198,7 @@ def build_html(
     image_search: Optional[list] = None,
     custom_css: str = "",
     favicon: str = "",
+    banner: str = "",
 ) -> None:
     # An explicit \setcounter{section}{N} wins over the assignment number
     # (some lessons deliberately use a different theorem-numbering base).
@@ -250,6 +251,7 @@ def build_html(
         theme=theme,
         custom_css=custom_css,
         favicon=favicon,
+        banner=banner,
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(page, encoding="utf-8")

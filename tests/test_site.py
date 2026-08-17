@@ -128,11 +128,30 @@ def test_build_site_no_art_by_default(repo):
     assert '<header class="doc">' in index
 
 
+PAGE_DOC = """\\documentclass{{article}}
+\\usepackage{{hwgenie}}
+\\hwtype{{{doc_type}}}
+{number_line}\\hwtitle{{{title}}}
+\\begin{{document}}
+\\hwmaketitle
+Hello.
+\\end{{document}}
+"""
+
+
 def test_build_site_banner_and_favicon(repo):
     static = repo / "static"
     static.mkdir()
     (static / "banner.png").write_bytes(b"\x89PNG fake")
     (static / "favicon.png").write_bytes(b"\x89PNG fake")
+    lessons = repo / "source" / "lessons"
+    lessons.mkdir(parents=True)
+    (lessons / "lesson1.tex").write_text(PAGE_DOC.format(
+        doc_type="lesson", number_line="\\hwnumber{1}\n", title="Intro"))
+    handouts = repo / "source" / "handouts"
+    handouts.mkdir(parents=True)
+    (handouts / "syllabus.tex").write_text(PAGE_DOC.format(
+        doc_type="syllabus", number_line="", title="Syllabus"))
     result = build_site(repo, compile_pdfs=False, today=date(2025, 10, 15))
     assert result.ok, result.errors
     site = result.out_dir
@@ -143,12 +162,23 @@ def test_build_site_banner_and_favicon(repo):
     assert index.count('<header class="doc">') == 1
     assert index.index('class="hero"') < index.index('<header class="doc">')
     assert '<link rel="icon" href="favicon.png">' in index
-    # assignment pages get the favicon at their depth, banner nowhere else
+    # problem-set pages get the favicon and hero at their depth
     ps1 = (site / "ps/1/index.html").read_text()
     assert '<link rel="icon" href="../../favicon.png">' in ps1
-    assert 'class="hero"' not in ps1
+    assert '<div class="hero">\n<img src="../../banner.png" alt="">' in ps1
+    assert ps1.count('<header class="doc">') == 1
     sol1 = (site / "ps/1/solutions.html").read_text()
     assert '<link rel="icon" href="../../favicon.png">' in sol1
+    assert '<div class="hero">\n<img src="../../banner.png" alt="">' in sol1
+    # the solutions badge rides inside the floating card
+    assert sol1.index('class="hero"') < sol1.index('class="badge"')
+    # lessons (depth 2) and syllabus (depth 1) get the hero too
+    lesson = (site / "lessons/1/index.html").read_text()
+    assert '<div class="hero">\n<img src="../../banner.png" alt="">' in lesson
+    assert '<link rel="icon" href="../../favicon.png">' in lesson
+    syllabus = (site / "syllabus/index.html").read_text()
+    assert '<div class="hero">\n<img src="../banner.png" alt="">' in syllabus
+    assert '<link rel="icon" href="../favicon.png">' in syllabus
     # published at the site root via static/
     assert (site / "banner.png").exists()
     assert (site / "favicon.png").exists()

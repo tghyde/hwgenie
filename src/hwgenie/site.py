@@ -222,7 +222,7 @@ def build_site(
             _build_assignment(
                 src, cfg, out, compile_pdfs, today, result, macro_pool,
                 extra_preamble=extra_preamble, theme=theme, repo_root=repo_root,
-                custom_css_on=custom_css_on, favicon=favicon,
+                custom_css_on=custom_css_on, favicon=favicon, banner=banner,
             )
         except (BuildError, MetadataError) as e:
             result.errors.append(f"{src.relative_to(repo_root)}: {e}")
@@ -264,6 +264,7 @@ def _build_assignment(
     repo_root: Optional[Path] = None,
     custom_css_on: bool = False,
     favicon: str = "",
+    banner: str = "",
 ) -> None:
     text = src.read_text(encoding="utf-8")
     if macro_pool is not None:
@@ -292,7 +293,7 @@ def _build_assignment(
     if meta.doc_type in ("lesson", "syllabus"):
         _build_page_doc(
             src, cfg, out, compile_pdfs, result, meta, text,
-            extra_preamble, theme, repo_root, custom_css_on, favicon,
+            extra_preamble, theme, repo_root, custom_css_on, favicon, banner,
         )
         return
 
@@ -345,6 +346,7 @@ def _build_assignment(
         image_search=[repo_root] if repo_root else None,
         custom_css="../../custom.css" if custom_css_on else "",
         favicon=f"../../{favicon}" if favicon else "",
+        banner=f"../../{banner}" if banner else "",
     )
     ab.files["handout_html"] = ps_dir / "index.html"
 
@@ -357,6 +359,7 @@ def _build_assignment(
             image_search=[repo_root] if repo_root else None,
             custom_css="../../custom.css" if custom_css_on else "",
             favicon=f"../../{favicon}" if favicon else "",
+            banner=f"../../{banner}" if banner else "",
         )
         ab.files["solutions_html"] = ps_dir / "solutions.html"
 
@@ -398,6 +401,7 @@ def _build_page_doc(
     repo_root: Optional[Path],
     custom_css_on: bool,
     favicon: str = "",
+    banner: str = "",
 ) -> None:
     """Lessons and the syllabus: one PDF + one HTML page, no variants."""
     from . import transforms
@@ -434,6 +438,7 @@ def _build_page_doc(
         image_search=[repo_root] if repo_root else None,
         custom_css=("../" * depth + "custom.css") if custom_css_on else "",
         favicon=("../" * depth + favicon) if favicon else "",
+        banner=("../" * depth + banner) if banner else "",
     )
     ab.files["html"] = page_dir / "index.html"
 
@@ -487,32 +492,6 @@ h2.index-head::before, h2.index-head::after {
   width: 4.5rem;
   border-top: 1px solid var(--muted);
   opacity: .6;
-}
-/* Optional banner art (static/banner.*): full-width hero at the top of the
-   course home, with the usual title header floating in a borderless card. */
-.hero {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  max-width: 44rem;   /* match the text column so wide screens don't stretch it */
-  margin: 0 auto;
-  min-height: 11rem;  /* fixed: card-to-edge spacing must not scale with viewport */
-  padding: 2.5rem 1.1rem;
-}
-.hero img {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-.hero header.doc {
-  position: relative;
-  margin: 0;
-  max-width: min(100%, 38rem);
-  padding: 1.2rem 2rem;
-  background: var(--card-bg);
 }
 """
 

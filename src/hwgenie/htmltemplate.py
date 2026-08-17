@@ -50,6 +50,32 @@ header.doc h1 {
   margin: 0;
   font-weight: 700;
 }
+/* Optional banner art (static/banner.*): hero above the page content, with
+   the usual title header floating in a borderless card. */
+.hero {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  max-width: 44rem;   /* match the text column so wide screens don't stretch it */
+  margin: 0 auto;
+  min-height: 11rem;  /* fixed: card-to-edge spacing must not scale with viewport */
+  padding: 2.5rem 1.1rem;
+}
+.hero img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.hero header.doc {
+  position: relative;
+  margin: 0;
+  max-width: min(100%, 38rem);
+  padding: 1.2rem 2rem;
+  background: var(--card-bg);
+}
 .badge {
   display: inline-block;
   margin-top: .8rem;
@@ -669,6 +695,7 @@ def render_page(
     theme: str = DEFAULT_THEME_CSS,
     custom_css: str = "",
     favicon: str = "",
+    banner: str = "",
 ) -> str:
     badge = '<div><span class="badge">Solutions</span></div>' if solutions else ""
     nav_html = f'<nav class="site">{nav}</nav>' if nav else ""
@@ -678,6 +705,15 @@ def render_page(
     icon_link = f'<link rel="icon" href="{favicon}">' if favicon else ""
     macros_json = json.dumps(macros, ensure_ascii=False)
     e = html_mod.escape
+    header = (
+        f'<header class="doc">\n'
+        f'<p class="course">{course_line}</p>\n'
+        f"<h1>{heading}</h1>\n"
+        f"{badge}\n"
+        f"</header>"
+    )
+    # With banner art the title header floats in a hero above the column.
+    hero = f'<div class="hero">\n<img src="{banner}" alt="">\n{header}\n</div>'
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -693,13 +729,10 @@ def render_page(
 <body>
 {THEME_TOGGLE_HTML}
 {scrollbar}
+{hero if banner else ""}
 <main>
 {nav_html}
-<header class="doc">
-<p class="course">{course_line}</p>
-<h1>{heading}</h1>
-{badge}
-</header>
+{"" if banner else header}
 {body}
 <footer class="doc">{FOOTER_HTML}</footer>
 </main>
