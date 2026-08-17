@@ -119,6 +119,53 @@ def test_build_site_refuses_foreign_out_dir(repo):
         build_site(repo, compile_pdfs=False)
 
 
+def test_build_site_no_art_by_default(repo):
+    result = build_site(repo, compile_pdfs=False, today=date(2025, 10, 15))
+    index = (result.out_dir / "index.html").read_text()
+    assert 'class="hero"' not in index
+    assert 'rel="icon"' not in index
+    # without banner art the header sits in the text column as before
+    assert '<header class="doc">' in index
+
+
+def test_build_site_banner_and_favicon(repo):
+    static = repo / "static"
+    static.mkdir()
+    (static / "banner.png").write_bytes(b"\x89PNG fake")
+    (static / "favicon.png").write_bytes(b"\x89PNG fake")
+    result = build_site(repo, compile_pdfs=False, today=date(2025, 10, 15))
+    assert result.ok, result.errors
+    site = result.out_dir
+
+    index = (site / "index.html").read_text()
+    # hero replaces the in-column header; title card floats in the banner
+    assert '<div class="hero">\n<img src="banner.png" alt="">' in index
+    assert index.count('<header class="doc">') == 1
+    assert index.index('class="hero"') < index.index('<header class="doc">')
+    assert '<link rel="icon" href="favicon.png">' in index
+    # assignment pages get the favicon at their depth, banner nowhere else
+    ps1 = (site / "ps/1/index.html").read_text()
+    assert '<link rel="icon" href="../../favicon.png">' in ps1
+    assert 'class="hero"' not in ps1
+    sol1 = (site / "ps/1/solutions.html").read_text()
+    assert '<link rel="icon" href="../../favicon.png">' in sol1
+    # published at the site root via static/
+    assert (site / "banner.png").exists()
+    assert (site / "favicon.png").exists()
+
+
+def test_render_page_links_custom_css():
+    from hwgenie.htmltemplate import render_page
+
+    page = render_page("T", "C", "H", "<p>b</p>", {},
+                       custom_css="../../custom.css",
+                       favicon="../../favicon.svg")
+    assert '<link rel="stylesheet" href="../../custom.css">' in page
+    assert '<link rel="icon" href="../../favicon.svg">' in page
+    bare = render_page("T", "C", "H", "<p>b</p>", {})
+    assert "custom.css" not in bare and 'rel="icon"' not in bare
+
+
 def test_build_site_rebuild_cleans_previous(repo):
     build_site(repo, compile_pdfs=False, today=date(2025, 10, 15))
     # flip ps1 to manual and rebuild: stale solutions must disappear

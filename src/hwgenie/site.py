@@ -143,6 +143,18 @@ def _file_names(meta: Metadata, n: str) -> Dict[str, str]:
     }
 
 
+def _find_static_asset(repo_root: Path, stem: str, exts: tuple) -> str:
+    """First static/<stem>.<ext> that exists (static/ publishes at site root)."""
+    for ext in exts:
+        if (repo_root / "static" / f"{stem}{ext}").exists():
+            return f"{stem}{ext}"
+    return ""
+
+
+BANNER_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".svg", ".gif")
+FAVICON_EXTS = (".svg", ".png", ".ico", ".gif", ".jpg", ".jpeg")
+
+
 def _clean_out_dir(out_dir: Path) -> None:
     if out_dir.exists():
         if any(out_dir.iterdir()) and not (out_dir / SITE_MARKER).exists():
@@ -181,6 +193,10 @@ def build_site(
     )
     theme = theme_from_config(cfg)
     custom_css_on = (repo_root / "static" / "custom.css").exists()
+    # Optional art, by conventional filename (like custom.css / intro.html):
+    # static/banner.* = home-page hero; static/favicon.* = tab icon site-wide.
+    banner = _find_static_asset(repo_root, "banner", BANNER_EXTS)
+    favicon = _find_static_asset(repo_root, "favicon", FAVICON_EXTS)
     intro_path = repo_root / "static" / "intro.html"
     intro_html = (
         intro_path.read_text(encoding="utf-8") if intro_path.exists() else ""
@@ -206,7 +222,7 @@ def build_site(
             _build_assignment(
                 src, cfg, out, compile_pdfs, today, result, macro_pool,
                 extra_preamble=extra_preamble, theme=theme, repo_root=repo_root,
-                custom_css_on=custom_css_on,
+                custom_css_on=custom_css_on, favicon=favicon,
             )
         except (BuildError, MetadataError) as e:
             result.errors.append(f"{src.relative_to(repo_root)}: {e}")
@@ -216,6 +232,7 @@ def build_site(
         cfg, result.assignments, macro_pool, theme=theme,
         custom_css="custom.css" if custom_css_on else "",
         intro_html=intro_html, handout_files=handout_files,
+        banner=banner, favicon=favicon,
     )
     (out / "index.html").write_text(index, encoding="utf-8")
 
@@ -246,6 +263,7 @@ def _build_assignment(
     theme: str = "",
     repo_root: Optional[Path] = None,
     custom_css_on: bool = False,
+    favicon: str = "",
 ) -> None:
     text = src.read_text(encoding="utf-8")
     if macro_pool is not None:
@@ -274,7 +292,7 @@ def _build_assignment(
     if meta.doc_type in ("lesson", "syllabus"):
         _build_page_doc(
             src, cfg, out, compile_pdfs, result, meta, text,
-            extra_preamble, theme, repo_root, custom_css_on,
+            extra_preamble, theme, repo_root, custom_css_on, favicon,
         )
         return
 
@@ -326,6 +344,7 @@ def _build_assignment(
         extra_preamble=extra_preamble, theme=theme,
         image_search=[repo_root] if repo_root else None,
         custom_css="../../custom.css" if custom_css_on else "",
+        favicon=f"../../{favicon}" if favicon else "",
     )
     ab.files["handout_html"] = ps_dir / "index.html"
 
@@ -337,6 +356,7 @@ def _build_assignment(
             extra_preamble=extra_preamble, theme=theme,
             image_search=[repo_root] if repo_root else None,
             custom_css="../../custom.css" if custom_css_on else "",
+            favicon=f"../../{favicon}" if favicon else "",
         )
         ab.files["solutions_html"] = ps_dir / "solutions.html"
 
@@ -377,6 +397,7 @@ def _build_page_doc(
     theme: str,
     repo_root: Optional[Path],
     custom_css_on: bool,
+    favicon: str = "",
 ) -> None:
     """Lessons and the syllabus: one PDF + one HTML page, no variants."""
     from . import transforms
@@ -412,6 +433,7 @@ def _build_page_doc(
         extra_preamble=extra_preamble, theme=theme,
         image_search=[repo_root] if repo_root else None,
         custom_css=("../" * depth + "custom.css") if custom_css_on else "",
+        favicon=("../" * depth + favicon) if favicon else "",
     )
     ab.files["html"] = page_dir / "index.html"
 
@@ -466,6 +488,32 @@ h2.index-head::before, h2.index-head::after {
   border-top: 1px solid var(--muted);
   opacity: .6;
 }
+/* Optional banner art (static/banner.*): full-width hero at the top of the
+   course home, with the usual title header floating in a borderless card. */
+.hero {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  max-width: 44rem;   /* match the text column so wide screens don't stretch it */
+  margin: 0 auto;
+  min-height: 11rem;  /* fixed: card-to-edge spacing must not scale with viewport */
+  padding: 2.5rem 1.1rem;
+}
+.hero img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.hero header.doc {
+  position: relative;
+  margin: 0;
+  max-width: min(100%, 38rem);
+  padding: 1.2rem 2rem;
+  background: var(--card-bg);
+}
 """
 
 
@@ -477,6 +525,8 @@ def render_index(
     custom_css: str = "",
     intro_html: str = "",
     handout_files: Optional[List[str]] = None,
+    banner: str = "",
+    favicon: str = "",
 ) -> str:
     if not theme:
         theme = theme_from_config(cfg)
@@ -581,12 +631,23 @@ def render_index(
     scrollbar = scrollbar_html(None, "", course, jumps) if jumps else ""
     macros_json = json.dumps(macros or {}, ensure_ascii=False)
     plain_heading = re.sub(r"\$", "", heading)
+    header = (
+        f'<header class="doc">\n'
+        f'<p class="course">{e(sub)}</p>\n'
+        f"<h1>{e(heading)}</h1>\n"
+        f"</header>"
+    )
+    # With banner art the header card floats in a full-width hero instead of
+    # sitting at the top of the text column.
+    hero = f'<div class="hero">\n<img src="{banner}" alt="">\n{header}\n</div>'
+    icon_link = f'<link rel="icon" href="{favicon}">' if favicon else ""
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{e(plain_heading)} — {e(semester)}</title>
+{icon_link}
 {THEME_HEAD_SCRIPT}
 {katex_block(macros_json)}
 <style>{theme}{CSS}{NAV_CSS}{INDEX_CSS}</style>
@@ -595,11 +656,9 @@ def render_index(
 <body id="top">
 {THEME_TOGGLE_HTML}
 {scrollbar}
+{hero if banner else ""}
 <main>
-<header class="doc">
-<p class="course">{e(sub)}</p>
-<h1>{e(heading)}</h1>
-</header>
+{"" if banner else header}
 <section>
 {body}
 </section>

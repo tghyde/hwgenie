@@ -668,12 +668,14 @@ def render_page(
     scrollbar: str = "",
     theme: str = DEFAULT_THEME_CSS,
     custom_css: str = "",
+    favicon: str = "",
 ) -> str:
     badge = '<div><span class="badge">Solutions</span></div>' if solutions else ""
     nav_html = f'<nav class="site">{nav}</nav>' if nav else ""
     css_link = (
         f'<link rel="stylesheet" href="{custom_css}">' if custom_css else ""
     )
+    icon_link = f'<link rel="icon" href="{favicon}">' if favicon else ""
     macros_json = json.dumps(macros, ensure_ascii=False)
     e = html_mod.escape
     return f"""<!DOCTYPE html>
@@ -682,9 +684,11 @@ def render_page(
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{e(title)}</title>
+{icon_link}
 {THEME_HEAD_SCRIPT}
 {katex_block(macros_json)}
 <style>{theme}{CSS}{NAV_CSS}</style>
+{css_link}
 </head>
 <body>
 {THEME_TOGGLE_HTML}
