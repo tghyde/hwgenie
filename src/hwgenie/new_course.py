@@ -14,6 +14,7 @@ via ``hwgenie new-course --gui``.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -149,11 +150,29 @@ class CreateResult:
     next_steps: List[str] = field(default_factory=list)
 
 
+def _extend_path() -> None:
+    """Make Homebrew tools (gh) findable under a GUI launch.
+
+    hwGrader.app inherits launchd's bare PATH (/usr/bin:/bin:...), which
+    lacks the directory gh is installed in — shell launches are fine.
+    """
+    have = os.environ.get("PATH", "").split(os.pathsep)
+    extra = [d for d in ("/opt/homebrew/bin", "/usr/local/bin")
+             if d not in have and Path(d).is_dir()]
+    if extra:
+        os.environ["PATH"] = os.pathsep.join(extra + have)
+
+
 def _run(cmd: List[str], log: Callable[[str], None], *, cwd: Optional[Path] = None,
          check: bool = True, quiet: bool = False) -> subprocess.CompletedProcess:
     if not quiet:
         log("$ " + " ".join(cmd))
-    proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+    try:
+        proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+    except FileNotFoundError:
+        raise StepError(
+            f"command not found: {cmd[0]} — is it installed? "
+            "(brew install gh, then run: gh auth login)")
     if check and proc.returncode != 0:
         detail = (proc.stderr or proc.stdout or "").strip()
         raise StepError(f"command failed: {' '.join(cmd)}\n{detail}")
@@ -170,6 +189,7 @@ def create_course(req: CreateRequest, log: Callable[[str], None]) -> CreateResul
 
 
 def _create_course(req: CreateRequest, log) -> CreateResult:
+    _extend_path()
     for fld in ("course", "title", "semester"):
         if not getattr(req, fld).strip():
             raise StepError(f"missing required field: {fld}")

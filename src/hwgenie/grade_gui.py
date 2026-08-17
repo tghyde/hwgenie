@@ -51,6 +51,7 @@ from .grade import (
 from .htmlgen import HtmlConverter
 from .htmltemplate import KATEX_VERSION
 from .katexmacros import extract_macros
+from .webstyle import BASE_CSS
 
 RECENTS_PATH = Path.home() / ".hwgenie" / "grader.json"
 
@@ -555,6 +556,13 @@ def make_handler(holder: AppHolder):
                     self._json({"error": f"unknown submission {slug!r}"}, 404)
                     return
                 self._json(app.pdf_map(slug))
+            elif url.path == "/new-course":
+                from .new_course_gui import render_wizard
+                holder.alive()
+                self._send(render_wizard(embedded=True).encode("utf-8"))
+            elif url.path == "/new-course/status":
+                from .new_course_gui import STATE as wizard_state
+                self._json(wizard_state.snapshot())
             elif url.path == "/manifest.webmanifest":
                 self._send(json.dumps(MANIFEST).encode("utf-8"),
                            "application/manifest+json")
@@ -630,6 +638,9 @@ def make_handler(holder: AppHolder):
 
                 threading.Thread(target=job, daemon=True).start()
                 self._json({"ok": True})
+            elif self.path == "/new-course/create":
+                from .new_course_gui import start_create
+                self._json(start_create(data))
             elif self.path == "/ping":
                 holder.alive()
                 self._json({"ok": True})
@@ -694,9 +705,12 @@ def serve_app(folder: Path | None, port: int = 0,
     threading.Thread(target=server.serve_forever, daemon=True).start()
     if auto_exit:
         def watchdog():
+            from .new_course_gui import STATE as wizard_state
             started = time.monotonic()
             while not holder.shutdown.is_set():
                 time.sleep(2)
+                if wizard_state.phase == "running":
+                    continue   # never auto-exit mid course-creation
                 if _watchdog_should_exit(time.monotonic(), started,
                                          holder.last_ping, holder.bye_at):
                     holder.shutdown.set()
@@ -725,49 +739,6 @@ def render_picker() -> str:
     return PICKER_PAGE.replace("__LAMP__", LAMP_SVG)
 
 
-# Shared flat look, matching the course pages: rectangular blocks of
-# card-bg on bg, no borders, no rounded corners.
-BASE_CSS = r"""
-  :root {
-    --bg: #faf9f6; --fg: #20242a; --muted: #5d646f; --accent: #24589f;
-    --alert: #b3223a; --border: #dcdad0; --card-bg: #efeee8;
-    --sol-accent: #2c6a3f; --code-bg: #f1f0ea; --hover-bg: #e2e8f3;
-    --draft-bg: #f3ecf8; --draft-accent: #7b4ea3; --mark-bg: #ffd76e;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #15171c; --fg: #e7e5e0; --muted: #9aa1ad; --accent: #8db1ea;
-      --alert: #e87a90; --border: #33363e; --card-bg: #1f222a;
-      --sol-accent: #98cda5; --code-bg: #22252d; --hover-bg: #2b3242;
-      --draft-bg: #2a2233; --draft-accent: #c9a6e8; --mark-bg: #8a6d1d;
-    }
-  }
-  * { box-sizing: border-box; }
-  :root {
-    /* bars (header, sticky navs, panel heads) get a faint accent tint so
-       they read as chrome, not cards */
-    --bar-bg: color-mix(in srgb, var(--accent) 10%, var(--bg));
-  }
-  html, body { height: 100%; }
-  body {
-    margin: 0; background: var(--bg); color: var(--fg);
-    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
-    display: flex; flex-direction: column;
-    overflow: hidden;   /* the app fills the viewport; panes scroll */
-  }
-  button { font: inherit; }
-  button.ghost {
-    font-size: .85rem; padding: .25rem .7rem; cursor: pointer;
-    border: none; background: transparent; color: var(--accent);
-  }
-  button.ghost:hover { background: var(--hover-bg); }
-  button.ghost.active { background: var(--hover-bg); }
-  /* mouse-first app with letter shortcuts: focus rings on clicked
-     buttons only linger and distract */
-  button:focus { outline: none; }
-  .sp { flex: 1; }
-  a { color: var(--accent); }
-"""
 
 
 GRADER_PAGE = r"""<!doctype html>
@@ -2358,6 +2329,7 @@ __BASE__
     background: var(--card-bg); padding: .55rem .8rem; margin: 0 0 .45rem;
   }
   .row:hover { background: var(--hover-bg); }
+  a.row { text-decoration: none; color: inherit; }
   .row .path { flex: 1; overflow: hidden; text-overflow: ellipsis;
                white-space: nowrap; }
   .row .meta { color: var(--muted); font-size: .8rem; white-space: nowrap; }
@@ -2380,7 +2352,8 @@ __BASE__
 <body>
 <main>
   <h1>hwGenie __LAMP__</h1>
-  <p class="sub">Pick the assignment to grade.</p>
+  <p class="sub">Pick the assignment to grade &mdash; or set up a new
+  course below.</p>
   <h2>Recent</h2>
   <div id="recents"><span class="none">nothing yet</span></div>
   <h2>Found in <span id="root"></span></h2>
@@ -2395,6 +2368,11 @@ __BASE__
   collect</code>) or a Moodle &ldquo;Download all submissions&rdquo; .zip
   &mdash; a zip is collected into a folder next to it first.</p>
   <div id="err"></div>
+  <h2>New course</h2>
+  <a class="row" href="/new-course">
+    <span class="path">Set up a new course&hellip;</span>
+    <span class="meta">repo + website wizard</span>
+  </a>
 </main>
 <script>
 "use strict";

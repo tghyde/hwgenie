@@ -1,11 +1,19 @@
-"""Local browser wizard for ``hwgenie new-course --gui``.
+"""Browser wizard for creating a new course.
 
-Serves a single form page on localhost, runs the creation pipeline in a
-background thread, and streams progress to the page via polling.
+Two ways in, one page:
+
+- embedded in the hwGenie app (grade_gui serves ``/new-course`` on its
+  own server, reached from the launcher/picker page);
+- standalone via ``hwgenie new-course --gui``, which serves the same
+  page on an ephemeral port.
+
+The creation pipeline runs in a background thread; the page polls
+``/new-course/status`` for progress lines.
 """
 
 from __future__ import annotations
 
+import html
 import json
 import threading
 import webbrowser
@@ -13,8 +21,10 @@ from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from .new_course import CreateRequest, create_course, load_defaults
+from .new_course import (CreateRequest, CreateResult, create_course,
+                         load_defaults)
 from .themes import THEMES
+from .webstyle import BASE_CSS
 
 
 class _State:
@@ -39,10 +49,44 @@ STATE = _State()
 
 
 def _worker(req: CreateRequest) -> None:
-    result = create_course(req, STATE.log)
+    try:
+        result = create_course(req, STATE.log)
+    except Exception as e:   # noqa: BLE001 — a dead worker must never
+        # leave the page saying "working…" forever
+        result = CreateResult(ok=False, error=f"unexpected error: {e!r}")
     with STATE.lock:
         STATE.result = asdict(result)
         STATE.phase = "done" if result.ok else "error"
+
+
+def start_create(data: dict) -> dict:
+    """Kick off course creation from a parsed request body.
+
+    Shared by the standalone wizard server and the hwGenie app server.
+    """
+    with STATE.lock:
+        if STATE.phase == "running":
+            return {"ok": False, "error": "already running"}
+        STATE.phase = "running"
+        STATE.lines.clear()
+        STATE.result = None
+    req = CreateRequest(
+        course=data.get("course", ""),
+        title=data.get("title", ""),
+        semester=data.get("semester", ""),
+        instructor=data.get("instructor", ""),
+        office=data.get("office", ""),
+        email=data.get("email", ""),
+        theme=data.get("theme", "slate"),
+        repo=data.get("repo", ""),
+        parent_dir=data.get("parent_dir", ""),
+        deploy=bool(data.get("deploy", True)),
+        wait_for_build=bool(data.get("wait_for_build", True)),
+        use_problem_sets=bool(data.get("use_problem_sets", True)),
+        use_lessons=bool(data.get("use_lessons", True)),
+    )
+    threading.Thread(target=_worker, args=(req,), daemon=True).start()
+    return {"ok": True}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -57,43 +101,24 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
-        if self.path in ("/", "/index.html"):
-            self._send(render_page().encode("utf-8"))
-        elif self.path == "/status":
+        if self.path in ("/", "/index.html", "/new-course"):
+            self._send(render_wizard(embedded=False).encode("utf-8"))
+        elif self.path == "/new-course/status":
             self._send(json.dumps(STATE.snapshot()).encode("utf-8"),
                        "application/json")
+        elif self.path in ("/icon-192.png", "/icon-512.png"):
+            from .appicon import icon_png
+            size = 192 if "192" in self.path else 512
+            self._send(icon_png(size), "image/png")
         else:
             self._send(b"not found", code=404)
 
     def do_POST(self):
         n = int(self.headers.get("Content-Length", 0))
         data = json.loads(self.rfile.read(n) or b"{}")
-        if self.path == "/create":
-            with STATE.lock:
-                if STATE.phase == "running":
-                    self._send(b'{"ok": false, "error": "already running"}',
-                               "application/json")
-                    return
-                STATE.phase = "running"
-                STATE.lines.clear()
-                STATE.result = None
-            req = CreateRequest(
-                course=data.get("course", ""),
-                title=data.get("title", ""),
-                semester=data.get("semester", ""),
-                instructor=data.get("instructor", ""),
-                office=data.get("office", ""),
-                email=data.get("email", ""),
-                theme=data.get("theme", "slate"),
-                repo=data.get("repo", ""),
-                parent_dir=data.get("parent_dir", ""),
-                deploy=bool(data.get("deploy", True)),
-                wait_for_build=bool(data.get("wait_for_build", True)),
-                use_problem_sets=bool(data.get("use_problem_sets", True)),
-                use_lessons=bool(data.get("use_lessons", True)),
-            )
-            threading.Thread(target=_worker, args=(req,), daemon=True).start()
-            self._send(b'{"ok": true}', "application/json")
+        if self.path == "/new-course/create":
+            self._send(json.dumps(start_create(data)).encode("utf-8"),
+                       "application/json")
         elif self.path == "/quit":
             self._send(b'{"ok": true}', "application/json")
             STATE.shutdown.set()
@@ -120,102 +145,100 @@ def serve_wizard(port: int = 0) -> int:
 
 # --------------------------------------------------------------- page --
 
-def render_page() -> str:
+def render_wizard(embedded: bool) -> str:
+    """The wizard page.
+
+    ``embedded=True`` when served inside the hwGenie app: adds a way
+    back to the launcher and keep-alive pings for --auto-exit; the
+    standalone wizard instead gets an 'All done' button that shuts its
+    own server down.
+    """
+    from .appicon import LAMP_SVG
     d = load_defaults()
     parent = d.get("parent_dir") or str(Path.home())
     theme_options = "".join(
         f'<option value="{name}">{name}</option>' for name in THEMES)
+    esc = lambda k: html.escape(d.get(k, ""), quote=True)  # noqa: E731
+    back = ('<p class="back"><a href="/">&larr; hwGenie home</a></p>'
+            if embedded else "")
     return PAGE.replace("__THEMES__", theme_options) \
-               .replace("__INSTRUCTOR__", d.get("instructor", "")) \
-               .replace("__OFFICE__", d.get("office", "")) \
-               .replace("__EMAIL__", d.get("email", "")) \
-               .replace("__PARENT__", parent)
+               .replace("__INSTRUCTOR__", esc("instructor")) \
+               .replace("__OFFICE__", esc("office")) \
+               .replace("__EMAIL__", esc("email")) \
+               .replace("__PARENT__", html.escape(parent, quote=True)) \
+               .replace("__LAMP__", LAMP_SVG) \
+               .replace("__BACK__", back) \
+               .replace("__MODE__", "embedded" if embedded else "standalone")
 
 
-PAGE = """<!doctype html>
+PAGE = r"""<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>New course — hwgenie</title>
+<title>New course &mdash; hwGenie</title>
+<link rel="icon" href="/icon-192.png">
+<meta name="theme-color" content="#24589f">
 <style>
-  :root {
-    --bg: #faf9f6; --fg: #20242a; --muted: #5d646f; --accent: #24589f;
-    --alert: #b3223a; --border: #dcdad0; --card-bg: #efeee8;
-    --sol-accent: #2c6a3f; --code-bg: #f1f0ea; --hover-bg: #e2e8f3;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #15171c; --fg: #e7e5e0; --muted: #9aa1ad; --accent: #8db1ea;
-      --alert: #e87a90; --border: #33363e; --card-bg: #1f222a;
-      --sol-accent: #98cda5; --code-bg: #22252d; --hover-bg: #2b3242;
-    }
-  }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; background: var(--bg); color: var(--fg);
-    font: 17px/1.55 Charter, "Bitstream Charter", Georgia, serif;
-  }
+__BASE__
+  body { overflow: auto; display: block; }
   main { max-width: 620px; margin: 0 auto; padding: 2.5rem 1.25rem 4rem; }
   h1 { font-size: 1.6rem; margin: 0 0 .25rem; }
+  .lamp { height: .72em;  /* cap height: lamp tip = top of G */ width: auto; color: var(--accent);
+          vertical-align: baseline; margin-left: .2rem; }
+  .back { font-size: .85rem; margin: 0 0 1.2rem; }
   .sub { color: var(--muted); margin: 0 0 1.75rem; }
-  fieldset {
-    border: none; background: var(--card-bg); border-radius: 10px;
-    padding: 1.1rem 1.25rem 1.25rem; margin: 0 0 1.1rem;
-  }
-  legend {
-    font-weight: bold; padding: 0 .4rem; margin-left: -.4rem;
-    letter-spacing: .04em;
-  }
-  label { display: block; margin: .7rem 0 .2rem; font-size: .95rem; }
+  h2 { font-size: .95rem; letter-spacing: .04em; text-transform: uppercase;
+       color: var(--muted); margin: 1.6rem 0 .5rem; }
+  .card { background: var(--card-bg); padding: .9rem 1.1rem 1.1rem; }
+  label { display: block; margin: .7rem 0 .2rem; font-size: .9rem; }
+  .card > .row:first-child label, .card > label:first-child { margin-top: 0; }
   .hint { color: var(--muted); font-size: .8rem; margin-top: .15rem; }
   input[type=text], input[type=email], input[type=number], select {
-    width: 100%; padding: .5rem .6rem; font: inherit; font-size: 1rem;
+    width: 100%; padding: .45rem .6rem; font: inherit;
     color: var(--fg); background: var(--bg);
-    border: 1px solid var(--border); border-radius: 6px;
+    border: 1px solid var(--border);
   }
   input:focus, select:focus { outline: 2px solid var(--accent); border-color: transparent; }
   .row { display: flex; gap: .75rem; }
   .row > div { flex: 1; }
   .check { display: flex; align-items: baseline; gap: .5rem; margin-top: .8rem; }
   .check label { margin: 0; display: inline; }
-  .check .hint { margin-left: 1.6rem; }
-  button {
-    font: inherit; font-size: 1.05rem; padding: .6rem 1.6rem;
-    border-radius: 8px; border: 1px solid var(--accent);
-    background: var(--accent); color: var(--bg); cursor: pointer;
+  #go {
+    font: inherit; font-size: 1rem; padding: .55rem 1.5rem; cursor: pointer;
+    border: none; background: var(--accent); color: var(--bg);
+    margin-top: 1.4rem;
   }
-  button:hover { background: var(--bg); color: var(--accent); }
-  button:disabled { opacity: .45; cursor: default; }
-  button.ghost { background: transparent; color: var(--accent); }
-  button.ghost:hover { background: var(--hover-bg); }
+  #go:hover { background: color-mix(in srgb, var(--accent) 85%, var(--fg)); }
+  #go:disabled { opacity: .45; cursor: default; }
   #repopreview {
-    font-family: ui-monospace, Menlo, monospace; font-size: .95rem;
+    font-family: ui-monospace, Menlo, monospace; font-size: .9rem;
   }
   #log {
-    display: none; background: var(--code-bg); border: 1px solid var(--border);
-    border-radius: 10px; padding: 1rem 1.1rem; margin-top: 1.25rem;
+    display: none; background: var(--code-bg);
+    padding: 1rem 1.1rem; margin-top: 1.25rem;
     font-family: ui-monospace, Menlo, monospace; font-size: .8rem;
     white-space: pre-wrap; max-height: 40vh; overflow-y: auto;
   }
   #summary { display: none; margin-top: 1.5rem; }
   #summary .ok { color: var(--sol-accent); font-weight: bold; }
   #summary .bad { color: var(--alert); font-weight: bold; }
-  #summary a { color: var(--accent); }
+  #summary button.ghost { font-size: .95rem; padding: .45rem 1rem; }
   ol li { margin: .35rem 0; }
   .spin { color: var(--muted); font-size: .9rem; }
 </style>
 </head>
 <body>
 <main>
-  <h1>Set up a new course</h1>
-  <p class="sub">Creates a private GitHub repo from the course template,
-  fills in your course data, and turns on the website build.
-  Afterwards you just import the repo into Overleaf.</p>
+  __BACK__
+  <h1>hwGenie __LAMP__</h1>
+  <p class="sub">Set up a new course: a private GitHub repo made from
+  the course template, filled with your course data, website build
+  switched on. Afterwards you just import the repo into Overleaf.</p>
 
   <form id="f" onsubmit="return false;">
-  <fieldset>
-    <legend>Course</legend>
+  <h2>Course</h2>
+  <div class="card">
     <div class="row">
       <div>
         <label for="course">Course code</label>
@@ -239,10 +262,10 @@ PAGE = """<!doctype html>
         <input type="number" id="year" min="2020" max="2100">
       </div>
     </div>
-  </fieldset>
+  </div>
 
-  <fieldset>
-    <legend>Syllabus header</legend>
+  <h2>Syllabus header</h2>
+  <div class="card">
     <label for="instructor">Instructor</label>
     <input type="text" id="instructor" value="__INSTRUCTOR__" placeholder="Prof. Ada Lovelace">
     <div class="row">
@@ -255,10 +278,10 @@ PAGE = """<!doctype html>
         <input type="email" id="email" value="__EMAIL__" placeholder="you@school.edu">
       </div>
     </div>
-  </fieldset>
+  </div>
 
-  <fieldset>
-    <legend>Repository &amp; site</legend>
+  <h2>Repository &amp; site</h2>
+  <div class="card">
     <label for="repopreview">GitHub repo name</label>
     <input type="text" id="repopreview" spellcheck="false">
     <div class="hint">Auto-filled from course + term; edit if you like.
@@ -277,7 +300,7 @@ PAGE = """<!doctype html>
       <label for="lessons">Lessons</label>
     </div>
     <div class="hint" style="margin-left:1.6rem">Handouts and the syllabus
-      are always included. Uncheck a section this course won&rsquo;t use —
+      are always included. Uncheck a section this course won&rsquo;t use &mdash;
       its folder and home-page section are left out entirely.</div>
     <div class="check">
       <input type="checkbox" id="deploy" checked>
@@ -292,7 +315,7 @@ PAGE = """<!doctype html>
     <div class="hint" style="margin-left:1.6rem">The first build takes
       5&ndash;10 minutes (TeX Live install). You can uncheck and watch the
       repo&rsquo;s Actions tab instead.</div>
-  </fieldset>
+  </div>
 
   <button id="go">Create course</button>
   <span id="busy" class="spin" style="display:none">&nbsp; working&hellip;</span>
@@ -305,12 +328,16 @@ PAGE = """<!doctype html>
     <p id="links"></p>
     <p><strong>Next steps:</strong></p>
     <ol id="steps"></ol>
-    <button class="ghost" id="quit">All done — close the wizard</button>
+    <button class="ghost" id="quit"></button>
   </div>
 </main>
 <script>
+  "use strict";
+  const MODE = "__MODE__";   // embedded (inside hwGenie) | standalone
   const $ = id => document.getElementById(id);
   $("year").value = new Date().getFullYear();
+  $("quit").textContent = MODE === "embedded"
+    ? "All done — back to hwGenie" : "All done — close the wizard";
   let repoTouched = false;
 
   function slug(s) { return s.toLowerCase().replace(/[^a-z0-9]/g, ""); }
@@ -351,13 +378,14 @@ PAGE = """<!doctype html>
       use_problem_sets: $("psets").checked,
       use_lessons: $("lessons").checked,
     };
-    await fetch("/create", {method: "POST", body: JSON.stringify(body)});
+    await fetch("/new-course/create",
+                {method: "POST", body: JSON.stringify(body)});
     poll = setInterval(refresh, 1000);
   });
 
   async function refresh() {
-    const s = await (await fetch("/status")).json();
-    $("log").textContent = s.lines.join("\\n");
+    const s = await (await fetch("/new-course/status")).json();
+    $("log").textContent = s.lines.join("\n");
     $("log").scrollTop = $("log").scrollHeight;
     if (s.phase === "done" || s.phase === "error") {
       clearInterval(poll);
@@ -382,7 +410,7 @@ PAGE = """<!doctype html>
     } else {
       $("verdict").innerHTML = '<span class="bad">Something went wrong:</span> ' + r.error;
       $("links").textContent = "";
-      $("steps").innerHTML = "<li>Fix the issue above and try again \\u2014 " +
+      $("steps").innerHTML = "<li>Fix the issue above and try again — " +
         "it is safe to re-run after deleting any half-created repo.</li>";
       $("go").disabled = false;
     }
@@ -390,13 +418,25 @@ PAGE = """<!doctype html>
   }
 
   $("quit").addEventListener("click", async () => {
+    if (MODE === "embedded") { location.href = "/"; return; }
     await fetch("/quit", {method: "POST", body: "{}"});
     document.body.innerHTML = "<main><h1>Wizard closed.</h1>" +
       "<p class=sub>You can close this tab.</p></main>";
   });
 
+  if (MODE === "embedded") {
+    // keep the hwGenie server's --auto-exit watchdog fed while this
+    // tab is open (same protocol as the grader/picker pages)
+    setInterval(() => {
+      fetch("/ping", {method: "POST", body: "{}"}).catch(() => {});
+    }, 2000);
+    addEventListener("pagehide", () => {
+      try { navigator.sendBeacon("/bye", "{}"); } catch (e) {}
+    });
+  }
+
   autoRepo();
 </script>
 </body>
 </html>
-"""
+""".replace("__BASE__", BASE_CSS)

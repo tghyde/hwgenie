@@ -107,3 +107,43 @@ def test_disable_both_sections(tmp_path: Path):
     intro = (root / "static" / "intro.html").read_text()
     assert "#lessons" not in intro and "#problem-sets" not in intro
     assert "#handouts" in intro
+
+
+def test_worker_surfaces_unexpected_exception(monkeypatch):
+    # A worker crash must end in phase "error", never a forever-"running"
+    # page (regression: gh missing from a GUI launch's PATH raised
+    # FileNotFoundError straight through the thread).
+    from hwgenie import new_course_gui as gui
+
+    def boom(req, log):
+        raise RuntimeError("gh vanished")
+
+    monkeypatch.setattr(gui, "create_course", boom)
+    state = gui._State()
+    monkeypatch.setattr(gui, "STATE", state)
+    with state.lock:
+        state.phase = "running"
+    gui._worker(gui.CreateRequest(course="Math 1", title="T", semester="Fall 2026"))
+    snap = state.snapshot()
+    assert snap["phase"] == "error"
+    assert "gh vanished" in snap["result"]["error"]
+
+
+def test_run_missing_command_is_steperror():
+    import pytest
+
+    from hwgenie.new_course import StepError, _run
+    with pytest.raises(StepError, match="command not found"):
+        _run(["hwgenie-no-such-binary-xyz"], lambda s: None)
+
+
+def test_extend_path_adds_homebrew(monkeypatch):
+    from hwgenie.new_course import _extend_path
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    _extend_path()
+    import os
+    parts = os.environ["PATH"].split(os.pathsep)
+    for d in ("/opt/homebrew/bin", "/usr/local/bin"):
+        if Path(d).is_dir():
+            assert d in parts
+    assert parts.index("/usr/bin") == len(parts) - 2  # extras prepended
