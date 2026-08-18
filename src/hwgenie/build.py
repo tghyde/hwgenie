@@ -43,6 +43,18 @@ class BuildResult:
         return not self.errors
 
 
+def read_preamble(sty_dir: Path) -> str:
+    """The course preamble text used for theorem/KaTeX macro extraction:
+    hwgenie.sty plus coursedata.tex (the course-owned, sync-safe home for
+    course-wide macros — the sty loads it via \\InputIfFileExists)."""
+    parts = []
+    for name in ("hwgenie.sty", "coursedata.tex"):
+        p = Path(sty_dir) / name
+        if p.exists():
+            parts.append(p.read_text(encoding="utf-8"))
+    return "\n".join(parts)
+
+
 def merge_course_config(meta: Metadata, source_dir: Path) -> Metadata:
     """Fill missing course/semester from a course.yml found near the source."""
     if meta.course and meta.semester:
@@ -288,10 +300,7 @@ def build(
     meta.course = meta.course or cfg.get("course")
     meta.semester = meta.semester or cfg.get("semester")
     sty_dir = cfg_path.parent if cfg_path else source_path.parent
-    sty_path = sty_dir / "hwgenie.sty"
-    extra_preamble = (
-        sty_path.read_text(encoding="utf-8") if sty_path.exists() else ""
-    )
+    extra_preamble = read_preamble(sty_dir)
     theme = theme_from_config(cfg)
     if meta.doc_type != "problemset":
         raise BuildError(

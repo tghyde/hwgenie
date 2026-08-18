@@ -90,6 +90,22 @@ def test_submission_inlines_sty_and_coursedata(tmp_path):
     assert "Secret." not in sub
 
 
+def test_coursedata_macros_reach_katex(tmp_path):
+    """Course-wide macros live in coursedata.tex (sync-safe, course-owned);
+    they must reach the page's KaTeX macro table, not just the PDFs."""
+    (tmp_path / "course.yml").write_text(
+        "course: Math 301\nsemester: Fall 2026\n"
+    )
+    (tmp_path / "hwgenie.sty").write_text(STY)
+    (tmp_path / "coursedata.tex").write_text("\\def\\inv{^{-1}}\n")
+    d = tmp_path / "source" / "ps04"
+    d.mkdir(parents=True)
+    (d / "ps04.tex").write_text(doc())
+    build_site(tmp_path, compile_pdfs=False, today=date(2025, 10, 1))
+    page = (tmp_path / "site" / "ps" / "4" / "index.html").read_text()
+    assert '"\\\\inv": "^{-1}"' in page
+
+
 def test_submission_prefers_student_preamble(tmp_path):
     (tmp_path / "hwgenie.sty").write_text(STY)
     (tmp_path / "submission-preamble.tex").write_text(

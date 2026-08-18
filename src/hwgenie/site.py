@@ -37,6 +37,7 @@ from .build import (
     build_html,
     compile_variant_pdf,
     make_variants,
+    read_preamble,
     require_course_fields,
 )
 import json
@@ -187,10 +188,7 @@ def build_site(
         result.warnings.append("No course.yml found (or empty) in repo root.")
     _clean_out_dir(out)
 
-    sty_path = repo_root / "hwgenie.sty"
-    extra_preamble = (
-        sty_path.read_text(encoding="utf-8") if sty_path.exists() else ""
-    )
+    extra_preamble = read_preamble(repo_root)
     theme = theme_from_config(cfg)
     custom_css_on = (repo_root / "static" / "custom.css").exists()
     # Optional art, by conventional filename (like custom.css / intro.html):
