@@ -90,6 +90,48 @@ def test_submission_inlines_sty_and_coursedata(tmp_path):
     assert "Secret." not in sub
 
 
+def _handout_doc(number: str, title: str) -> str:
+    num = f"\\hwnumber{{{number}}}\n" if number else ""
+    return (
+        "\\documentclass[11pt]{article}\n\\usepackage{hwgenie}\n"
+        f"\\hwtype{{handout}}\n{num}\\hwtitle{{{title}}}\n"
+        "\\begin{document}\n\\hwmaketitle\nReview content.\n\\end{document}\n"
+    )
+
+
+def test_handout_doc_type(tmp_path):
+    (tmp_path / "course.yml").write_text(
+        "course: Math 301\nsemester: Fall 2026\n"
+    )
+    (tmp_path / "hwgenie.sty").write_text(STY)
+    d = tmp_path / "source" / "handouts"
+    d.mkdir(parents=True)
+    (d / "review.tex").write_text(_handout_doc("2", "Midterm Review"))
+    (d / "notation.tex").write_text(_handout_doc("", "Notation Guide"))
+    result = build_site(tmp_path, compile_pdfs=False, today=date(2026, 9, 1))
+    assert not result.errors
+    # numbered handout: numeric slug, "Handout N: Title" listing
+    assert (tmp_path / "site" / "handouts" / "2" / "index.html").exists()
+    # unnumbered handout: title slug, title-only listing
+    assert (tmp_path / "site" / "handouts" / "notation-guide" /
+            "index.html").exists()
+    index = (tmp_path / "site" / "index.html").read_text()
+    assert "Handout 2: Midterm Review" in index
+    assert "Notation Guide" in index
+    assert "Handout : " not in index
+    assert 'id="handouts"' in index          # Handouts section present
+    assert 'id="lessons"' not in index       # no phantom Lessons section
+    page = (tmp_path / "site" / "handouts" / "2" / "index.html").read_text()
+    assert "Handout 2: Midterm Review" in page
+    assert "Handout2-Math301-Fall2026.pdf" in page
+
+
+def test_handout_number_optional_in_metadata():
+    m = parse_metadata("\\hwtype{handout}\n\\hwtitle{Review}\n")
+    assert m.doc_type == "handout"
+    assert m.number == ""
+
+
 def test_coursedata_macros_reach_katex(tmp_path):
     """Course-wide macros live in coursedata.tex (sync-safe, course-owned);
     they must reach the page's KaTeX macro table, not just the PDFs."""

@@ -129,6 +129,12 @@ def _tag(meta: Metadata) -> str:
 def _page_pdf_name(meta: Metadata, n: str) -> str:
     if meta.doc_type == "lesson":
         return f"Lesson{n}-{_tag(meta)}.pdf"
+    if meta.doc_type == "handout":
+        if meta.number:
+            return f"Handout{_slug(meta.number)}-{_tag(meta)}.pdf"
+        stem = re.sub(r"[^A-Za-z0-9]+", "",
+                      latex_plain(meta.title or "").title()) or "Handout"
+        return f"{stem}-{_tag(meta)}.pdf"
     return f"Syllabus-{_tag(meta)}.pdf"
 
 
@@ -271,7 +277,7 @@ def _build_assignment(
     meta.course = meta.course or cfg.get("course")
     meta.semester = meta.semester or cfg.get("semester")
     require_course_fields(meta)
-    if meta.doc_type not in ("problemset", "lesson", "syllabus"):
+    if meta.doc_type not in ("problemset", "lesson", "syllabus", "handout"):
         result.warnings.append(
             f"{src.name}: type {meta.doc_type!r} not supported yet; skipped."
         )
@@ -288,7 +294,7 @@ def _build_assignment(
             )
             return
 
-    if meta.doc_type in ("lesson", "syllabus"):
+    if meta.doc_type in ("lesson", "syllabus", "handout"):
         _build_page_doc(
             src, cfg, out, compile_pdfs, result, meta, text,
             extra_preamble, theme, repo_root, custom_css_on, favicon, banner,
@@ -401,7 +407,8 @@ def _build_page_doc(
     favicon: str = "",
     banner: str = "",
 ) -> None:
-    """Lessons and the syllabus: one PDF + one HTML page, no variants."""
+    """Lessons, handouts, and the syllabus: one PDF + one HTML page, no
+    variants."""
     from . import transforms
 
     search_dirs = [src.parent] + ([repo_root] if repo_root else [])
@@ -411,6 +418,14 @@ def _build_page_doc(
         n = _slug(meta.number)
         rel_url = f"lessons/{n}/"
         page_dir = out / "lessons" / n
+        depth = 2
+    elif meta.doc_type == "handout":
+        # Numbered handouts get stable numeric slugs; unnumbered ones are
+        # slugged from the title.
+        n = _slug(meta.number) if meta.number else ""
+        slug = n or _slug(latex_plain(meta.title or "")) or "handout"
+        rel_url = f"handouts/{slug}/"
+        page_dir = out / "handouts" / slug
         depth = 2
     else:
         n = ""
@@ -518,6 +533,7 @@ def render_index(
     problemsets = [a for a in assignments if a.meta.doc_type == "problemset"]
     lessons = [a for a in assignments if a.meta.doc_type == "lesson"]
     syllabi = [a for a in assignments if a.meta.doc_type == "syllabus"]
+    handouts = [a for a in assignments if a.meta.doc_type == "handout"]
 
     top_cards = []
     for a in syllabi:
@@ -527,6 +543,20 @@ def render_index(
             f'<h2><a href="{a.rel_url}">Syllabus</a></h2>\n'
             f'<div class="links">'
             f'{file_box(f"{a.rel_url}{pdf}", "Syllabus PDF")}</div>\n</div>'
+        )
+    for a in handouts:
+        num = e(a.meta.number)
+        label = f"Handout {num}" if num else ""
+        if a.meta.title:
+            title = e(latex_plain(a.meta.title))
+            label = f"{label}: {title}" if label else title
+        label = label or "Handout"
+        pdf = _page_pdf_name(a.meta, _slug(a.meta.number))
+        top_cards.append(
+            f'<div class="assignment">\n'
+            f'<h2><a href="{a.rel_url}">{label}</a></h2>\n'
+            f'<div class="links">'
+            f'{file_box(f"{a.rel_url}{pdf}", "Handout PDF")}</div>\n</div>'
         )
     for fname in handout_files or []:
         pretty = re.sub(r"[-_]+", " ", fname.rsplit(".", 1)[0]).strip().title()

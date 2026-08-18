@@ -223,6 +223,7 @@ def build_html(
 
     label = {"lesson": f"Lesson {meta.number}",
              "syllabus": "",
+             "handout": f"Handout {meta.number}".strip() if meta.number else "",
              }.get(meta.doc_type, f"Problem Set {meta.number}")
     if conv.title_lines:
         course_line = conv.title_lines[0]
@@ -242,8 +243,8 @@ def build_html(
 
     scrollbar = ""
     if sb_home:
-        kind = {"lesson": "Lesson", "syllabus": "Syllabus"}.get(
-            meta.doc_type, "PS")
+        kind = {"lesson": "Lesson", "syllabus": "Syllabus",
+                "handout": "Handout"}.get(meta.doc_type, "PS")
         label = f"{kind} {meta.number}".strip()
         if include_solutions and meta.doc_type == "problemset":
             label += " · Solutions"
