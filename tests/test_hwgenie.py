@@ -192,6 +192,47 @@ def test_table_without_clear_untouched():
     assert "pmatrix" in v["submission"]
 
 
+KEEP_ARRAY = (
+    "\\begin{problem}\nFill in the group table:\n"
+    "\\[\n"
+    "\\begin{array}{|c||c|c|c|} %CLEAR\n"
+    "    \\hline\n"
+    "    G & 1 & a & b \\\\\n"
+    "    \\hline\\hline\n"
+    "    1 & 1 & a & b \\\\\n"
+    "    \\hline\n"
+    "    a & a & \\keep{\\blue{1}} & c \\\\\n"
+    "    \\hline\n"
+    "    b & b & c & \\keep{\\blue{a}} \\\\\n"
+    "    \\hline\n"
+    "\\end{array}\n"
+    "\\]\n"
+    "\\end{problem}\n"
+)
+
+
+def test_clear_array_keeps_marked_cells():
+    v = variants_of(KEEP_ARRAY)
+    for raw in (v["submission"], v["handout"]):
+        out = " ".join(raw.split())
+        assert "%CLEAR" not in out
+        assert "G & 1 & a & b" in out                    # header row intact
+        assert "a & & \\keep{\\blue{1}} & \\\\" in out   # marked cell kept, rest cleared
+        assert "b & & & \\keep{\\blue{a}} \\\\" in out
+        assert "1 & & & \\\\" in out                     # unmarked row cleared
+    # solutions keep the filled table
+    assert "1 & 1 & a & b" in v["solutions"]
+
+
+def test_clear_tabular_keeps_marked_cells():
+    v = variants_of(
+        CLEAR_TABLE.replace("answer & 2 &", "answer & \\keep{2} &")
+    )
+    sub = v["submission"]
+    assert "\\keep{2}" in sub
+    assert "pmatrix" not in sub
+
+
 def test_split_top_level_nested():
     parts = texscan.split_top_level(r"a & $\begin{pmatrix}1 & 2\end{pmatrix}$ & {x & y}", "&")
     assert len(parts) == 3

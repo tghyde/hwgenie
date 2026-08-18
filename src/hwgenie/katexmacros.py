@@ -47,6 +47,8 @@ DEFAULT_MACROS = {
     # foldeq break marker: prints its relation when it survives to KaTeX
     # (the fold script normally consumes these before rendering).
     "\\fold": "#1",
+    # %CLEAR keep-marker for table cells: identity in rendered output.
+    "\\keep": "#1",
 }
 
 

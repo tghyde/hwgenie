@@ -186,13 +186,17 @@ def env_removal_edits(text: str, nodes, names) -> List[Edit]:
 
 # ------------------------------------------------------------------- tables
 
+KEEP_RE = re.compile(r"\\keep(?![A-Za-z])")
+
+
 def clear_table_edits(text: str, nodes) -> List[Edit]:
-    """For tabular environments whose body starts with a %CLEAR comment: keep
-    the header row and first column, blank every other cell."""
+    """For table environments (tabular, tabular*, array) whose body starts
+    with a %CLEAR comment: keep the header row, the first column, and any
+    cell containing a \\keep{...} wrapper; blank every other cell."""
     edits: List[Edit] = []
-    for env in texscan.iter_envs(nodes, ("tabular", "tabular*")):
+    for env in texscan.iter_envs(nodes, texscan.TABLE_ENVS):
         env_text = text[env.pos : env.pos + env.len]
-        span = texscan.tabular_body_span(env_text)
+        span = texscan.table_body_span(env_text)
         if span is None:
             continue
         body = env_text[span[0] : span[1]]
@@ -204,7 +208,10 @@ def clear_table_edits(text: str, nodes) -> List[Edit]:
         new_rows = [header]
         for row in rows[1:]:
             cells = texscan.split_top_level(row, "&")
-            new_rows.append(" & ".join([cells[0]] + [" "] * (len(cells) - 1)))
+            new_rows.append(" & ".join(
+                [cells[0]]
+                + [c if KEEP_RE.search(c) else " " for c in cells[1:]]
+            ))
         new_body = "\\\\".join(new_rows)
         abs_start = env.pos + span[0]
         abs_end = env.pos + span[1]

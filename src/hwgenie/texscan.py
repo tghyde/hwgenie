@@ -142,11 +142,15 @@ def split_top_level(s: str, sep: str) -> List[str]:
     return parts
 
 
-def tabular_body_span(env_text: str) -> Optional[Tuple[int, int]]:
-    """Given the full text of a tabular environment, return the (start, end)
-    span of its body relative to env_text: after the column spec, before
-    \\end{tabular}."""
-    for opener in ("\\begin{tabular}", "\\begin{tabular*}"):
+TABLE_ENVS = ("tabular", "tabular*", "array")
+
+
+def table_body_span(env_text: str) -> Optional[Tuple[int, int]]:
+    """Given the full text of a table environment (tabular, tabular*, array),
+    return the (start, end) span of its body relative to env_text: after the
+    column spec, before \\end{...}."""
+    for name in TABLE_ENVS:
+        opener = "\\begin{%s}" % name
         if env_text.startswith(opener):
             i = len(opener)
             break
@@ -164,7 +168,7 @@ def tabular_body_span(env_text: str) -> Optional[Tuple[int, int]]:
     while i < n and env_text[i] in " \t\n":
         i += 1
     # required {colspec} (tabular* has an extra {width} argument first)
-    nargs = 2 if env_text.startswith("\\begin{tabular*}") else 1
+    nargs = 2 if name == "tabular*" else 1
     for _ in range(nargs):
         if i >= n or env_text[i] != "{":
             return None
@@ -181,7 +185,7 @@ def tabular_body_span(env_text: str) -> Optional[Tuple[int, int]]:
         i = j + 1
         while i < n and env_text[i] in " \t":
             i += 1
-    end = env_text.rfind("\\end{tabular")
+    end = env_text.rfind("\\end{%s}" % name)
     if end < 0 or end < i:
         return None
     return (i, end)

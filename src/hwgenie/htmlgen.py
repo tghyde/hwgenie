@@ -49,6 +49,7 @@ WRAP_MACROS = {
     "blue": ('<span class="task">', "</span>"),
     "red": ('<span class="alert">', "</span>"),
     "hl": ("<mark>", "</mark>"),
+    "keep": ("", ""),  # %CLEAR keep-marker: identity in rendered output
     "ul": ("<u>", "</u>"),
     "st": ("<s>", "</s>"),
 }
@@ -789,7 +790,7 @@ class HtmlConverter:
 
     def _tabular_html(self, n) -> str:
         env_text = self.text[n.pos : n.pos + n.len]
-        span = texscan.tabular_body_span(env_text)
+        span = texscan.table_body_span(env_text)
         if span is None:
             return f'<pre class="code"><code>{esc(env_text)}</code></pre>'
         m = re.match(
