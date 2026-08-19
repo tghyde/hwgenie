@@ -556,6 +556,17 @@ def make_handler(holder: AppHolder):
                     self._json({"error": f"unknown submission {slug!r}"}, 404)
                     return
                 self._json(app.pdf_map(slug))
+            elif url.path == "/quotes":
+                from .quotebank import render_quotes
+                holder.alive()
+                self._send(render_quotes().encode("utf-8"))
+            elif url.path.startswith("/quotes/api/"):
+                from .quotebank import api_get
+                res = api_get(url.path)
+                if res is None:
+                    self._send(b"not found", code=404)
+                else:
+                    self._json(res[0], res[1])
             elif url.path == "/new-course":
                 from .new_course_gui import render_wizard
                 holder.alive()
@@ -638,6 +649,13 @@ def make_handler(holder: AppHolder):
 
                 threading.Thread(target=job, daemon=True).start()
                 self._json({"ok": True})
+            elif self.path.startswith("/quotes/api/"):
+                from .quotebank import api_post
+                res = api_post(self.path, data)
+                if res is None:
+                    self._send(b"not found", code=404)
+                else:
+                    self._json(res[0], res[1])
             elif self.path == "/new-course/create":
                 from .new_course_gui import start_create
                 self._json(start_create(data))
@@ -2368,6 +2386,11 @@ __BASE__
   collect</code>) or a Moodle &ldquo;Download all submissions&rdquo; .zip
   &mdash; a zip is collected into a folder next to it first.</p>
   <div id="err"></div>
+  <h2>Quote bank</h2>
+  <a class="row" href="/quotes">
+    <span class="path">Browse epigraphs&hellip;</span>
+    <span class="meta">search &middot; copy TeX &middot; track uses</span>
+  </a>
   <h2>New course</h2>
   <a class="row" href="/new-course">
     <span class="path">Set up a new course&hellip;</span>

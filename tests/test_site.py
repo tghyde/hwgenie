@@ -184,6 +184,41 @@ def test_build_site_banner_and_favicon(repo):
     assert (site / "favicon.png").exists()
 
 
+def test_build_site_static_handouts(repo):
+    handouts = repo / "handouts"
+    handouts.mkdir()
+    (handouts / "README.md").write_text("not listed")
+    (handouts / "exam-review.pdf").write_bytes(b"%PDF fake")
+    group = handouts / "office_hours"
+    group.mkdir()
+    (group / "schedule.pdf").write_bytes(b"%PDF fake")
+    (group / "zoom-notes.pdf").write_bytes(b"%PDF fake")
+    (group / "README.md").write_text("not listed")
+    (handouts / "empty-group").mkdir()
+    result = build_site(repo, compile_pdfs=False, today=date(2025, 10, 15))
+    assert result.ok, result.errors
+    site = result.out_dir
+
+    # files published verbatim, grouped ones under the subfolder
+    assert (site / "handouts/exam-review.pdf").exists()
+    assert (site / "handouts/office_hours/schedule.pdf").exists()
+    assert (site / "handouts/office_hours/zoom-notes.pdf").exists()
+    assert not (site / "handouts/README.md").exists()
+    assert not (site / "handouts/empty-group").exists()
+
+    index = (site / "index.html").read_text()
+    # single file: one card titled from the filename
+    assert "<h2>Exam Review</h2>" in index
+    assert 'handouts/exam-review.pdf' in index
+    # subfolder: one card titled from the folder, both files as downloads
+    assert "<h2>Office Hours</h2>" in index
+    assert 'handouts/office_hours/schedule.pdf' in index
+    assert 'handouts/office_hours/zoom-notes.pdf' in index
+    # empty subfolder and READMEs get no card
+    assert "Empty Group" not in index
+    assert "Readme" not in index
+
+
 def test_render_page_links_custom_css():
     from hwgenie.htmltemplate import render_page
 

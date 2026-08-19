@@ -100,6 +100,8 @@ def main(argv=None) -> int:
     add_grade_parser(sub)
     from .feedback import add_parser as add_return_parser
     add_return_parser(sub)
+    from .quotebank import add_parser as add_quotes_parser
+    add_quotes_parser(sub)
 
     args = parser.parse_args(argv)
 
@@ -120,6 +122,9 @@ def main(argv=None) -> int:
     if args.command == "return":
         from .feedback import run_return
         return run_return(args)
+    if args.command == "quotes":
+        from .quotebank import run_quotes
+        return run_quotes(args)
 
     try:
         result = build(

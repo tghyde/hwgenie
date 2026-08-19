@@ -29,7 +29,7 @@ import shutil
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from .build import (
     BuildError,
@@ -207,16 +207,33 @@ def build_site(
     )
 
     # Every file in handouts/ is published at handouts/<name> and listed in
-    # the index's Handouts section.
-    handout_files = []
+    # the index's Handouts section. A subfolder groups its files under one
+    # card titled after the folder name; entries are (title stem, rel paths).
+    handout_files: List[Tuple[str, List[str]]] = []
     handouts_dir = repo_root / "handouts"
+
+    def _listed(p: Path) -> bool:
+        return (not p.name.startswith(".")
+                and not p.name.lower().startswith("readme"))
+
     if handouts_dir.is_dir():
         (out / "handouts").mkdir(parents=True, exist_ok=True)
         for f in sorted(handouts_dir.iterdir()):
-            if (f.is_file() and not f.name.startswith(".")
-                    and not f.name.lower().startswith("readme")):
+            if not _listed(f):
+                continue
+            if f.is_file():
                 shutil.copyfile(f, out / "handouts" / f.name)
-                handout_files.append(f.name)
+                handout_files.append((f.name.rsplit(".", 1)[0], [f.name]))
+            elif f.is_dir():
+                grouped = [g for g in sorted(f.iterdir())
+                           if g.is_file() and _listed(g)]
+                if not grouped:
+                    continue
+                (out / "handouts" / f.name).mkdir(exist_ok=True)
+                for g in grouped:
+                    shutil.copyfile(g, out / "handouts" / f.name / g.name)
+                handout_files.append(
+                    (f.name, [f"{f.name}/{g.name}" for g in grouped]))
 
     macro_pool: Dict[str, str] = {}
     if extra_preamble:
@@ -516,7 +533,7 @@ def render_index(
     theme: str = "",
     custom_css: str = "",
     intro_html: str = "",
-    handout_files: Optional[List[str]] = None,
+    handout_files: Optional[List[Tuple[str, List[str]]]] = None,
     banner: str = "",
     favicon: str = "",
 ) -> str:
@@ -558,13 +575,16 @@ def render_index(
             f'<div class="links">'
             f'{file_box(f"{a.rel_url}{pdf}", "Handout PDF")}</div>\n</div>'
         )
-    for fname in handout_files or []:
-        pretty = re.sub(r"[-_]+", " ", fname.rsplit(".", 1)[0]).strip().title()
+    for stem, files in handout_files or []:
+        pretty = re.sub(r"[-_]+", " ", stem).strip().title()
+        boxes = " ".join(
+            file_box(f"handouts/{rel}", e(rel.rsplit("/", 1)[-1]))
+            for rel in files
+        )
         top_cards.append(
             f'<div class="assignment">\n'
             f'<h2>{e(pretty)}</h2>\n'
-            f'<div class="links">'
-            f'{file_box(f"handouts/{fname}", e(fname))}</div>\n</div>'
+            f'<div class="links">{boxes}</div>\n</div>'
         )
 
     lesson_cards = []
