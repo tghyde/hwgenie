@@ -121,6 +121,29 @@ def _slug(number: str) -> str:
     return re.sub(r"[^A-Za-z0-9.-]+", "-", number.strip()).strip("-").lower()
 
 
+# Headline caps for titles derived from file/folder names: words that stay
+# lowercase mid-title, and spellings the plain .capitalize() would mangle.
+_TITLE_SMALL_WORDS = {"a", "an", "and", "as", "at", "but", "by", "for", "in",
+                      "of", "on", "or", "the", "to", "via", "vs", "with"}
+_TITLE_SPELLINGS = {"latex": "LaTeX", "tex": "TeX", "pdf": "PDF", "faq": "FAQ"}
+
+
+def _pretty_title(stem: str) -> str:
+    words = re.sub(r"[-_]+", " ", stem).split()
+    out = []
+    for i, w in enumerate(words):
+        lw = w.lower()
+        if lw in _TITLE_SPELLINGS:
+            out.append(_TITLE_SPELLINGS[lw])
+        elif w != lw:  # already has capitals: trust the author
+            out.append(w)
+        elif lw in _TITLE_SMALL_WORDS and 0 < i < len(words) - 1:
+            out.append(lw)
+        else:
+            out.append(lw.capitalize())
+    return " ".join(out)
+
+
 def _tag(meta: Metadata) -> str:
     return re.sub(r"\s+", "", f"{meta.course}") + "-" + re.sub(
         r"\s+", "", f"{meta.semester}")
@@ -576,7 +599,7 @@ def render_index(
             f'{file_box(f"{a.rel_url}{pdf}", "Handout PDF")}</div>\n</div>'
         )
     for stem, files in handout_files or []:
-        pretty = re.sub(r"[-_]+", " ", stem).strip().title()
+        pretty = _pretty_title(stem)
         boxes = " ".join(
             file_box(f"handouts/{rel}", e(rel.rsplit("/", 1)[-1]))
             for rel in files

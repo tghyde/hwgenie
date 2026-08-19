@@ -184,6 +184,18 @@ def test_build_site_banner_and_favicon(repo):
     assert (site / "favicon.png").exists()
 
 
+def test_pretty_title():
+    from hwgenie.site import _pretty_title
+
+    assert _pretty_title("exam-review") == "Exam Review"
+    assert _pretty_title("introduction-to-latex") == "Introduction to LaTeX"
+    assert _pretty_title("introduction-to-LaTeX") == "Introduction to LaTeX"
+    # small words capitalize at the edges of a title
+    assert _pretty_title("to-infinity") == "To Infinity"
+    assert _pretty_title("guide_to_the_FFT") == "Guide to the FFT"
+    assert _pretty_title("faq") == "FAQ"
+
+
 def test_build_site_static_handouts(repo):
     handouts = repo / "handouts"
     handouts.mkdir()
