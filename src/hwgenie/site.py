@@ -582,6 +582,7 @@ def render_index(
             f'<div class="assignment">\n'
             f'<h2><a href="{a.rel_url}">Syllabus</a></h2>\n'
             f'<div class="links">'
+            f'{view_box(a.rel_url, "Syllabus")} '
             f'{file_box(f"{a.rel_url}{pdf}", "Syllabus PDF")}</div>\n</div>'
         )
     for a in handouts:
@@ -596,6 +597,7 @@ def render_index(
             f'<div class="assignment">\n'
             f'<h2><a href="{a.rel_url}">{label}</a></h2>\n'
             f'<div class="links">'
+            f'{view_box(a.rel_url, f"Handout {num}" if num else label)} '
             f'{file_box(f"{a.rel_url}{pdf}", "Handout PDF")}</div>\n</div>'
         )
     for stem, files in handout_files or []:
@@ -622,6 +624,7 @@ def render_index(
             f'<div class="assignment">\n'
             f'<h2><a href="{a.rel_url}">{label}</a></h2>\n'
             f'<div class="links">'
+            f'{view_box(a.rel_url, f"Lesson {num}")} '
             f'{file_box(f"{a.rel_url}{pdf}", "Lesson PDF")}</div>\n</div>'
         )
 
@@ -633,7 +636,7 @@ def render_index(
             label += f": {e(latex_plain(a.meta.title))}"
         slug = _slug(a.meta.number)
         names = _file_names(a.meta, slug)
-        links = []
+        links = [view_box(a.rel_url, f"Problem Set {n}")]
         if a.released:
             links.append(view_box(f"{a.rel_url}solutions.html", "Solutions"))
         links += [
