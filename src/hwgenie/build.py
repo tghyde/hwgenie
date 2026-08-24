@@ -127,21 +127,26 @@ def make_variants(text: str, search_dirs=None) -> Dict[str, str]:
     nodes = texscan.parse_nodes(masked)
     meta = parse_metadata(masked)
 
-    # Handout: no header line, no solutions, cleared tables.
+    has_marker = "%HEADER" in masked
+    uses_sty = transforms.USEPACKAGE_HWGENIE_RE.search(text) is not None
+
+    # Handout: no header line, no solutions, cleared tables.  The injected
+    # Handout variant tag disables \solnewpage (and shows no badge).
     handout_edits = (
         transforms.header_edits(masked, "", remove=True)
         + transforms.solution_edits(text, nodes, mode="remove")
         + transforms.clear_table_edits(text, nodes)
+        + transforms.hwpreview_edits(masked)
     )
     handout = transforms.apply_edits(text, handout_edits)
     handout = transforms.collapse_blank_lines(handout)
-
-    has_marker = "%HEADER" in masked
-    uses_sty = transforms.USEPACKAGE_HWGENIE_RE.search(text) is not None
+    if not has_marker and uses_sty:
+        handout = transforms.inject_variant(handout, "Handout")
 
     # Solutions: SOLUTIONS banner, everything else untouched.
-    solutions_edits = transforms.header_edits(
-        masked, transforms.banner("SOLUTIONS"), remove=False
+    solutions_edits = (
+        transforms.header_edits(masked, transforms.banner("SOLUTIONS"), remove=False)
+        + transforms.hwpreview_edits(masked)
     )
     solutions = transforms.apply_edits(text, solutions_edits)
     if not has_marker and uses_sty:
@@ -156,6 +161,8 @@ def make_variants(text: str, search_dirs=None) -> Dict[str, str]:
         + transforms.solution_edits(text, nodes, mode="blank")
         + transforms.clear_table_edits(text, nodes)
         + transforms.env_removal_edits(text, nodes, ("htmlonly",))
+        + transforms.variant_newpage_edits(masked)
+        + transforms.hwpreview_edits(masked)
     )
     submission = transforms.apply_edits(text, submission_edits)
     submission = transforms.collapse_blank_lines(submission)
@@ -167,7 +174,9 @@ def make_variants(text: str, search_dirs=None) -> Dict[str, str]:
     # Solutions-for-web: like solutions but no banner (the HTML template has
     # its own badge) and no %HEADER line.
     solutions_web = transforms.apply_edits(
-        text, transforms.header_edits(masked, "", remove=True)
+        text,
+        transforms.header_edits(masked, "", remove=True)
+        + transforms.hwpreview_edits(masked),
     )
 
     return {

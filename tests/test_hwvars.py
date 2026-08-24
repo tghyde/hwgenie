@@ -169,7 +169,7 @@ def test_hwvariant_injected_when_no_header_marker():
     v = make_variants(text)
     assert "\\hwvariant{Solutions}" in v["solutions"]
     assert "\\hwvariant{Submission}" in v["submission"]
-    assert "\\hwvariant" not in v["handout"]
+    assert "\\hwvariant{Handout}" in v["handout"]  # disables \solnewpage there
     assert "\\blue{SOLUTIONS}" not in v["solutions"]
 
 

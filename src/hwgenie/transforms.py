@@ -219,6 +219,37 @@ def clear_table_edits(text: str, nodes) -> List[Edit]:
     return edits
 
 
+# -------------------------------------- variant page breaks (\solnewpage &c)
+
+# Whole line when the macro is alone on it, else just the token.
+VARIANT_NEWPAGE_RE = re.compile(
+    r"^[ \t]*\\(?:sol|handout)newpage[ \t]*\n?"
+    r"|\\(?:sol|handout)newpage(?![A-Za-z])",
+    re.MULTILINE,
+)
+
+
+def variant_newpage_edits(masked_text: str) -> List[Edit]:
+    """Remove \\solnewpage and \\handoutnewpage (variant-specific page breaks)
+    so students never see them in the submission .tex.  In the PDFs where they
+    don't apply the macros are no-ops via hwgenie.sty, and the HTML converter
+    skips them."""
+    return [
+        (m.start(), m.end(), "") for m in VARIANT_NEWPAGE_RE.finditer(masked_text)
+    ]
+
+
+HWPREVIEW_RE = re.compile(
+    r"^[ \t]*\\hwpreview\{[^{}]*\}[ \t]*\n?|\\hwpreview\{[^{}]*\}", re.MULTILINE
+)
+
+
+def hwpreview_edits(masked_text: str) -> List[Edit]:
+    """Remove \\hwpreview{...} (the author's Overleaf-only variant preview
+    toggle) from every generated variant, so it can be left in the source."""
+    return [(m.start(), m.end(), "") for m in HWPREVIEW_RE.finditer(masked_text)]
+
+
 # ------------------------------------------------------------------- header
 
 def banner(text_label: str) -> str:

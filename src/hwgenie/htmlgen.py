@@ -60,7 +60,8 @@ SKIP_MACROS = {
     "vspace": 1, "hspace": 1, "vspace*": 1,
     "bigskip": 0, "medskip": 0, "smallskip": 0,
     "noindent": 0, "indent": 0, "centering": 0,
-    "newpage": 0, "clearpage": 0, "hrule": 0,
+    "newpage": 0, "clearpage": 0, "solnewpage": 0, "handoutnewpage": 0,
+    "hrule": 0,
     "pagestyle": 1, "thispagestyle": 1,
     "setcounter": 2, "addtocounter": 2, "numberwithin": 2,
     "setlength": 2, "addtolength": 2,
@@ -68,6 +69,7 @@ SKIP_MACROS = {
     "theoremstyle": 1,
     "hwnumber": 1, "hwtitle": 1, "hwsolutions": 1, "hwrelease": 1, "hwtype": 1,
     "hwmaketitle": 0, "hwcourse": 0, "hwsemester": 0, "hwvariant": 1,
+    "hwpreview": 1,
     "!": 0, ";": 0, ":": 0,
 }
 

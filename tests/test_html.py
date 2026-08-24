@@ -18,6 +18,15 @@ def convert(body: str, include_solutions=True, section="3"):
     return conv, conv.convert()
 
 
+def test_variant_newpages_ignored():
+    _c, html = convert(
+        "\\begin{problem}\nA.\n\\end{problem}\n\\solnewpage\n"
+        "\\handoutnewpage\n\\begin{problem}\nB.\n\\end{problem}"
+    )
+    assert "newpage" not in html
+    assert "A." in html and "B." in html
+
+
 def test_math_passthrough_escaped():
     _c, html = convert("Let $a < b$ and \\[ x \\geq 1. \\]")
     assert "$a &lt; b$" in html

@@ -254,6 +254,46 @@ def test_metadata_removed_from_submission_only():
     assert "hwgenie" in v["solutions"]
 
 
+def test_variant_newpages_stripped_from_submission_only():
+    v = variants_of(
+        "\\begin{problem}\nA.\n\\end{problem}\n"
+        "\\solnewpage\n"
+        "\\handoutnewpage\n"
+        "\\begin{problem}\nB.\n\\end{problem}\n"
+    )
+    for macro in ("\\solnewpage", "\\handoutnewpage"):
+        assert macro in v["solutions"]
+        assert macro in v["solutions_web"]
+        # Kept in the handout tex; hwgenie.sty decides which one fires.
+        assert macro in v["handout"]
+    assert "newpage" not in v["submission"]
+    assert "A." in v["submission"] and "B." in v["submission"]
+
+
+def test_handout_variant_injected_modern_docs():
+    doc = (
+        "\\documentclass{article}\n\\usepackage{hwgenie}\n"
+        "\\hwnumber{1}\n\\begin{document}\n"
+        "\\begin{problem}\nA.\n\\end{problem}\n\\end{document}\n"
+    )
+    v = make_variants(doc)
+    assert "\\hwvariant{Handout}" in v["handout"]
+    assert "\\hwvariant{Solutions}" in v["solutions"]
+    assert "\\hwvariant{Submission}" in v["submission"]
+
+
+def test_hwpreview_stripped_from_all_variants():
+    doc = (
+        "\\documentclass{article}\n\\usepackage{hwgenie}\n"
+        "\\hwpreview{Handout}\n"
+        "\\hwnumber{1}\n\\begin{document}\n"
+        "\\begin{problem}\nA.\n\\end{problem}\n\\end{document}\n"
+    )
+    v = make_variants(doc)
+    for key in ("handout", "solutions", "submission", "solutions_web"):
+        assert "hwpreview" not in v[key], key
+
+
 # --------------------------------------------------------------- integration
 
 @pytest.mark.skipif(not SAMPLE.exists(), reason="sample file not present")
