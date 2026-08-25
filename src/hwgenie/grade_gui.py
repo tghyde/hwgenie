@@ -488,6 +488,14 @@ class AppHolder:
         return app
 
 
+def course_roots(root: Path) -> list[Path]:
+    """Where the Courses page looks for local course clones: the scan
+    root and its parent (the launcher's root is grading-lab, and course
+    repos are its siblings in the HWGenie folder)."""
+    root = Path(root).resolve()
+    return [root, root.parent] if root.parent != root else [root]
+
+
 def make_handler(holder: AppHolder):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *a):  # silence request logging
@@ -563,6 +571,17 @@ def make_handler(holder: AppHolder):
             elif url.path.startswith("/quotes/api/"):
                 from .quotebank import api_get
                 res = api_get(url.path)
+                if res is None:
+                    self._send(b"not found", code=404)
+                else:
+                    self._json(res[0], res[1])
+            elif url.path == "/courses":
+                from .course_admin import render_courses
+                holder.alive()
+                self._send(render_courses().encode("utf-8"))
+            elif url.path.startswith("/courses/api/"):
+                from .course_admin import api_get as courses_get
+                res = courses_get(url.path)
                 if res is None:
                     self._send(b"not found", code=404)
                 else:
@@ -652,6 +671,13 @@ def make_handler(holder: AppHolder):
             elif self.path.startswith("/quotes/api/"):
                 from .quotebank import api_post
                 res = api_post(self.path, data)
+                if res is None:
+                    self._send(b"not found", code=404)
+                else:
+                    self._json(res[0], res[1])
+            elif self.path.startswith("/courses/api/"):
+                from .course_admin import api_post as courses_post
+                res = courses_post(self.path, data, course_roots(holder.root))
                 if res is None:
                     self._send(b"not found", code=404)
                 else:
@@ -754,7 +780,9 @@ def render_grader() -> str:
 
 def render_picker() -> str:
     from .appicon import LAMP_SVG
-    return PICKER_PAGE.replace("__LAMP__", LAMP_SVG)
+    from .webstyle import nav_header
+    return (PICKER_PAGE.replace("__NAV__", nav_header("grading"))
+                       .replace("__LAMP__", LAMP_SVG))
 
 
 
@@ -2334,11 +2362,11 @@ PICKER_PAGE = r"""<!doctype html>
 <meta name="theme-color" content="#24589f">
 <style>
 __BASE__
+  /* height:auto so the body box spans the full content: the sticky
+     .appnav sticks for the whole scroll, not just the first viewport */
+  html, body { height: auto; min-height: 100%; }
   body { overflow: auto; display: block; }
-  main { max-width: 620px; margin: 0 auto; padding: 2.5rem 1.25rem 4rem; }
-  h1 { font-size: 1.6rem; margin: 0 0 .25rem; }
-  .lamp { height: .72em;  /* cap height: lamp tip = top of G */ width: auto; color: var(--accent);
-          vertical-align: baseline; margin-left: .2rem; }
+  main { max-width: 620px; margin: 0 auto; padding: 1.75rem 1.25rem 4rem; }
   .sub { color: var(--muted); margin: 0 0 1.75rem; }
   h2 { font-size: .95rem; letter-spacing: .04em; text-transform: uppercase;
        color: var(--muted); margin: 1.6rem 0 .5rem; }
@@ -2368,10 +2396,9 @@ __BASE__
 </style>
 </head>
 <body>
+__NAV__
 <main>
-  <h1>hwGenie __LAMP__</h1>
-  <p class="sub">Pick the assignment to grade &mdash; or set up a new
-  course below.</p>
+  <p class="sub">Pick the assignment to grade.</p>
   <h2>Recent</h2>
   <div id="recents"><span class="none">nothing yet</span></div>
   <h2>Found in <span id="root"></span></h2>
@@ -2386,16 +2413,6 @@ __BASE__
   collect</code>) or a Moodle &ldquo;Download all submissions&rdquo; .zip
   &mdash; a zip is collected into a folder next to it first.</p>
   <div id="err"></div>
-  <h2>Quote bank</h2>
-  <a class="row" href="/quotes">
-    <span class="path">Browse epigraphs&hellip;</span>
-    <span class="meta">search &middot; copy TeX &middot; track uses</span>
-  </a>
-  <h2>New course</h2>
-  <a class="row" href="/new-course">
-    <span class="path">Set up a new course&hellip;</span>
-    <span class="meta">repo + website wizard</span>
-  </a>
 </main>
 <script>
 "use strict";

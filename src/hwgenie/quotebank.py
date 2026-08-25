@@ -313,8 +313,10 @@ def run_quotes(args) -> int:
 
 def render_quotes() -> str:
     from .appicon import LAMP_SVG
-    from .webstyle import BASE_CSS
-    return PAGE.replace("__BASE__", BASE_CSS).replace("__LAMP__", LAMP_SVG)
+    from .webstyle import BASE_CSS, nav_header
+    return (PAGE.replace("__BASE__", BASE_CSS)
+                .replace("__NAV__", nav_header("quotes"))
+                .replace("__LAMP__", LAMP_SVG))
 
 
 PAGE = r"""<!doctype html>
@@ -327,15 +329,14 @@ PAGE = r"""<!doctype html>
 <meta name="theme-color" content="#24589f">
 <style>
 __BASE__
+  /* height:auto so the body box spans the full content: the sticky
+     .appnav sticks for the whole scroll, not just the first viewport */
+  html, body { height: auto; min-height: 100%; }
   body { overflow: auto; display: block; }
-  main { max-width: 760px; margin: 0 auto; padding: 2.5rem 1.25rem 4rem; }
-  h1 { font-size: 1.6rem; margin: 0 0 .25rem; }
-  .lamp { height: .72em; width: auto; color: var(--accent);
-          vertical-align: baseline; margin-left: .2rem; }
-  .back { font-size: .85rem; margin: 0 0 1.2rem; }
+  main { max-width: 760px; margin: 0 auto; padding: 1.75rem 1.25rem 4rem; }
   .sub { color: var(--muted); margin: 0 0 1.5rem; }
   #bar { display: flex; gap: .5rem; flex-wrap: wrap; margin: 0 0 1.1rem;
-         position: sticky; top: 0; background: var(--bg);
+         position: sticky; top: var(--navh); background: var(--bg);
          padding: .6rem 0 .6rem; z-index: 5; }
   #bar input, #bar select {
     font: inherit; padding: .4rem .6rem; color: var(--fg);
@@ -388,9 +389,8 @@ __BASE__
 </style>
 </head>
 <body>
+__NAV__
 <main>
-  <p class="back"><a href="/">&larr; hwGenie home</a></p>
-  <h1>Quote bank __LAMP__</h1>
   <p class="sub">Epigraphs for problem sets &mdash; search, copy the TeX,
   and log where each one has appeared.</p>
 

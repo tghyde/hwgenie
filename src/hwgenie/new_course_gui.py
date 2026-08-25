@@ -154,20 +154,25 @@ def render_wizard(embedded: bool) -> str:
     own server down.
     """
     from .appicon import LAMP_SVG
+    from .webstyle import nav_header
     d = load_defaults()
     parent = d.get("parent_dir") or str(Path.home())
     theme_options = "".join(
         f'<option value="{name}">{name}</option>' for name in THEMES)
     esc = lambda k: html.escape(d.get(k, ""), quote=True)  # noqa: E731
-    back = ('<p class="back"><a href="/">&larr; hwGenie home</a></p>'
-            if embedded else "")
+    # embedded: the shared app-nav header carries the branding; the
+    # standalone wizard keeps its own hwGenie h1
+    # the wizard is reached from the Courses page, so that tab stays lit
+    nav = nav_header("courses") if embedded else ""
+    masthead = "" if embedded else "<h1>hwGenie __LAMP__</h1>"
     return PAGE.replace("__THEMES__", theme_options) \
                .replace("__INSTRUCTOR__", esc("instructor")) \
                .replace("__OFFICE__", esc("office")) \
                .replace("__EMAIL__", esc("email")) \
                .replace("__PARENT__", html.escape(parent, quote=True)) \
+               .replace("__NAV__", nav) \
+               .replace("__MASTHEAD__", masthead) \
                .replace("__LAMP__", LAMP_SVG) \
-               .replace("__BACK__", back) \
                .replace("__MODE__", "embedded" if embedded else "standalone")
 
 
@@ -181,12 +186,14 @@ PAGE = r"""<!doctype html>
 <meta name="theme-color" content="#24589f">
 <style>
 __BASE__
+  /* height:auto so the body box spans the full content: the sticky
+     .appnav sticks for the whole scroll, not just the first viewport */
+  html, body { height: auto; min-height: 100%; }
   body { overflow: auto; display: block; }
-  main { max-width: 620px; margin: 0 auto; padding: 2.5rem 1.25rem 4rem; }
+  main { max-width: 620px; margin: 0 auto; padding: 1.75rem 1.25rem 4rem; }
   h1 { font-size: 1.6rem; margin: 0 0 .25rem; }
   .lamp { height: .72em;  /* cap height: lamp tip = top of G */ width: auto; color: var(--accent);
           vertical-align: baseline; margin-left: .2rem; }
-  .back { font-size: .85rem; margin: 0 0 1.2rem; }
   .sub { color: var(--muted); margin: 0 0 1.75rem; }
   h2 { font-size: .95rem; letter-spacing: .04em; text-transform: uppercase;
        color: var(--muted); margin: 1.6rem 0 .5rem; }
@@ -229,9 +236,9 @@ __BASE__
 </style>
 </head>
 <body>
+__NAV__
 <main>
-  __BACK__
-  <h1>hwGenie __LAMP__</h1>
+  __MASTHEAD__
   <p class="sub">Set up a new course: a private GitHub repo made from
   the course template, filled with your course data, website build
   switched on. Afterwards you just import the repo into Overleaf.</p>

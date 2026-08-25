@@ -44,4 +44,51 @@ BASE_CSS = r"""
   button:focus { outline: none; }
   .sp { flex: 1; }
   a { color: var(--accent); }
+  /* app nav: the launcher-family header (picker, quote bank, embedded
+     wizard).  Fixed height so sticky bars below can offset by --navh. */
+  :root { --navh: 3.1rem; }
+  .appnav {
+    display: flex; align-items: center; gap: 1.4rem;
+    height: var(--navh); padding: 0 1.25rem; background: var(--bar-bg);
+    position: sticky; top: 0; z-index: 30; flex-shrink: 0;
+    box-shadow: 0 1px 6px rgba(0,0,0,.15);
+  }
+  .appnav .brand {
+    font-size: 1.15rem; font-weight: 700; color: var(--fg);
+    text-decoration: none; white-space: nowrap;
+  }
+  .appnav .brand .lamp {
+    height: .72em;  /* cap height: lamp tip = top of G */
+    width: auto; color: var(--accent);
+    vertical-align: baseline; margin-left: .15rem;
+  }
+  .appnav nav { display: flex; gap: .25rem; }
+  .appnav nav a {
+    padding: .3rem .9rem; text-decoration: none; color: var(--fg);
+    font-size: .92rem; white-space: nowrap;
+  }
+  .appnav nav a:hover { background: var(--hover-bg); }
+  .appnav nav a.active { background: var(--accent); color: var(--bg); }
 """
+
+
+# The launcher-family pages and their nav tabs, in display order.
+NAV_TABS = [
+    ("grading", "Grading", "/"),
+    ("quotes", "Quote Bank", "/quotes"),
+    ("courses", "Courses", "/courses"),
+]
+
+
+def nav_header(active: str) -> str:
+    """The shared app-nav header; ``active`` is a NAV_TABS key.
+
+    Contains a ``__LAMP__`` placeholder — callers already substitute it.
+    """
+    links = "".join(
+        f'<a href="{href}"{" class=\"active\"" if key == active else ""}>'
+        f"{label}</a>"
+        for key, label, href in NAV_TABS)
+    return ('<div class="appnav">'
+            '<a class="brand" href="/">hwGenie __LAMP__</a>'
+            f"<nav>{links}</nav></div>")
