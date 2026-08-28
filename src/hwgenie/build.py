@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from . import compile as texcompile
-from . import texscan, transforms
+from . import texscan, tikzsvg, transforms
 from .courseconfig import find_course_config, load_course_config
 from .htmlgen import HtmlConverter
 from .htmltemplate import DEFAULT_THEME_CSS, render_page, scrollbar_html
@@ -220,13 +220,20 @@ def build_html(
     custom_css: str = "",
     favicon: str = "",
     banner: str = "",
+    tikz_inputs: Optional[Path] = None,
 ) -> None:
     # An explicit \setcounter{section}{N} wins over the assignment number
     # (some lessons deliberately use a different theorem-numbering base).
     sec_m = re.search(r"\\setcounter\{section\}\{(\d+)\}", variant_text)
     section = sec_m.group(1) if sec_m else meta.number
+    tikz_svgs, tikz_warning = tikzsvg.render_document(
+        variant_text, workdir=source_dir, extra_inputs=tikz_inputs
+    )
+    if tikz_warning:
+        result.warnings.append(tikz_warning)
     conv = HtmlConverter(variant_text, include_solutions=include_solutions,
-                         section=section, extra_preamble=extra_preamble)
+                         section=section, extra_preamble=extra_preamble,
+                         tikz_svgs=tikz_svgs)
     body = conv.convert()
     result.warnings.extend(sorted(set(conv.warnings)))
 
@@ -373,10 +380,12 @@ def build(
         solutions_html = html_dir / f"problem-set-{meta.number}-solutions.html"
         build_html(variants["handout"], meta, False, handout_html,
                    source_path.parent, result,
-                   extra_preamble=extra_preamble, theme=theme)
+                   extra_preamble=extra_preamble, theme=theme,
+                   tikz_inputs=sty_dir if extra_preamble else None)
         build_html(variants["solutions_web"], meta, True, solutions_html,
                    source_path.parent, result,
-                   extra_preamble=extra_preamble, theme=theme)
+                   extra_preamble=extra_preamble, theme=theme,
+                   tikz_inputs=sty_dir if extra_preamble else None)
         result.files["handout_html"] = handout_html
         result.files["solutions_html"] = solutions_html
 

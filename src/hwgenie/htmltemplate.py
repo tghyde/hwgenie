@@ -229,6 +229,14 @@ figure.fig figcaption {
   margin-top: .4rem;
 }
 
+/* Inline TikZ diagrams (pre-rendered SVG).  Black strokes/fills were
+   rewritten to currentColor, so the diagram follows the theme. */
+.tikz-figure {
+  text-align: center;
+  margin: 1.4rem 0;
+  color: var(--fg);
+}
+
 pre.code {
   background: var(--code-bg);
   padding: .9rem 1rem;

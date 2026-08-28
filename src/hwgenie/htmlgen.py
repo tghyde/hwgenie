@@ -139,9 +139,12 @@ class Flow:
 
 class HtmlConverter:
     def __init__(self, text: str, include_solutions: bool = True,
-                 section: Optional[str] = None, extra_preamble: str = ""):
+                 section: Optional[str] = None, extra_preamble: str = "",
+                 tikz_svgs: Optional[Dict[int, str]] = None):
         self.text = text
         self.extra_preamble = extra_preamble  # e.g. a shared hwgenie.sty
+        # {offset of \begin{tikzpicture|tikzcd} -> inline SVG markup}
+        self.tikz_svgs = tikz_svgs or {}
         self.include_solutions = include_solutions
         self.section = section
         self.warnings: List[str] = []
@@ -678,15 +681,19 @@ class HtmlConverter:
                 f"{inner.result()}\n</div>"
             )
         elif name in ("tikzpicture", "tikzcd"):
-            # TikZ can't be rendered client-side; point readers at the PDF.
-            flow.block(
-                '<div class="thmblock" style="text-align:center">'
-                "<em>(diagram — see the PDF version)</em></div>"
-            )
-            if not self._collecting:
-                self.warnings.append(
-                    f"{{{name}}} rendered as a see-the-PDF placeholder."
+            svg = self.tikz_svgs.get(n.pos)
+            if svg is not None:
+                flow.block(f'<div class="tikz-figure">{svg}</div>')
+            else:
+                # No pre-rendered SVG; point readers at the PDF.
+                flow.block(
+                    '<div class="thmblock" style="text-align:center">'
+                    "<em>(diagram — see the PDF version)</em></div>"
                 )
+                if not self._collecting:
+                    self.warnings.append(
+                        f"{{{name}}} rendered as a see-the-PDF placeholder."
+                    )
         elif name == "htmlonly":
             inner = Flow()
             self.walk(n.nodelist, inner)
@@ -773,6 +780,14 @@ class HtmlConverter:
             i += 1
         self.images.extend(imgs)
         if not imgs and "tikzpicture" in self.text[n.pos : n.pos + n.len]:
+            # A pre-rendered SVG for the embedded tikzpicture, if any.
+            svgs = [self.tikz_svgs[p] for p in sorted(self.tikz_svgs)
+                    if n.pos <= p < n.pos + n.len]
+            if svgs:
+                cap = f"<figcaption>{caption}</figcaption>" if caption else ""
+                body = "".join(f'<div class="tikz-figure">{s}</div>'
+                               for s in svgs)
+                return f'<figure class="fig">{body}{cap}</figure>'
             if not self._collecting:
                 self.warnings.append(
                     "figure with tikzpicture rendered as a see-the-PDF "
