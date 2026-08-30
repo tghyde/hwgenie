@@ -393,6 +393,65 @@ def _do_push(repo: str) -> None:
         COURSES.log("pushed")
 
 
+def _do_resolve(repo: str) -> None:
+    """Diverged clone (ahead AND behind — the Overleaf race): replay the
+    local commits onto GitHub's and push, but only when the two sides
+    touched disjoint files, so the rebase cannot conflict."""
+    clone = _known_clones().get(repo)
+    COURSES.log(f"── {repo.split('/')[-1]}: resolve diverged history")
+    if not clone:
+        COURSES.log("no local clone")
+        return
+    clone = Path(clone)
+    fetch = _run(["git", "fetch", "-q", "origin"], cwd=clone, timeout=120)
+    if fetch.returncode != 0:
+        _log_proc(fetch)
+        COURSES.log("fetch failed — not resolving")
+        return
+    st = _run(["git", "status", "--porcelain"], cwd=clone, timeout=15)
+    if st.returncode != 0 or st.stdout.strip():
+        COURSES.log("uncommitted local edits in the clone — commit or "
+                    "discard them first, then retry")
+        return
+    counts = _run(["git", "rev-list", "--left-right", "--count",
+                   "HEAD...@{upstream}"], cwd=clone, timeout=15)
+    if counts.returncode != 0:
+        COURSES.log("no upstream — cannot resolve")
+        return
+    ahead, behind = (int(x) for x in counts.stdout.split())
+    if not (ahead and behind):
+        COURSES.log("not diverged — use Pull or Push instead")
+        return
+    # A...B diffs from the merge base: what each side changed on its own.
+    ours = _run(["git", "diff", "--name-only", "@{upstream}...HEAD"],
+                cwd=clone, timeout=15)
+    theirs = _run(["git", "diff", "--name-only", "HEAD...@{upstream}"],
+                  cwd=clone, timeout=15)
+    if ours.returncode != 0 or theirs.returncode != 0:
+        COURSES.log("could not compare the two histories — not resolving")
+        return
+    both = sorted(set(ours.stdout.split()) & set(theirs.stdout.split()))
+    if both:
+        COURSES.log("changed on BOTH sides: " + ", ".join(both))
+        COURSES.log("refusing to auto-resolve — reconcile by hand "
+                    "(`git pull --rebase` in Terminal) so nothing is lost")
+        return
+    COURSES.log(f"replaying {ahead} local commit(s) onto GitHub's {behind}…")
+    rb = _run(["git", "pull", "--rebase", "-q"], cwd=clone, timeout=120)
+    if rb.returncode != 0:
+        _log_proc(rb)
+        _run(["git", "rebase", "--abort"], cwd=clone, timeout=60)
+        COURSES.log("rebase failed — aborted; the clone is back as it was")
+        return
+    push = _run(["git", "push", "-q"], cwd=clone, timeout=120)
+    _log_proc(push)
+    if push.returncode == 0:
+        COURSES.log("resolved and pushed — re-pull the project in Overleaf "
+                    "so it sees the merged history")
+    else:
+        COURSES.log("push failed")
+
+
 def find_clone_of(repo: str, roots: list[Path]) -> Path | None:
     """A local clone of ``repo`` one level below the roots (no
     course.yml requirement — course-template isn't a course)."""
@@ -468,11 +527,13 @@ def api_post(path: str, data: dict, roots: list[Path]):
     if path == "/courses/api/sync":
         repos = [r for r in data.get("repos", []) if isinstance(r, str)]
         return start_sync(repos, roots), 200
-    if path in ("/courses/api/pull", "/courses/api/push"):
+    if path in ("/courses/api/pull", "/courses/api/push",
+                "/courses/api/resolve"):
         repo = data.get("repo")
         if not isinstance(repo, str) or not repo:
             return {"ok": False, "error": "missing repo"}, 400
-        fn = _do_pull if path.endswith("pull") else _do_push
+        fn = {"pull": _do_pull, "push": _do_push,
+              "resolve": _do_resolve}[path.rsplit("/", 1)[-1]]
         return _start_job(lambda: fn(repo), roots), 200
     if path == "/courses/api/bump-template":
         return _start_job(_do_bump_template, roots), 200
@@ -601,8 +662,13 @@ function localCell(c) {
   const l = c.local;
   if (l.error) return `<span class="bad">${esc(l.error)}</span>`;
   const bits = [];
-  if (l.behind) bits.push(`<span class="bad">${l.behind} behind GitHub</span>`);
-  if (l.ahead) bits.push(`<span class="stale">${l.ahead} ahead (push?)</span>`);
+  if (l.behind && l.ahead)
+    bits.push(`<span class="bad">diverged — ${l.behind} behind · ` +
+              `${l.ahead} ahead</span>`);
+  else if (l.behind)
+    bits.push(`<span class="bad">${l.behind} behind GitHub</span>`);
+  else if (l.ahead)
+    bits.push(`<span class="stale">${l.ahead} ahead (push?)</span>`);
   if (!bits.length) bits.push('<span class="ok">up to date</span>');
   if (l.dirty) bits.push('<span class="stale">+ local edits</span>');
   return bits.join(", ");
@@ -680,6 +746,7 @@ function render() {
     if (l && !l.error) {
       if (l.behind && !l.ahead) gitBtn = "pull";
       else if (l.ahead && !l.behind) gitBtn = "push";
+      else if (l.ahead && l.behind) gitBtn = "resolve";
     }
     return `<tr>
       <td><div class="cname">${label}</div>
@@ -696,7 +763,8 @@ function render() {
       <td>${ciCell(c)}</td>
       <td>${localCell(c)}${gitBtn ? ` <button data-act="${gitBtn}"
         data-repo="${esc(c.repo)}" ${busy ? "disabled" : ""}>` +
-        (gitBtn === "pull" ? "Pull" : "Push") + "</button>" : ""}</td>
+        {pull: "Pull", push: "Push", resolve: "Resolve"}[gitBtn] +
+        "</button>" : ""}</td>
       </tr>`;
   }).join("");
   tb.querySelectorAll("button[data-act]").forEach(b =>

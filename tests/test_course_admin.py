@@ -202,3 +202,103 @@ def test_render_courses_has_nav_and_lamp():
     assert 'class="appnav"' in page
     assert "Update All Courses" in page
     assert '/new-course' in page   # New Course lives here now
+
+
+# ------------------------------------------------- resolve (real git) --
+
+def _git(cwd, *args):
+    import subprocess
+    p = subprocess.run(
+        ["git", "-c", "user.email=t@example.com", "-c", "user.name=T",
+         "-c", "commit.gpgsign=false"] + list(args),
+        cwd=cwd, capture_output=True, text=True)
+    assert p.returncode == 0, p.stderr
+    return p.stdout
+
+
+def _diverged_pair(tmp_path, overlap: bool):
+    """origin + clone where the clone is 1 ahead and origin 1 ahead of it.
+    ``overlap`` = both sides touched the same file."""
+    origin = tmp_path / "origin.git"
+    origin.mkdir()
+    _git(origin, "init", "--bare", "-b", "main", ".")
+    other = tmp_path / "overleaf"
+    _git(tmp_path, "clone", "-q", str(origin), str(other))
+    (other / "ps01.tex").write_text("problems\n")
+    (other / "hwgenie.sty").write_text("v1\n")
+    _git(other, "add", "-A")
+    _git(other, "commit", "-qm", "base")
+    _git(other, "push", "-q")
+    clone = tmp_path / "clone"
+    _git(tmp_path, "clone", "-q", str(origin), str(clone))
+    # local side: a sync commit
+    (clone / "hwgenie.sty").write_text("v2\n")
+    _git(clone, "commit", "-aqm", "sync sty")
+    # remote side: an Overleaf push
+    (other / ("hwgenie.sty" if overlap else "ps01.tex")).write_text("edit\n")
+    _git(other, "commit", "-aqm", "Updates from Overleaf")
+    _git(other, "push", "-q")
+    return clone
+
+
+def _counts(clone):
+    _git(clone, "fetch", "-q")
+    return tuple(int(x) for x in _git(
+        clone, "rev-list", "--left-right", "--count",
+        "HEAD...@{upstream}").split())
+
+
+def _resolve_setup(monkeypatch, clone):
+    state = ca._State()
+    monkeypatch.setattr(ca, "COURSES", state)
+    monkeypatch.setattr(ca, "_known_clones",
+                        lambda: {"tghyde/x": str(clone)})
+    return state
+
+
+def test_do_resolve_disjoint_rebases_and_pushes(tmp_path, monkeypatch):
+    clone = _diverged_pair(tmp_path, overlap=False)
+    assert _counts(clone) == (1, 1)
+    state = _resolve_setup(monkeypatch, clone)
+    ca._do_resolve("tghyde/x")
+    assert _counts(clone) == (0, 0)          # in sync with origin
+    # both sides' work survived
+    assert (clone / "hwgenie.sty").read_text() == "v2\n"
+    assert (clone / "ps01.tex").read_text() == "edit\n"
+    assert any("resolved and pushed" in l for l in state.lines)
+
+
+def test_do_resolve_refuses_overlap(tmp_path, monkeypatch):
+    clone = _diverged_pair(tmp_path, overlap=True)
+    state = _resolve_setup(monkeypatch, clone)
+    ca._do_resolve("tghyde/x")
+    assert _counts(clone) == (1, 1)          # untouched
+    assert any("BOTH sides" in l for l in state.lines)
+    assert any("hwgenie.sty" in l for l in state.lines)
+
+
+def test_do_resolve_refuses_dirty_and_not_diverged(tmp_path, monkeypatch):
+    clone = _diverged_pair(tmp_path, overlap=False)
+    (clone / "scratch.tex").write_text("wip\n")
+    _git(clone, "add", "scratch.tex")
+    state = _resolve_setup(monkeypatch, clone)
+    ca._do_resolve("tghyde/x")
+    assert _counts(clone) == (1, 1)
+    assert any("uncommitted local edits" in l for l in state.lines)
+    # clean but merely behind: point at Pull/Push instead
+    _git(clone, "reset", "-q", "--hard", "HEAD~1")
+    _git(clone, "clean", "-qfd")
+    state2 = _resolve_setup(monkeypatch, clone)
+    ca._do_resolve("tghyde/x")
+    assert any("use Pull or Push" in l for l in state2.lines)
+
+
+def test_api_resolve_routes(monkeypatch):
+    monkeypatch.setattr(ca, "COURSES", ca._State())
+    jobs = []
+    monkeypatch.setattr(ca, "_start_job",
+                        lambda fn, roots: (jobs.append(fn), {"ok": True})[1])
+    obj, code = ca.api_post("/courses/api/resolve", {}, [])
+    assert code == 400 and obj["ok"] is False
+    obj, code = ca.api_post("/courses/api/resolve", {"repo": "tghyde/x"}, [])
+    assert code == 200 and obj["ok"] is True and len(jobs) == 1
