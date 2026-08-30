@@ -250,3 +250,28 @@ def test_build_site_rebuild_cleans_previous(repo):
     ps1.write_text(ps1.read_text().replace("solutions = released", "solutions = manual"))
     result = build_site(repo, compile_pdfs=False, today=date(2025, 10, 15))
     assert not (result.out_dir / "ps/1/solutions.html").exists()
+
+
+def test_dropped_handout_due_from_course_yml(repo):
+    (repo / "course.yml").write_text(
+        "course: Math 221\nsemester: Fall 2026\n"
+        "due.intro-to-LaTeX: Friday, September 4th at 11:59pm\n"
+        "due.exam-review: Monday at noon\n"
+    )
+    handouts = repo / "handouts"
+    handouts.mkdir()
+    group = handouts / "intro-to-LaTeX"
+    group.mkdir()
+    (group / "intro.pdf").write_bytes(b"%PDF fake")
+    (handouts / "exam-review.pdf").write_bytes(b"%PDF fake")
+    (handouts / "no-due.pdf").write_bytes(b"%PDF fake")
+    result = build_site(repo, compile_pdfs=False, today=date(2025, 10, 15))
+    assert result.ok, result.errors
+    index = (result.out_dir / "index.html").read_text()
+    # folder card and single-file card both carry the due span; the key is
+    # matched case-insensitively (the config parser lowercases keys)
+    assert ('<h2>Intro to LaTeX<span class="card-due">'
+            'Due Friday, September 4th at 11:59pm</span></h2>') in index
+    assert ('<h2>Exam Review<span class="card-due">'
+            'Due Monday at noon</span></h2>') in index
+    assert "<h2>No Due</h2>" in index

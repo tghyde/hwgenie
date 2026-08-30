@@ -591,6 +591,17 @@ def render_index(
             return ""
         return f'<span class="card-due">Due {e(latex_plain(a.meta.due))}</span>'
 
+    # Dropped handout files carry no source metadata, so course.yml can
+    # supply their due dates as dotted keys (like the theme overrides):
+    #   due.introduction-to-LaTeX: Friday, September 4th at 11:59pm
+    # keyed by the folder (or single file's) name, matched case-
+    # insensitively — the config parser lowercases keys.
+    dropped_due = {k[4:]: v for k, v in cfg.items() if k.startswith("due.")}
+
+    def dropped_due_span(stem: str) -> str:
+        due = dropped_due.get(stem.lower())
+        return f'<span class="card-due">Due {e(due)}</span>' if due else ""
+
     problemsets = [a for a in assignments if a.meta.doc_type == "problemset"]
     lessons = [a for a in assignments if a.meta.doc_type == "lesson"]
     syllabi = [a for a in assignments if a.meta.doc_type == "syllabus"]
@@ -629,7 +640,7 @@ def render_index(
         )
         top_cards.append(
             f'<div class="assignment">\n'
-            f'<h2>{e(pretty)}</h2>\n'
+            f'<h2>{e(pretty)}{dropped_due_span(stem)}</h2>\n'
             f'<div class="links">{boxes}</div>\n</div>'
         )
 
