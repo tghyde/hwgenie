@@ -74,9 +74,9 @@ BASE_CSS = r"""
 
 # The launcher-family pages and their nav tabs, in display order.
 NAV_TABS = [
-    ("grading", "Grading", "/"),
+    ("courses", "Courses", "/"),
+    ("grading", "Grading", "/grading"),
     ("quotes", "Quote Bank", "/quotes"),
-    ("courses", "Courses", "/courses"),
 ]
 
 

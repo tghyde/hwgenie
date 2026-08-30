@@ -525,7 +525,12 @@ def make_handler(holder: AppHolder):
         def do_GET(self):
             url = urllib.parse.urlparse(self.path)
             app = holder.current
-            if url.path in ("/", "/index.html"):
+            if url.path in ("/", "/index.html", "/courses"):
+                # course management is the app's home page
+                from .course_admin import render_courses
+                holder.alive()
+                self._send(render_courses().encode("utf-8"))
+            elif url.path == "/grading":
                 holder.alive()
                 page = render_grader() if app else render_picker()
                 self._send(page.encode("utf-8"))
@@ -575,10 +580,6 @@ def make_handler(holder: AppHolder):
                     self._send(b"not found", code=404)
                 else:
                     self._json(res[0], res[1])
-            elif url.path == "/courses":
-                from .course_admin import render_courses
-                holder.alive()
-                self._send(render_courses().encode("utf-8"))
             elif url.path.startswith("/courses/api/"):
                 from .course_admin import api_get as courses_get
                 res = courses_get(url.path)
@@ -739,7 +740,10 @@ def serve_app(folder: Path | None, port: int = 0,
                 _open_ui(url)
             return 0
         raise
-    url = f"http://127.0.0.1:{server.server_address[1]}/"
+    # a CLI-opened grading folder goes straight to the grader; the bare
+    # launcher lands on the Courses home page
+    path = "/grading" if holder.current else "/"
+    url = f"http://127.0.0.1:{server.server_address[1]}{path}"
     print(f"hwGenie: {url}")
     if auto_exit:
         print("(Closes by itself when the browser tab does.)")

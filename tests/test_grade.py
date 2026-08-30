@@ -458,9 +458,13 @@ def test_pdf_and_page(client):
     assert body.startswith(b"%PDF")
     client.get("/pdf/Nobody", expect=404)
     client.get("/pdf/..%2Fmanifest.json", expect=404)   # no traversal
-    page = client.get("/")
+    page = client.get("/grading")
     assert b"hwGenie" in page
     assert b"katex" in page
+    # the app's home page is course management
+    home = client.get("/")
+    assert b"Update All Courses" in home
+    assert client.get("/courses") == home   # old URL still works
 
 
 def test_manifest_and_icons(client):
@@ -496,8 +500,8 @@ def test_watchdog_decision():
 # ------------------------------------------------------------------ picker --
 
 def test_picker_flow(picker_client, grading_folder):
-    # nothing open: / serves the picker, grading APIs refuse politely
-    page = picker_client.get("/")
+    # nothing open: /grading serves the picker, APIs refuse politely
+    page = picker_client.get("/grading")
     assert b"Pick the assignment" in page
     err = picker_client.get("/api/state", expect=409)
     assert "no assignment open" in err["error"]
@@ -508,12 +512,12 @@ def test_picker_flow(picker_client, grading_folder):
     # opening it switches to the grading app and records a recent
     r = picker_client.post("/api/open", {"path": str(grading_folder)})
     assert r["ok"] is True
-    assert b"hwGenie" in picker_client.get("/")
+    assert b"katex" in picker_client.get("/grading")   # grader now
     assert picker_client.get("/api/state")["n_parts"] == 3
     assert picker_client.get("/api/scan")["recents"] == [str(grading_folder)]
     # closing returns to the picker
     picker_client.post("/api/close", {})
-    assert b"Pick the assignment" in picker_client.get("/")
+    assert b"Pick the assignment" in picker_client.get("/grading")
 
 
 def test_picker_open_errors(picker_client, tmp_path):
