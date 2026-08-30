@@ -33,7 +33,7 @@ V2_END = re.compile(r"^%\s*={2,}\s*$")
 KV_LINE = re.compile(r"^%\s*([A-Za-z][\w-]*)\s*=\s*(.*?)\s*$")
 LEGACY_START = re.compile(r"^%\s*Problem Set Data\s*$", re.IGNORECASE)
 # LaTeX-variable metadata (defined in hwgenie.sty): \hwnumber{3} etc.
-HWCMD_RE = re.compile(r"\\hw(type|number|title|solutions|release)\s*\{([^{}]*)\}")
+HWCMD_RE = re.compile(r"\\hw(type|number|title|solutions|release|due)\s*\{([^{}]*)\}")
 
 
 class MetadataError(ValueError):
@@ -49,6 +49,7 @@ class Metadata:
     title: Optional[str] = None
     solutions_release: Optional[str] = None  # date string, "manual", or "released"
     release: Optional[str] = None  # gate for the whole assignment (None = live)
+    due: Optional[str] = None      # display text, e.g. "Friday, Sep 4 at 11:59pm"
     legacy_path: Optional[str] = None
     fmt: str = "v2"      # "v2" or "legacy"
     span: Tuple[int, int] = (0, 0)  # char span of the block (for removal)
@@ -143,6 +144,7 @@ def _build(raw: dict, fmt: str, span: Tuple[int, int]) -> Metadata:
         title=raw.get("title"),
         solutions_release=raw.get("solutions"),
         release=raw.get("release"),
+        due=raw.get("due"),
         legacy_path=raw.get("path"),
         fmt=fmt,
         span=span,

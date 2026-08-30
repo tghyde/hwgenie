@@ -219,8 +219,8 @@ def env_unwrap_edits(text: str, nodes, names) -> List[Edit]:
 
 FOLD_RE = re.compile(r"\\fold\{([^{}]*)\}")
 HWMETA_CMD_RE = re.compile(
-    r"^[ \t]*\\hw(?:release|solutions|type)\{[^{}]*\}[^\n]*\n?"
-    r"|\\hw(?:release|solutions|type)\{[^{}]*\}",
+    r"^[ \t]*\\hw(?:release|solutions|type|due)\{[^{}]*\}[^\n]*\n?"
+    r"|\\hw(?:release|solutions|type|due)\{[^{}]*\}",
     re.MULTILINE,
 )
 
@@ -245,8 +245,8 @@ def foldeq_edits(text: str, nodes) -> List[Edit]:
 
 
 def metadata_command_edits(masked_text: str) -> List[Edit]:
-    """Remove \\hwrelease/\\hwsolutions/\\hwtype from the submission — build
-    metadata that would otherwise need no-op definitions in the student
+    """Remove \\hwrelease/\\hwsolutions/\\hwtype/\\hwdue from the submission —
+    build metadata that would otherwise need no-op definitions in the student
     preamble.  (\\hwnumber/\\hwtitle stay: they drive numbering and the
     title block.)"""
     return [(m.start(), m.end(), "") for m in HWMETA_CMD_RE.finditer(masked_text)]

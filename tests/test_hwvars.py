@@ -179,6 +179,57 @@ def test_header_marker_still_uses_banner():
     assert "\\hwvariant" not in v["solutions"]
 
 
+DUE = "Friday, September 4th at 11:59pm"
+
+
+def _due_doc() -> str:
+    return doc().replace(
+        "\\hwtitle{Congruences}\n",
+        f"\\hwtitle{{Congruences}}\n\\hwdue{{{DUE}}}\n",
+    )
+
+
+def test_hwdue_parsed_into_metadata():
+    m = parse_metadata(_due_doc())
+    assert m.due == DUE
+    # comment-block form works too
+    m2 = parse_metadata(f"%===hwgenie===\n% number = 4\n% due = {DUE}\n%====\n")
+    assert m2.due == DUE
+
+
+def test_hwdue_stripped_from_submission_only():
+    v = make_variants(_due_doc())
+    assert "\\hwdue" not in v["submission"]  # student preamble has no \hwdue
+    # PDF variants keep it: the sty shows/hides it by variant
+    assert f"\\hwdue{{{DUE}}}" in v["handout"]
+    assert f"\\hwdue{{{DUE}}}" in v["solutions"]
+    assert f"\\hwdue{{{DUE}}}" in v["solutions_web"]
+
+
+def test_hwdue_on_site_pages(tmp_path):
+    (tmp_path / "course.yml").write_text(
+        "course: Math 261\nsemester: Fall 2025\n"
+    )
+    (tmp_path / "hwgenie.sty").write_text(STY)
+    d = tmp_path / "source" / "ps04"
+    d.mkdir(parents=True)
+    (d / "ps04.tex").write_text(
+        _due_doc().replace("\\hwsolutions{2025-10-20}", "\\hwsolutions{released}")
+    )
+    result = build_site(tmp_path, compile_pdfs=False, today=date(2025, 10, 1))
+    assert result.ok, result.errors
+    site = tmp_path / "site"
+    handout = (site / "ps" / "4" / "index.html").read_text()
+    assert f'<p class="due"><span class="due-label">Due</span>{DUE}</p>' in handout
+    # index card: due date rides on the title line
+    index = (site / "index.html").read_text()
+    assert f'<span class="card-due">Due {DUE}</span>' in index
+    # solutions page carries no due line; the macro never leaks into the body
+    solutions = (site / "ps" / "4" / "solutions.html").read_text()
+    assert 'class="due"' not in solutions
+    assert "hwdue" not in handout and "hwdue" not in solutions
+
+
 def test_no_metadata_still_errors():
     with pytest.raises(MetadataError, match="No metadata"):
         parse_metadata("\\documentclass{article}\\begin{document}\\end{document}")

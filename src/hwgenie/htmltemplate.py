@@ -76,6 +76,19 @@ header.doc h1 {
   padding: 1.2rem 2rem;
   background: var(--card-bg);
 }
+header.doc p.due {
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: .95rem;
+  font-weight: 600;
+  color: var(--accent);
+  margin: .55rem 0 0;
+}
+header.doc p.due .due-label {
+  font-size: .8rem;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  margin-right: .45em;
+}
 .badge {
   display: inline-block;
   margin-top: .8rem;
@@ -704,8 +717,14 @@ def render_page(
     custom_css: str = "",
     favicon: str = "",
     banner: str = "",
+    due: str = "",
 ) -> str:
     badge = '<div><span class="badge">Solutions</span></div>' if solutions else ""
+    due_html = (
+        f'<p class="due"><span class="due-label">Due</span>'
+        f"{html_mod.escape(due)}</p>"
+        if due else ""
+    )
     nav_html = f'<nav class="site">{nav}</nav>' if nav else ""
     css_link = (
         f'<link rel="stylesheet" href="{custom_css}">' if custom_css else ""
@@ -717,6 +736,7 @@ def render_page(
         f'<header class="doc">\n'
         f'<p class="course">{course_line}</p>\n'
         f"<h1>{heading}</h1>\n"
+        f"{due_html}\n"
         f"{badge}\n"
         f"</header>"
     )

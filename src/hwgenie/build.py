@@ -284,6 +284,7 @@ def build_html(
         custom_css=custom_css,
         favicon=favicon,
         banner=banner,
+        due="" if solutions_page else latex_plain(meta.due or ""),
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(page, encoding="utf-8")

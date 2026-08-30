@@ -523,8 +523,20 @@ INDEX_CSS = """
 .assignment h2 {
   font-size: 1.1rem;
   margin: 0 0 .35rem;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: .2rem .9rem;
+  flex-wrap: wrap;
 }
 .assignment h2 a { color: var(--fg); }
+.assignment .card-due {
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: .8rem;
+  font-weight: 600;
+  color: var(--accent);
+  white-space: nowrap;
+}
 .assignment h2 a:hover { background: var(--hover-bg); }
 .assignment .links {
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -573,6 +585,12 @@ def render_index(
     heading = f"{course}: {title}" if title else course
     sub = " · ".join(x for x in (semester, instructor) if x)
 
+    def due_span(a) -> str:
+        # \hwdue{...} → right-aligned due date on the card's title line.
+        if not a.meta.due:
+            return ""
+        return f'<span class="card-due">Due {e(latex_plain(a.meta.due))}</span>'
+
     problemsets = [a for a in assignments if a.meta.doc_type == "problemset"]
     lessons = [a for a in assignments if a.meta.doc_type == "lesson"]
     syllabi = [a for a in assignments if a.meta.doc_type == "syllabus"]
@@ -598,7 +616,7 @@ def render_index(
         pdf = _page_pdf_name(a.meta, _slug(a.meta.number))
         top_cards.append(
             f'<div class="assignment">\n'
-            f'<h2><a href="{a.rel_url}">{label}</a></h2>\n'
+            f'<h2><a href="{a.rel_url}">{label}</a>{due_span(a)}</h2>\n'
             f'<div class="links">'
             f'{view_box(a.rel_url, f"Handout {num}" if num else label)} '
             f'{file_box(f"{a.rel_url}{pdf}", "Handout PDF")}</div>\n</div>'
@@ -625,7 +643,7 @@ def render_index(
         pdf = _page_pdf_name(a.meta, slug)
         lesson_cards.append(
             f'<div class="assignment">\n'
-            f'<h2><a href="{a.rel_url}">{label}</a></h2>\n'
+            f'<h2><a href="{a.rel_url}">{label}</a>{due_span(a)}</h2>\n'
             f'<div class="links">'
             f'{view_box(a.rel_url, f"Lesson {num}")} '
             f'{file_box(f"{a.rel_url}{pdf}", "Lesson PDF")}</div>\n</div>'
@@ -652,7 +670,7 @@ def render_index(
             )
         cards.append(
             f'<div class="assignment">\n'
-            f'<h2><a href="{a.rel_url}">{label}</a></h2>\n'
+            f'<h2><a href="{a.rel_url}">{label}</a>{due_span(a)}</h2>\n'
             f'<div class="links">{" ".join(links)}</div>\n</div>'
         )
 
