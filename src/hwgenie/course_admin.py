@@ -584,6 +584,7 @@ function esc(s) {
 
 let state = null;
 let timer = null;
+let scannedOnLoad = false;   // each page load re-queries GitHub once
 
 function rel(epoch) {
   const s = Math.max(0, Date.now() / 1000 - epoch);
@@ -717,8 +718,8 @@ async function poll() {
   } catch (e) { return; }
   render();
   clearTimeout(timer);
-  if (state.phase !== "idle") timer = setTimeout(poll, 1000);
-  else if (!state.data) start("/courses/api/refresh");
+  if (state.phase !== "idle") { scannedOnLoad = true; timer = setTimeout(poll, 1000); }
+  else if (!state.data || !scannedOnLoad) { scannedOnLoad = true; start("/courses/api/refresh"); }
   else timer = setTimeout(poll, 30000);   // keep the stamp honest
 }
 
