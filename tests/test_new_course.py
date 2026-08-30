@@ -69,10 +69,12 @@ def test_fill_placeholders_leaves_missing_values(tmp_path: Path):
 def _fake_course(tmp_path: Path) -> Path:
     (tmp_path / "source" / "lessons").mkdir(parents=True)
     (tmp_path / "source" / "problem-sets" / "ps01").mkdir(parents=True)
+    (tmp_path / "readings.tex").write_text("% \\reading example\n")
     (tmp_path / "static").mkdir()
     (tmp_path / "static" / "intro.html").write_text(
         '<p>Hi</p>\n<nav class="site" style="justify-content:center">\n'
         '  <a class="filebox viewbox" href="#handouts">Handouts</a>\n'
+        '  <a class="filebox viewbox" href="#readings">Readings</a>\n'
         '  <a class="filebox viewbox" href="#lessons">Lessons</a>\n'
         '  <a class="filebox viewbox" href="#problem-sets">Problem Sets</a>\n'
         "</nav>\n")
@@ -80,17 +82,31 @@ def _fake_course(tmp_path: Path) -> Path:
 
 
 def test_disable_sections_default_keeps_everything(tmp_path: Path):
+    # Readings are opt-in: the default removes the file and its nav button
+    # but always keeps lessons and problem sets.
     from hwgenie.new_course import disable_sections
     root = _fake_course(tmp_path)
-    assert disable_sections(root) == []
+    assert disable_sections(root) == ["reading assignments"]
     assert (root / "source" / "lessons").is_dir()
     assert (root / "source" / "problem-sets").is_dir()
+    assert not (root / "readings.tex").exists()
+    intro = (root / "static" / "intro.html").read_text()
+    assert "#readings" not in intro
+    assert "#lessons" in intro and "#problem-sets" in intro
+
+
+def test_enable_readings_keeps_file_and_button(tmp_path: Path):
+    from hwgenie.new_course import disable_sections
+    root = _fake_course(tmp_path)
+    assert disable_sections(root, readings=True) == []
+    assert (root / "readings.tex").is_file()
+    assert "#readings" in (root / "static" / "intro.html").read_text()
 
 
 def test_disable_lessons(tmp_path: Path):
     from hwgenie.new_course import disable_sections
     root = _fake_course(tmp_path)
-    removed = disable_sections(root, lessons=False)
+    removed = disable_sections(root, lessons=False, readings=True)
     assert removed == ["lessons"]
     assert not (root / "source" / "lessons").exists()
     assert (root / "source" / "problem-sets").is_dir()
@@ -102,7 +118,8 @@ def test_disable_lessons(tmp_path: Path):
 def test_disable_both_sections(tmp_path: Path):
     from hwgenie.new_course import disable_sections
     root = _fake_course(tmp_path)
-    removed = disable_sections(root, lessons=False, problem_sets=False)
+    removed = disable_sections(root, lessons=False, problem_sets=False,
+                               readings=True)
     assert sorted(removed) == ["lessons", "problem sets"]
     intro = (root / "static" / "intro.html").read_text()
     assert "#lessons" not in intro and "#problem-sets" not in intro

@@ -84,6 +84,7 @@ def start_create(data: dict) -> dict:
         wait_for_build=bool(data.get("wait_for_build", True)),
         use_problem_sets=bool(data.get("use_problem_sets", True)),
         use_lessons=bool(data.get("use_lessons", True)),
+        use_readings=bool(data.get("use_readings", False)),
     )
     threading.Thread(target=_worker, args=(req,), daemon=True).start()
     return {"ok": True}
@@ -306,9 +307,15 @@ __NAV__
       <input type="checkbox" id="lessons" checked>
       <label for="lessons">Lessons</label>
     </div>
+    <div class="check">
+      <input type="checkbox" id="readings">
+      <label for="readings">Reading assignments</label>
+    </div>
     <div class="hint" style="margin-left:1.6rem">Handouts and the syllabus
       are always included. Uncheck a section this course won&rsquo;t use &mdash;
-      its folder and home-page section are left out entirely.</div>
+      its folder and home-page section are left out entirely. Reading
+      assignments (textbook links with due dates, edited in
+      <code>readings.tex</code>) are off unless checked.</div>
     <div class="check">
       <input type="checkbox" id="deploy" checked>
       <label for="deploy">Publish the site right away</label>
@@ -384,6 +391,7 @@ __NAV__
       wait_for_build: $("wait").checked,
       use_problem_sets: $("psets").checked,
       use_lessons: $("lessons").checked,
+      use_readings: $("readings").checked,
     };
     await fetch("/new-course/create",
                 {method: "POST", body: JSON.stringify(body)});

@@ -56,8 +56,10 @@ from .htmltemplate import (
     scrollbar_html,
     view_box,
 )
+from .htmlgen import HtmlConverter
 from .katexmacros import extract_macros
 from .metadata import Metadata, MetadataError, latex_plain, parse_metadata
+from .readings import load_readings
 from .themes import theme_from_config
 from . import texscan
 
@@ -258,6 +260,14 @@ def build_site(
                 handout_files.append(
                     (f.name, [f"{f.name}/{g.name}" for g in grouped]))
 
+    # Reading assignments: repo-root readings.tex, rendered as a home-page
+    # section (file order = display order; the file is kept newest-first).
+    readings: List[Tuple[str, str]] = []
+    for r in load_readings(repo_root):
+        conv = HtmlConverter(r.body, extra_preamble=extra_preamble)
+        readings.append((r.due, conv.convert()))
+        result.warnings.extend(f"readings.tex: {w}" for w in conv.warnings)
+
     macro_pool: Dict[str, str] = {}
     if extra_preamble:
         macro_pool.update(extract_macros(extra_preamble))
@@ -276,7 +286,7 @@ def build_site(
         cfg, result.assignments, macro_pool, theme=theme,
         custom_css="custom.css" if custom_css_on else "",
         intro_html=intro_html, handout_files=handout_files,
-        banner=banner, favicon=favicon,
+        banner=banner, favicon=favicon, readings=readings,
     )
     (out / "index.html").write_text(index, encoding="utf-8")
 
@@ -546,6 +556,27 @@ INDEX_CSS = """
   gap: .3rem .6rem;
 }
 .assignment .links .sep-dot, .assignment .links .pending { color: var(--muted); }
+/* Reading assignments: cards fold to just the due date; the newest
+   (first) entry ships open. */
+details.reading { scroll-margin-top: 4.5rem; }
+details.reading > summary {
+  cursor: pointer;
+  list-style: none;
+  font-size: 1.1rem;
+  font-weight: 700;
+}
+details.reading > summary:hover { background: var(--hover-bg); }
+details.reading > summary::-webkit-details-marker { display: none; }
+details.reading > summary::before {
+  content: "▾";
+  color: var(--accent);
+  margin-right: .55em;
+  display: inline-block;
+  transition: transform .15s;
+}
+details.reading:not([open]) > summary::before { transform: rotate(-90deg); }
+details.reading > .reading-body { margin-top: .55rem; }
+details.reading > .reading-body > :last-child { margin-bottom: 0; }
 /* Section headers: centered, flanked by long dashes. */
 h2.index-head {
   display: flex;
@@ -574,6 +605,7 @@ def render_index(
     handout_files: Optional[List[Tuple[str, List[str]]]] = None,
     banner: str = "",
     favicon: str = "",
+    readings: Optional[List[Tuple[str, str]]] = None,
 ) -> str:
     if not theme:
         theme = theme_from_config(cfg)
@@ -644,6 +676,16 @@ def render_index(
             f'<div class="links">{boxes}</div>\n</div>'
         )
 
+    # Reading assignments fold to just their due-date line; only the first
+    # (newest — the file is kept newest-first) entry is open by default.
+    reading_cards = []
+    for k, (due, body_html) in enumerate(readings or []):
+        reading_cards.append(
+            f'<details class="assignment reading"{" open" if k == 0 else ""}>\n'
+            f"<summary>{e(latex_plain(due))}</summary>\n"
+            f'<div class="reading-body">\n{body_html}\n</div>\n</details>'
+        )
+
     lesson_cards = []
     for a in lessons:
         num = e(a.meta.number)
@@ -693,6 +735,11 @@ def render_index(
             '<h2 class="index-head" id="handouts">Handouts</h2>\n'
             + "\n".join(top_cards)
         )
+    if reading_cards:
+        sections.append(
+            '<h2 class="index-head" id="readings">Reading Assignments</h2>\n'
+            + "\n".join(reading_cards)
+        )
     if lesson_cards:
         sections.append(
             '<h2 class="index-head" id="lessons">Lessons</h2>\n'
@@ -709,6 +756,8 @@ def render_index(
     jumps = []
     if top_cards:
         jumps.append(("Handouts", "handouts"))
+    if reading_cards:
+        jumps.append(("Readings", "readings"))
     if lesson_cards:
         jumps.append(("Lessons", "lessons"))
     if cards:

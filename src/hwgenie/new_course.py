@@ -75,10 +75,13 @@ def fill_placeholders(root: Path, values: Dict[str, str]) -> List[Path]:
 
 
 def disable_sections(root: Path, *, problem_sets: bool = True,
-                     lessons: bool = True) -> List[str]:
-    """Remove folders + home-page nav buttons for sections a course
-    doesn't use. Handouts/syllabus are always kept."""
+                     lessons: bool = True, readings: bool = False) -> List[str]:
+    """Remove folders/files + home-page nav buttons for sections a course
+    doesn't use. Handouts/syllabus are always kept; reading assignments
+    are opt-in (default off)."""
     targets = []
+    if not readings:
+        targets.append(("reading assignments", "readings.tex", "#readings"))
     if not lessons:
         targets.append(("lessons", "source/lessons", "#lessons"))
     if not problem_sets:
@@ -86,9 +89,14 @@ def disable_sections(root: Path, *, problem_sets: bool = True,
                         "#problem-sets"))
     removed = []
     intro = root / "static" / "intro.html"
-    for label, folder, anchor in targets:
-        shutil.rmtree(root / folder, ignore_errors=True)
-        removed.append(label)
+    for label, target, anchor in targets:
+        path = root / target
+        if path.is_dir():
+            shutil.rmtree(path, ignore_errors=True)
+            removed.append(label)
+        elif path.is_file():
+            path.unlink()
+            removed.append(label)
         if intro.is_file():
             lines = intro.read_text(encoding="utf-8").splitlines(keepends=True)
             kept = [ln for ln in lines if f'href="{anchor}"' not in ln]
@@ -133,6 +141,7 @@ class CreateRequest:
     wait_for_build: bool = True    # poll the first Actions run
     use_problem_sets: bool = True  # keep the problem-sets section
     use_lessons: bool = True       # keep the lessons section
+    use_readings: bool = False     # keep the reading-assignments section
     template: str = DEFAULT_TEMPLATE
 
     def resolved_repo(self) -> str:
@@ -248,7 +257,8 @@ def _create_course(req: CreateRequest, log) -> CreateResult:
 
     for section in disable_sections(local,
                                     problem_sets=req.use_problem_sets,
-                                    lessons=req.use_lessons):
+                                    lessons=req.use_lessons,
+                                    readings=req.use_readings):
         log(f"  removed {section} (section turned off)")
 
     log("Committing and pushing course data...")
@@ -391,6 +401,7 @@ def run_new_course(args) -> int:
         wait_for_build=not args.no_wait,
         use_problem_sets=not args.no_problem_sets,
         use_lessons=not args.no_lessons,
+        use_readings=args.readings,
         template=args.template,
     )
     result = create_course(req, print)
@@ -435,6 +446,10 @@ def add_parser(sub) -> None:
     p.add_argument("--no-lessons", action="store_true",
                    help="This course has no lessons (removes the folder "
                         "and the home-page section).")
+    p.add_argument("--readings", action="store_true",
+                   help="This course posts reading assignments (keeps "
+                        "readings.tex and the home-page section; off by "
+                        "default).")
     p.add_argument("--no-deploy", action="store_true",
                    help="Do not set DEPLOY_PAGES (site stays offline).")
     p.add_argument("--no-wait", action="store_true",

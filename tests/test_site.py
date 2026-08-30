@@ -275,3 +275,55 @@ def test_dropped_handout_due_from_course_yml(repo):
     assert ('<h2>Exam Review<span class="card-due">'
             'Due Monday at noon</span></h2>') in index
     assert "<h2>No Due</h2>" in index
+
+
+def test_readings_section(repo):
+    (repo / "handouts").mkdir()
+    (repo / "handouts" / "notes.pdf").write_bytes(b"%PDF fake")
+    (repo / "readings.tex").write_text(
+        "% keep newest first\n"
+        "\\reading{Wednesday, September 9}{\n"
+        "  Read \\href{https://example.com/ch2}{Chapter 2} about $x^2$.\n"
+        "}\n"
+        "\\reading{Friday, September 4}{Read \\emph{Chapter 1}.}\n",
+        encoding="utf-8",
+    )
+    result = build_site(repo, compile_pdfs=False, today=date(2025, 10, 15))
+    assert result.ok, result.errors
+    index = (result.out_dir / "index.html").read_text()
+
+    # Section header after Handouts, before Problem Sets; sticky-nav jump.
+    head = '<h2 class="index-head" id="readings">Reading Assignments</h2>'
+    assert head in index
+    assert index.index('id="handouts"') < index.index(head)
+    assert index.index(head) < index.index('id="problem-sets"')
+    assert '<a href="#readings">Readings</a>' in index
+
+    # Newest (first in file) card is open, at the top; the rest fold to
+    # just their due-date summary.
+    first = index.index('<details class="assignment reading" open>')
+    second = index.index('<details class="assignment reading">')
+    assert first < second
+    assert index.count('<details class="assignment reading" open>') == 1
+    assert index.index("<summary>Wednesday, September 9</summary>") < \
+        index.index("<summary>Friday, September 4</summary>")
+    # Descriptions are converted LaTeX: links, emphasis, math for KaTeX.
+    assert '<a href="https://example.com/ch2">Chapter 2</a>' in index
+    assert "<em>Chapter 1</em>" in index
+    assert "$x^2$" in index
+
+
+def test_no_readings_section_without_entries(repo):
+    # No file, and a skeleton whose only entry is commented out, both add
+    # nothing to the page.
+    result = build_site(repo, compile_pdfs=False, today=date(2025, 10, 15))
+    assert 'id="readings"' not in (result.out_dir / "index.html").read_text()
+
+    (repo / "readings.tex").write_text(
+        "% \\reading{Friday}{Uncomment me to post the first assignment.}\n",
+        encoding="utf-8",
+    )
+    result = build_site(repo, compile_pdfs=False, today=date(2025, 10, 15))
+    index = (result.out_dir / "index.html").read_text()
+    assert 'id="readings"' not in index
+    assert "#readings" not in index
