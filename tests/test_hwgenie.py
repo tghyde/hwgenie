@@ -282,6 +282,58 @@ def test_handout_variant_injected_modern_docs():
     assert "\\hwvariant{Submission}" in v["submission"]
 
 
+def test_foldeq_becomes_equation_in_submission_only():
+    v = variants_of(
+        "\\begin{problem}\nShow that\n"
+        "\\begin{foldeq*}\n"
+        "    a + b &= 2j + 2k + 2 \\fold{=} 2(j + k + 1).\n"
+        "\\end{foldeq*}\n"
+        "\\begin{foldeq}\n"
+        "    x &= y \\fold{\\in} S.\n"
+        "\\end{foldeq}\n"
+        "\\end{problem}\n"
+    )
+    sub = v["submission"]
+    assert "foldeq" not in sub and "\\fold{" not in sub and "&" not in sub
+    assert "\\begin{equation*}\n    a + b = 2j + 2k + 2 = 2(j + k + 1).\n\\end{equation*}" in sub
+    assert "\\begin{equation}\n    x = y \\in S.\n\\end{equation}" in sub
+    # Other variants keep the fold markers for the HTML converter.
+    assert "\\begin{foldeq*}" in v["handout"] and "\\fold{=}" in v["solutions"]
+
+
+def test_hw_metadata_commands_stripped_from_submission_only():
+    doc = (
+        "\\documentclass{article}\n\\usepackage{hwgenie}\n"
+        "\\hwnumber{1}\n\\hwtitle{The Beginning}\n"
+        "\\hwrelease{no}   % flip to yes\n\\hwsolutions{no}\n\\hwtype{problemset}\n"
+        "\\begin{document}\n"
+        "\\begin{problem}\nA.\n\\end{problem}\n\\end{document}\n"
+    )
+    v = make_variants(doc)
+    sub = v["submission"]
+    for macro in ("\\hwrelease", "\\hwsolutions", "\\hwtype"):
+        assert macro not in sub
+        assert macro in v["solutions"]
+    # Numbering/title commands survive — the student preamble defines them.
+    assert "\\hwnumber{1}" in sub and "\\hwtitle{The Beginning}" in sub
+
+
+def test_pdfonly_unwrapped_in_submission():
+    v = variants_of(
+        "\\begin{problem}\nP.\n\\end{problem}\n"
+        "\\begin{pdfonly}\n"
+        "Print-only note.\n"
+        "\\begin{solution}\nSecret.\n\\end{solution}\n"
+        "\\end{pdfonly}\n"
+    )
+    sub = v["submission"]
+    assert "pdfonly" not in sub
+    assert "Print-only note." in sub
+    # Edits inside the unwrapped body still apply.
+    assert "Secret." not in sub and "%Write your solution here" in sub
+    assert "\\begin{pdfonly}" in v["handout"]
+
+
 def test_hwpreview_stripped_from_all_variants():
     doc = (
         "\\documentclass{article}\n\\usepackage{hwgenie}\n"

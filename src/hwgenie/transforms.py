@@ -160,10 +160,17 @@ def inline_sty(text: str, search_dirs: Sequence[Path]) -> str:
             "\\InputIfFileExists{coursedata}{}{}",
             cd_path.read_text(encoding="utf-8").strip("\n"),
         )
+    end = m.end()
+    if pre_path is not None:
+        # The student preamble hard-codes the SUBMISSION badge, so the
+        # injected \hwvariant{...} line is dead weight — swallow it.
+        vm = re.match(r"(?:[ \t]*\n)?[ \t]*\\hwvariant\{[^{}]*\}", text[end:])
+        if vm:
+            end += vm.end()
     return (
         text[: m.start()]
         + sty.strip("\n")
-        + text[m.end():]
+        + text[end:]
     )
 
 
@@ -182,6 +189,67 @@ def env_removal_edits(text: str, nodes, names) -> List[Edit]:
         (env.pos, env.pos + env.len, "")
         for env in texscan.iter_envs(nodes, tuple(names))
     ]
+
+
+def env_unwrap_edits(text: str, nodes, names) -> List[Edit]:
+    """Drop an environment's \\begin/\\end wrapper but keep its body (e.g.
+    pdfonly in the submission, which would otherwise need a no-op definition
+    in the student preamble).  Emits separate edits for the two wrapper
+    tokens so edits inside the body still apply."""
+    edits: List[Edit] = []
+    for env in texscan.iter_envs(nodes, tuple(names)):
+        start, end = env.pos, env.pos + env.len
+        name = env.environmentname
+        bm = re.compile(
+            r"\\begin\{" + re.escape(name) + r"\}[ \t]*\n?").match(text, start)
+        if bm:
+            edits.append((start, bm.end(), ""))
+        etok = f"\\end{{{name}}}"
+        es = end - len(etok)
+        ls = es
+        while ls > 0 and text[ls - 1] in " \t":
+            ls -= 1
+        if ls > 0 and text[ls - 1] == "\n":
+            es = ls
+        edits.append((es, end, ""))
+    return edits
+
+
+# ------------------------------------------------------------------ foldeq
+
+FOLD_RE = re.compile(r"\\fold\{([^{}]*)\}")
+HWMETA_CMD_RE = re.compile(
+    r"^[ \t]*\\hw(?:release|solutions|type)\{[^{}]*\}[^\n]*\n?"
+    r"|\\hw(?:release|solutions|type)\{[^{}]*\}",
+    re.MULTILINE,
+)
+
+
+def foldeq_edits(text: str, nodes) -> List[Edit]:
+    """Rewrite foldeq/foldeq* as plain equation/equation* for the student
+    submission.  The fold markers exist so the website can re-break long
+    equations on narrow screens; in the student file \\fold{x} collapses to
+    x and the align-style & is dropped (foldeq bodies are single-row)."""
+    edits: List[Edit] = []
+    for env in texscan.iter_envs(nodes, ("foldeq", "foldeq*")):
+        start, end = env.pos, env.pos + env.len
+        name = env.environmentname
+        new = "equation*" if name.endswith("*") else "equation"
+        seg = text[start:end]
+        seg = seg.replace(f"\\begin{{{name}}}", f"\\begin{{{new}}}", 1)
+        seg = seg.replace(f"\\end{{{name}}}", f"\\end{{{new}}}")
+        seg = FOLD_RE.sub(lambda m: m.group(1), seg)
+        seg = seg.replace("&", "")
+        edits.append((start, end, seg))
+    return edits
+
+
+def metadata_command_edits(masked_text: str) -> List[Edit]:
+    """Remove \\hwrelease/\\hwsolutions/\\hwtype from the submission — build
+    metadata that would otherwise need no-op definitions in the student
+    preamble.  (\\hwnumber/\\hwtitle stay: they drive numbering and the
+    title block.)"""
+    return [(m.start(), m.end(), "") for m in HWMETA_CMD_RE.finditer(masked_text)]
 
 
 # ------------------------------------------------------------------- tables
