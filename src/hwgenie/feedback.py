@@ -54,6 +54,7 @@ class ReturnResult:
     pdf_failures: list[str]
     warnings: list[str]
     worksheet: dict | None = None   # {"out", "filled", "locked", "unmatched"}
+    extra_credit: dict | None = None   # {"out", "rows", "no_email"}
 
     @property
     def ok(self) -> bool:
@@ -202,6 +203,30 @@ def _ordered_comments(tex: str | None, comments: list) -> list:
                                  key=lambda ic: key(ic))]
 
 
+def _split_totals(app, data: dict) -> tuple[float, float]:
+    """(base, extra-credit) points earned.  EC parts stay out of the base
+    total because Moodle caps an assignment grade at the activity max —
+    EC is returned to Moodle via a separate gradebook item."""
+    base = ec = 0.0
+    for n, rp in enumerate(app.rubric, start=1):
+        s = data["parts"][str(n)]["score"]
+        if s is None:
+            continue
+        if rp.ec:
+            ec += s
+        else:
+            base += s
+    return base, ec
+
+
+def _base_out_of(app) -> float:
+    return sum(rp.max or 0 for rp in app.rubric if not rp.ec)
+
+
+def _has_ec(app) -> bool:
+    return any(rp.ec for rp in app.rubric)
+
+
 def _part_pct(app, data: dict, n: int) -> float | None:
     p = data["parts"][str(n)]
     rp = app.rubric[n - 1]
@@ -240,9 +265,8 @@ def _score_overview(app, data: dict) -> str:
 def _feedback_html(app, unit: dict, data: dict, title: str,
                    stmts: dict, tmacros: dict) -> str:
     slug = unit["slug"]
-    total = sum(p["score"] or 0 for p in data["parts"].values()
-                if p["score"] is not None)
-    out_of = sum(rp.max or 0 for rp in app.rubric)
+    total, ec_total = _split_totals(app, data)
+    out_of = _base_out_of(app)
     cdata: dict = {}
     sections = []
     for n, rp in enumerate(app.rubric, start=1):
@@ -272,10 +296,13 @@ def _feedback_html(app, unit: dict, data: dict, title: str,
         stoggle = ('<button class="stoggle">▸ Problem</button>'
                    if stmt else "")
         pstmt = (f'<div class="pstmt" hidden>{stmt}</div>' if stmt else "")
+        ecb = (' <span class="ecbadge" title="Extra credit — counted '
+               'separately from the assignment total">extra credit</span>'
+               if rp.ec else "")
         sections.append(f"""
   <section class="part" data-n="{n}" id="part-{n}">
     <div class="part-head">
-      <span class="plabel">Problem {html_mod.escape(rp.label)}</span>
+      <span class="plabel">Problem {html_mod.escape(rp.label)}</span>{ecb}
       {stoggle}
       <span class="sp"></span>
       <span class="pscore">{score} / {mx}</span>
@@ -301,7 +328,9 @@ def _feedback_html(app, unit: dict, data: dict, title: str,
         .replace("__KATEX__", KATEX_VERSION) \
         .replace("__TITLE__", html_mod.escape(title)) \
         .replace("__NAME__", html_mod.escape(display_name(slug))) \
-        .replace("__TOTAL__", f"{_fmt_score(total)} / {_fmt_score(out_of)}") \
+        .replace("__TOTAL__", f"{_fmt_score(total)} / {_fmt_score(out_of)}"
+                 + (f" (+{_fmt_score(ec_total)} extra credit)"
+                    if ec_total else "")) \
         .replace("__RECON__", recon) \
         .replace("__OVERVIEW__", _score_overview(app, data)) \
         .replace("__JUMPS__", jumps) \
@@ -324,11 +353,10 @@ def _feedback_tex(app, unit: dict, data: dict, title: str) -> str:
             r"\usepackage{amsmath, amssymb}",
             r"\usepackage{fullpage}",
         ])
-    total = sum(p["score"] or 0 for p in data["parts"].values()
-                if p["score"] is not None)
-    out_of = sum(rp.max or 0 for rp in app.rubric)
+    total, ec_total = _split_totals(app, data)
+    out_of = _base_out_of(app)
     rows = "\n".join(
-        rf"{_tex_escape(rp.label)} & "
+        rf"{_tex_escape(rp.label)}{' (extra credit)' if rp.ec else ''} & "
         rf"{_fmt_score(data['parts'][str(n)]['score']).replace('—', '--')} & "
         rf"{_fmt_score(rp.max)} \\"
         for n, rp in enumerate(app.rubric, start=1))
@@ -348,7 +376,9 @@ def _feedback_tex(app, unit: dict, data: dict, title: str) -> str:
         rf"{{\large {_tex_escape(title)}}}\\[.3em]",
         rf"{{\large {_tex_escape(display_name(unit['slug']))}}}\\[.5em]",
         rf"{{\large Total: {_fmt_score(total).replace('—', '--')} / "
-        rf"{_fmt_score(out_of)}}}",
+        rf"{_fmt_score(out_of)}"
+        + (rf" \ (+{_fmt_score(ec_total)} extra credit)" if ec_total else "")
+        + "}",
         r"\end{center}",
         r"\begin{center}",
         r"\begin{tabular}{lcc}",
@@ -439,12 +469,14 @@ def build_feedback(folder: Path, out: Path | None = None, pdf: bool = False,
             for f in sorted(udir.iterdir()):
                 z.write(f, f"{unit['moodle_folder']}/{f.name}")
 
-    labels = [rp.label for rp in app.rubric]
+    has_ec = _has_ec(app)
+    labels = [rp.label + (" (EC)" if rp.ec else "") for rp in app.rubric]
     with (out_dir / "gradebook.csv").open("w", newline="") as f:
         w = csv.writer(f)
         w.writerow(["submission", "moodle_id", "student"] + labels +
-                   ["total", "out_of"])
-        out_of = sum(rp.max or 0 for rp in app.rubric)
+                   ["total", "out_of"] +
+                   (["extra_credit"] if has_ec else []))
+        out_of = _base_out_of(app)
         for unit in app.units:
             slug = unit["slug"]
             if slug not in exported:
@@ -452,12 +484,13 @@ def build_feedback(folder: Path, out: Path | None = None, pdf: bool = False,
             data = app.store.load(slug)
             scores = [data["parts"][str(n)]["score"]
                       for n in range(1, len(app.rubric) + 1)]
-            total = sum(s for s in scores if s is not None)
+            total, ec_total = _split_totals(app, data)
             for member in _unit_members(app, slug):
                 w.writerow([slug, unit["moodle_id"], member] +
                            ["" if s is None else _fmt_score(s)
                             for s in scores] +
-                           [_fmt_score(total), _fmt_score(out_of)])
+                           [_fmt_score(total), _fmt_score(out_of)] +
+                           ([_fmt_score(ec_total)] if has_ec else []))
 
     if pdf and shutil.which("pdflatex") is None:
         warnings.append("pdflatex not found — no PDF sheets were produced")
@@ -483,9 +516,86 @@ def build_feedback(folder: Path, out: Path | None = None, pdf: bool = False,
                     + ", ".join(ws_info["unmatched"]))
         except GradeError as e:
             warnings.append(f"worksheet not filled: {e}")
+
+    ec_info = None
+    if has_ec:
+        ec_info = _write_extra_credit(app, exported, out_dir, ws)
+        if ec_info["no_email"]:
+            warnings.append(
+                f"extra-credit CSV: {ec_info['no_email']} row(s) have no "
+                "email address — drop the Moodle grading worksheet into the "
+                "grading folder and re-export (the gradebook import matches "
+                "students by email)")
     return ReturnResult(out_dir=out_dir, exported=exported, skipped=skipped,
                         pdf_failures=pdf_failures, warnings=warnings,
-                        worksheet=ws_info)
+                        worksheet=ws_info, extra_credit=ec_info)
+
+
+# ------------------------------------------------------------ extra credit --
+
+EXTRA_CREDIT_OUT = "extra-credit-upload.csv"
+
+
+def _worksheet_people(path: Path) -> dict:
+    """{moodle_id: {"email", "name"}} from a Moodle grading worksheet —
+    the source of the email addresses the gradebook CSV import matches
+    students by."""
+    try:
+        with open(path, newline="", encoding="utf-8-sig") as f:
+            reader = csv.reader(f)
+            header = next(reader, None)
+            if header is None:
+                return {}
+            rows = list(reader)
+    except OSError:
+        return {}
+
+    def col(name):
+        return header.index(name) if name in header else None
+
+    ci, ce, cn = col("Identifier"), col("Email address"), col("Full name")
+    if ci is None:
+        return {}
+    people: dict = {}
+    for row in rows:
+        m = re.search(r"\d+", row[ci]) if len(row) > ci else None
+        if not m:
+            continue
+        people[m.group(0)] = {
+            "email": row[ce] if ce is not None and len(row) > ce else "",
+            "name": row[cn] if cn is not None and len(row) > cn else "",
+        }
+    return people
+
+
+def _write_extra_credit(app, exported: list[str], out_dir: Path,
+                        ws: Path | None) -> dict:
+    """extra-credit-upload.csv: one row per exported submission with its
+    extra-credit points, formatted for Moodle's Grades → Import → CSV
+    (matched by email address) into a manual "extra credit" grade item.
+    Moodle assignments cannot exceed their maximum grade, so EC travels
+    via a separate gradebook item flagged Extra credit under Natural
+    aggregation."""
+    people = _worksheet_people(ws) if ws is not None else {}
+    out_path = Path(out_dir) / EXTRA_CREDIT_OUT
+    rows_written = no_email = 0
+    with out_path.open("w", newline="", encoding="utf-8-sig") as f:
+        w = csv.writer(f)
+        w.writerow(["Email address", "Full name", "Extra credit"])
+        for unit in app.units:
+            slug = unit["slug"]
+            if slug not in exported:
+                continue
+            data = app.store.load(slug)
+            _, ec_total = _split_totals(app, data)
+            person = people.get(unit["moodle_id"]) or {}
+            email = person.get("email", "")
+            if not email:
+                no_email += 1
+            w.writerow([email, person.get("name") or display_name(slug),
+                        _fmt_score(ec_total)])
+            rows_written += 1
+    return {"out": str(out_path), "rows": rows_written, "no_email": no_email}
 
 
 # --------------------------------------------------------- moodle worksheet --
@@ -529,7 +639,7 @@ def fill_worksheet(app, exported: list[str], out_dir: Path,
             "grading worksheet export?")
 
     by_id = {u["moodle_id"]: u for u in app.units}
-    out_of = sum(rp.max or 0 for rp in app.rubric)
+    out_of = _base_out_of(app)
     filled, locked, seen = 0, [], set()
     max_mismatch = None
     for row in rows:
@@ -542,8 +652,7 @@ def fill_worksheet(app, exported: list[str], out_dir: Path,
             locked.append(unit["slug"])
             continue
         data = app.store.load(unit["slug"])
-        total = sum(p["score"] for p in data["parts"].values()
-                    if p["score"] is not None)
+        total, _ = _split_totals(app, data)
         row[cg] = f"{total:.2f}"
         filled += 1
         if cmax is not None and max_mismatch is None:
@@ -603,6 +712,11 @@ def run_return(args: argparse.Namespace) -> int:
         print(f"  Worksheet:  {result.worksheet['out']} "
               f"({result.worksheet['filled']} grades filled — upload via "
               "the assignment's 'Upload grading worksheet')")
+    if result.extra_credit:
+        print(f"  Extra credit: {result.extra_credit['out']} "
+              f"({result.extra_credit['rows']} rows — import via Gradebook "
+              "→ Import → CSV into the extra-credit grade item, matched by "
+              "email)")
     if result.skipped:
         print(f"  ({len(result.skipped)} submissions had nothing graded; "
               "use --all to include them)")
@@ -710,6 +824,9 @@ FEEDBACK_PAGE = r"""<!doctype html>
     font-family: system-ui, sans-serif; background: var(--bar-bg);
     margin: -.8rem -1rem .6rem; padding: .45rem 1rem; }
   .plabel { font-weight: 700; font-size: .95rem; }
+  .ecbadge { font-size: .66rem; font-weight: 700; letter-spacing: .05em;
+    padding: .08rem .32rem; background: var(--accent); color: var(--bg);
+    white-space: nowrap; align-self: center; }
   .pscore { font-weight: 700; color: var(--sol-accent); }
   .stoggle { font: 600 .78rem/1.4 system-ui, sans-serif; border: none;
     cursor: pointer; background: transparent; color: var(--accent);

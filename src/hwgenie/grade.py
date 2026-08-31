@@ -35,12 +35,15 @@ Schema of ``grades/<slug>.json``::
     }
 
 ``rubric.yml`` (a tiny YAML subset, one line per solution box in template
-order; max points optional)::
+order; max points optional; a trailing ``ec`` marks the part as extra
+credit — its points are excluded from the assignment total and exported
+separately, since Moodle assignments cannot exceed their maximum grade)::
 
     parts:
     - 1.1: 4
     - 1.2: 4
     - 2.1a: 2
+    - 2.5: 3 ec
 
 ``groups.yml`` (group slug -> member names; a submission slug matching a
 group key fans its grade out to every member at export time)::
@@ -136,6 +139,7 @@ DEFAULT_MAX = 5
 class RubricPart:
     label: str
     max: float = DEFAULT_MAX
+    ec: bool = False   # extra credit: excluded from the base total
 
 
 def _parse_rubric(text: str) -> list[RubricPart]:
@@ -155,6 +159,11 @@ def _parse_rubric(text: str) -> list[RubricPart]:
                 label, maxval = maxval, ""
             label = label.strip().strip("\"'")
             maxval = maxval.split("#", 1)[0].strip()
+            ec = False
+            toks = maxval.split()
+            if toks and toks[-1].lower() == "ec":
+                ec = True
+                maxval = " ".join(toks[:-1])
             mx: float = DEFAULT_MAX
             if maxval:
                 try:
@@ -163,7 +172,7 @@ def _parse_rubric(text: str) -> list[RubricPart]:
                     raise GradeError(
                         f"{RUBRIC_NAME}: bad max points {maxval!r} for part "
                         f"{label!r}")
-            parts.append(RubricPart(label=label, max=mx))
+            parts.append(RubricPart(label=label, max=mx, ec=ec))
         else:
             in_parts = False
     return parts
@@ -233,7 +242,7 @@ def infer_n_parts(manifest: dict) -> int:
 # ------------------------------------------------------------ grades store --
 
 def _default_part(rp: RubricPart) -> dict:
-    return {"score": None, "max": rp.max, "status": "ungraded",
+    return {"score": None, "max": rp.max, "ec": rp.ec, "status": "ungraded",
             "comments": [], "ai_draft": None}
 
 
@@ -264,12 +273,14 @@ class GradeStore:
             for key, val in _default_part(rp).items():
                 part.setdefault(key, val)
             part["max"] = rp.max
+            part["ec"] = rp.ec
             part["status"] = ("graded" if part.get("score") is not None
                               else "ungraded")
         data["slug"] = slug
         return data
 
-    def update(self, slug: str, part: int | str, fields: dict) -> dict:
+    def update(self, slug: str, part: int | str, fields: dict,
+               by: str | None = None) -> dict:
         data = self.load(slug)
         p = data["parts"].get(str(part))
         if p is None:
@@ -295,6 +306,8 @@ class GradeStore:
                  "text": str(c.get("text", ""))}
                 for c in fields["comments"] if isinstance(c, dict)
             ]
+        if fields and by:
+            p["by"] = str(by)[:80]
         data["updated"] = datetime.now(timezone.utc).isoformat(
             timespec="seconds")
         self.save(slug, data)
@@ -330,6 +343,14 @@ def add_parser(sub) -> None:
                    help="Open the grading web app (hwGrader) in a browser.")
     p.add_argument("--port", type=int, default=0,
                    help="Port for --gui (default: an unused one).")
+    p.add_argument("--host", default="127.0.0.1",
+                   help="Bind address for --gui (default: 127.0.0.1 = this "
+                        "machine only; use a LAN/Tailscale address to let "
+                        "graders connect from other machines).")
+    p.add_argument("--grader-only", action="store_true",
+                   help="With --gui: serve only the grading pages — no "
+                        "course admin, quote bank, export button, or zip "
+                        "collection — for hosting hwGrader to graders.")
     p.add_argument("--no-browser", action="store_true",
                    help="With --gui: print the URL instead of opening it.")
     p.add_argument("--auto-exit", action="store_true",
@@ -342,9 +363,10 @@ def run_grade(args: argparse.Namespace) -> int:
     try:
         if args.gui:
             from .grade_gui import serve_app
-            return serve_app(folder, port=args.port,
+            return serve_app(folder, port=args.port, host=args.host,
                              open_browser=not args.no_browser,
-                             auto_exit=args.auto_exit)
+                             auto_exit=args.auto_exit,
+                             grader_only=args.grader_only)
         return _print_summary(folder)
     except GradeError as e:
         print(f"error: {e}", file=sys.stderr)

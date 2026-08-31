@@ -2,6 +2,7 @@
 
 import json
 import threading
+import urllib.parse
 import urllib.request
 import zipfile
 from http.server import ThreadingHTTPServer
@@ -223,7 +224,7 @@ def test_store_defaults(store):
     data = store.load("Doe-Jane")
     assert set(data["parts"]) == {"1", "2", "3"}
     p1 = data["parts"]["1"]
-    assert p1 == {"score": None, "max": 4, "status": "ungraded",
+    assert p1 == {"score": None, "max": 4, "ec": False, "status": "ungraded",
                   "comments": [], "ai_draft": None}
 
 
@@ -541,3 +542,97 @@ def test_picker_opens_moodle_zip(picker_client, tmp_path):
     assert r["folder"] == str(dest)
     state = picker_client.get("/api/state")
     assert {u["slug"] for u in state["units"]} == {"Doe-Jane", "Pitt Roe-Rick"}
+
+
+# ------------------------------------------- multi-assignment / grader mode --
+
+def test_rubric_extra_credit(tmp_path):
+    (tmp_path / "rubric.yml").write_text(
+        "parts:\n- 1.1: 4\n- 2.5: 3 ec\n- 2.6: EC\n")
+    rubric = load_rubric(tmp_path, 3)
+    assert [rp.ec for rp in rubric] == [False, True, True]
+    assert [rp.max for rp in rubric] == [4, 3, 5]   # bare "ec" keeps default
+
+
+def test_store_records_grader(store):
+    data = store.update("Doe-Jane", 1, {"score": 3}, by="Alex G.")
+    assert data["parts"]["1"]["by"] == "Alex G."
+    # a save without a name leaves the last attribution alone
+    data = store.update("Doe-Jane", 1, {"score": 2})
+    assert data["parts"]["1"]["by"] == "Alex G."
+
+
+def test_api_folder_param(client, grading_folder, tmp_path):
+    # a second assignment on the same server, addressed per-request
+    other = make_grading_folder(tmp_path / "other")
+    enc = urllib.parse.quote(str(other))
+    r = client.post(f"/api/grade?folder={enc}",
+                    {"slug": "Doe-Jane", "part": 1, "score": 2, "by": "Sam"})
+    assert r["ok"] is True
+    assert r["parts"]["1"]["by"] == "Sam"
+    raw = json.loads((other / "grades" / "Doe-Jane.json").read_text())
+    assert raw["parts"]["1"]["score"] == 2
+    assert raw["parts"]["1"]["by"] == "Sam"
+    # the default (CLI-opened) assignment is untouched
+    assert not (grading_folder / "grades" / "Doe-Jane.json").exists()
+    # GET APIs are addressable too; the rubric carries the ec flag
+    s = client.get(f"/api/state?folder={enc}")
+    assert Path(s["folder"]) == other.resolve()
+    assert [rp["ec"] for rp in s["rubric"]] == [False, False, False]
+    client.get("/api/state?folder="
+               + urllib.parse.quote(str(tmp_path / "nope")), expect=404)
+
+
+def test_grading_page_folder_param(picker_client, grading_folder):
+    enc = urllib.parse.quote(str(grading_folder))
+    page = picker_client.get(f"/grading?folder={enc}")
+    assert b"katex" in page                      # the grader, not the picker
+    assert grading_folder.name.encode() in page  # folder baked into CFG
+    # ?pick=1 forces the picker even while an assignment is open
+    assert b"Pick the assignment" in picker_client.get("/grading?pick=1")
+    # a bad folder redirects back to the picker (urllib follows the 302)
+    bad = urllib.parse.quote(str(grading_folder / "nope"))
+    assert b"Pick the assignment" in picker_client.get(
+        f"/grading?folder={bad}")
+
+
+@pytest.fixture
+def grader_client(grading_folder):
+    from hwgenie.grade_gui import AppHolder
+
+    holder = AppHolder(root=grading_folder, grader_only=True)
+    holder.current = holder.get_app(grading_folder)
+    server, client = _start_server(holder)
+    yield client
+    server.shutdown()
+
+
+def test_grader_mode_locks_down(grader_client, tmp_path):
+    # home redirects to the grading page; the page knows it's grader mode
+    assert b'"grader": true' in grader_client.get("/")
+    # course admin, quote bank and the wizard are gone
+    grader_client.get("/quotes", expect=404)
+    grader_client.get("/new-course", expect=404)
+    grader_client.get("/quotes/api/list", expect=404)
+    # exporting and opening arbitrary paths are instructor-only
+    err = grader_client.post("/api/export", {"pdf": False}, expect=403)
+    assert err["ok"] is False
+    grader_client.post("/api/open", {"path": str(tmp_path)}, expect=403)
+    # the recents list stays private
+    assert grader_client.get("/api/scan")["recents"] == []
+    # assignments outside the served root are unreachable
+    outside = make_grading_folder(tmp_path / "elsewhere")
+    enc = urllib.parse.quote(str(outside))
+    err = grader_client.get(f"/api/state?folder={enc}", expect=404)
+    assert "outside" in err["error"]
+
+
+def test_grader_mode_grading_still_works(grader_client, grading_folder):
+    r = grader_client.post("/api/grade", {
+        "slug": "Doe-Jane", "part": 1, "score": 3, "by": "Grader Two"})
+    assert r["ok"] is True
+    raw = json.loads((grading_folder / "grades" / "Doe-Jane.json").read_text())
+    assert raw["parts"]["1"]["by"] == "Grader Two"
+    # the picker is reachable and flagged grader-mode
+    page = grader_client.get("/grading?pick=1")
+    assert b"Pick the assignment" in page and b'"grader": true' in page

@@ -256,7 +256,7 @@ class GradingApp:
         return {
             "folder": str(self.folder),
             "n_parts": self.n_parts,
-            "rubric": [{"label": rp.label, "max": rp.max}
+            "rubric": [{"label": rp.label, "max": rp.max, "ec": rp.ec}
                        for rp in self.rubric],
             "groups": self.groups,
             "progress": [graded, total],
@@ -268,8 +268,10 @@ class GradingApp:
         if slug not in self.by_slug:
             raise GradeError(f"unknown submission {slug!r}")
         fields = {k: req[k] for k in ("score", "comments") if k in req}
+        by = req.get("by")
         with self.lock:
-            data = self.store.update(slug, req.get("part"), fields)
+            data = self.store.update(slug, req.get("part"), fields,
+                                     by=by if isinstance(by, str) else None)
             graded, total = self.store.progress(list(self.by_slug))
         return {"ok": True, "slug": slug, "parts": data["parts"],
                 "progress": [graded, total]}
@@ -410,15 +412,40 @@ class GradingApp:
 # ------------------------------------------------------- picker / holder --
 
 class AppHolder:
-    """The server's mutable state: the open assignment (or none — picker
-    mode) plus the folder-scan root and the recents file."""
+    """The server's mutable state: the open assignments (keyed by resolved
+    folder path, so several browser tabs — or several graders on a hosted
+    server — can work different assignments at once), the default one for
+    URLs without a ``folder`` param, the folder-scan root and the recents
+    file.
 
-    def __init__(self, root: Path):
+    ``grader_only`` locks the server down for hosting to graders: only
+    grading folders under the scan root may be opened, and the handler
+    hides everything except the grading pages."""
+
+    def __init__(self, root: Path, grader_only: bool = False):
         self.root = Path(root).resolve()
+        self.grader_only = grader_only
         self.current: GradingApp | None = None
+        self.apps: dict[str, GradingApp] = {}
+        self.apps_lock = threading.Lock()
         self.shutdown = threading.Event()
         self.last_ping: float | None = None   # for --auto-exit
         self.bye_at: float | None = None
+
+    def get_app(self, path: Path | str) -> GradingApp:
+        """The (cached) GradingApp for a grading folder.  One instance per
+        folder no matter how many clients use it, so all writes share its
+        lock and render caches.  Raises GradeError for anything that is
+        not an openable grading folder."""
+        p = Path(path).expanduser().resolve()
+        if self.grader_only and self.root not in (p, *p.parents):
+            raise GradeError(f"{p} is outside the served folder")
+        key = str(p)
+        with self.apps_lock:
+            app = self.apps.get(key)
+            if app is None:
+                app = self.apps[key] = GradingApp(p)
+        return app
 
     def alive(self) -> None:
         self.last_ping = time.monotonic()
@@ -433,6 +460,8 @@ class AppHolder:
             return []
 
     def remember(self, path: Path) -> None:
+        if self.grader_only:   # graders don't touch the recents file
+            return
         rec = [str(path)] + [p for p in self.recents() if p != str(path)]
         try:
             RECENTS_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -477,14 +506,17 @@ class AppHolder:
         """Open a grading folder, or collect a Moodle zip first."""
         path = Path(path).expanduser()
         if path.suffix.lower() == ".zip" and path.is_file():
+            if self.grader_only:
+                raise GradeError("collecting a zip is disabled on a "
+                                 "grader-only server")
             dest = path.with_name(path.stem + "-grading")
             if not (dest / MANIFEST_NAME).is_file():
                 from .collect import collect
                 collect(path, dest)
             path = dest
-        app = GradingApp(path)
+        app = self.get_app(path)
         self.current = app
-        self.remember(path)
+        self.remember(app.folder)
         return app
 
 
@@ -516,7 +548,21 @@ def make_handler(holder: AppHolder):
             self._send(json.dumps(obj).encode("utf-8"),
                        "application/json", code)
 
-        def _app(self) -> GradingApp | None:
+        def _redirect(self, location: str) -> None:
+            self.send_response(302)
+            self.send_header("Location", location)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def _app(self, folder: str | None = None) -> GradingApp | None:
+            """The assignment a request addresses: its ``folder`` query/body
+            param, else the server's default (the CLI-opened folder)."""
+            if folder:
+                try:
+                    return holder.get_app(folder)
+                except (GradeError, OSError) as e:
+                    self._json({"error": str(e)}, 404)
+                    return None
             app = holder.current
             if app is None:
                 self._json({"error": "no assignment open"}, 409)
@@ -524,27 +570,45 @@ def make_handler(holder: AppHolder):
 
         def do_GET(self):
             url = urllib.parse.urlparse(self.path)
-            app = holder.current
+            q = urllib.parse.parse_qs(url.query)
+            folder = q.get("folder", [None])[0]
+            grader_only = holder.grader_only
             if url.path in ("/", "/index.html", "/courses"):
+                if grader_only:
+                    self._redirect("/grading")
+                    return
                 # course management is the app's home page
                 from .course_admin import render_courses
                 holder.alive()
                 self._send(render_courses().encode("utf-8"))
             elif url.path == "/grading":
                 holder.alive()
-                page = render_grader() if app else render_picker()
+                if "pick" in q:
+                    app = None
+                elif folder:
+                    try:
+                        app = holder.get_app(folder)
+                        holder.remember(app.folder)
+                    except (GradeError, OSError) as e:
+                        self._redirect("/grading?pick=1&err="
+                                       + urllib.parse.quote(str(e)))
+                        return
+                else:
+                    app = holder.current
+                page = (render_grader(str(app.folder), grader_only) if app
+                        else render_picker(grader_only))
                 self._send(page.encode("utf-8"))
             elif url.path == "/api/scan":
                 self._json({"root": str(holder.root),
                             "folders": holder.scan(),
-                            "recents": holder.recents()})
+                            "recents": ([] if grader_only
+                                        else holder.recents())})
             elif url.path == "/api/state":
-                if (app := self._app()):
+                if (app := self._app(folder)):
                     self._json(app.state_payload())
             elif url.path == "/api/part":
-                if not (app := self._app()):
+                if not (app := self._app(folder)):
                     return
-                q = urllib.parse.parse_qs(url.query)
                 slug = q.get("slug", [""])[0]
                 try:
                     n = int(q.get("part", ["0"])[0])
@@ -555,43 +619,42 @@ def make_handler(holder: AppHolder):
                     return
                 self._json(app.part_payload(slug, n))
             elif url.path == "/api/problems":
-                if (app := self._app()):
+                if (app := self._app(folder)):
                     self._json(app.problems_payload())
             elif url.path == "/api/export":
-                if (app := self._app()):
+                if (app := self._app(folder)):
                     self._json(app.export_state)
             elif url.path == "/api/pdfmap":
-                if not (app := self._app()):
+                if not (app := self._app(folder)):
                     return
-                q = urllib.parse.parse_qs(url.query)
                 slug = q.get("slug", [""])[0]
                 if slug not in app.by_slug:
                     self._json({"error": f"unknown submission {slug!r}"}, 404)
                     return
                 self._json(app.pdf_map(slug))
-            elif url.path == "/quotes":
+            elif url.path == "/quotes" and not grader_only:
                 from .quotebank import render_quotes
                 holder.alive()
                 self._send(render_quotes().encode("utf-8"))
-            elif url.path.startswith("/quotes/api/"):
+            elif url.path.startswith("/quotes/api/") and not grader_only:
                 from .quotebank import api_get
                 res = api_get(url.path)
                 if res is None:
                     self._send(b"not found", code=404)
                 else:
                     self._json(res[0], res[1])
-            elif url.path.startswith("/courses/api/"):
+            elif url.path.startswith("/courses/api/") and not grader_only:
                 from .course_admin import api_get as courses_get
                 res = courses_get(url.path)
                 if res is None:
                     self._send(b"not found", code=404)
                 else:
                     self._json(res[0], res[1])
-            elif url.path == "/new-course":
+            elif url.path == "/new-course" and not grader_only:
                 from .new_course_gui import render_wizard
                 holder.alive()
                 self._send(render_wizard(embedded=True).encode("utf-8"))
-            elif url.path == "/new-course/status":
+            elif url.path == "/new-course/status" and not grader_only:
                 from .new_course_gui import STATE as wizard_state
                 self._json(wizard_state.snapshot())
             elif url.path == "/manifest.webmanifest":
@@ -602,7 +665,7 @@ def make_handler(holder: AppHolder):
                 size = 192 if "192" in url.path else 512
                 self._send(icon_png(size), "image/png")
             elif url.path.startswith("/pdf/"):
-                if not (app := self._app()):
+                if not (app := self._app(folder)):
                     return
                 slug = urllib.parse.unquote(url.path[len("/pdf/"):])
                 pdf = app.pdf_path(slug)
@@ -620,14 +683,23 @@ def make_handler(holder: AppHolder):
             except json.JSONDecodeError:
                 self._json({"ok": False, "error": "bad json"}, 400)
                 return
+            url = urllib.parse.urlparse(self.path)
+            folder = urllib.parse.parse_qs(url.query).get(
+                "folder", [None])[0]
+            grader_only = holder.grader_only
+            self.path = url.path   # route on the bare path below
             if self.path == "/api/grade":
-                if not (app := self._app()):
+                if not (app := self._app(folder)):
                     return
                 try:
                     self._json(app.apply_grade(data))
                 except GradeError as e:
                     self._json({"ok": False, "error": str(e)}, 400)
             elif self.path == "/api/open":
+                if grader_only:
+                    self._json({"ok": False, "error": "not available on a "
+                                "grader-only server"}, 403)
+                    return
                 from .collect import CollectError
                 try:
                     app = holder.open_path(Path(str(data.get("path", ""))))
@@ -635,10 +707,16 @@ def make_handler(holder: AppHolder):
                 except (GradeError, CollectError, OSError) as e:
                     self._json({"ok": False, "error": str(e)}, 400)
             elif self.path == "/api/close":
-                holder.current = None
+                if not grader_only:
+                    holder.current = None
                 self._json({"ok": True})
             elif self.path == "/api/export":
-                if not (app := self._app()):
+                if grader_only:
+                    self._json({"ok": False, "error": "exporting is done by "
+                                "the instructor, not on the hosted "
+                                "grader"}, 403)
+                    return
+                if not (app := self._app(folder)):
                     return
                 if app.export_state["running"]:
                     self._json({"ok": False,
@@ -662,6 +740,8 @@ def make_handler(holder: AppHolder):
                                 "warnings": res.warnings,
                                 "worksheet": (res.worksheet or {}).get(
                                     "filled"),
+                                "extra_credit": (res.extra_credit
+                                                 or {}).get("rows"),
                             }}
                     except Exception as e:
                         app.export_state = {"running": False,
@@ -669,21 +749,21 @@ def make_handler(holder: AppHolder):
 
                 threading.Thread(target=job, daemon=True).start()
                 self._json({"ok": True})
-            elif self.path.startswith("/quotes/api/"):
+            elif self.path.startswith("/quotes/api/") and not grader_only:
                 from .quotebank import api_post
                 res = api_post(self.path, data)
                 if res is None:
                     self._send(b"not found", code=404)
                 else:
                     self._json(res[0], res[1])
-            elif self.path.startswith("/courses/api/"):
+            elif self.path.startswith("/courses/api/") and not grader_only:
                 from .course_admin import api_post as courses_post
                 res = courses_post(self.path, data, course_roots(holder.root))
                 if res is None:
                     self._send(b"not found", code=404)
                 else:
                     self._json(res[0], res[1])
-            elif self.path == "/new-course/create":
+            elif self.path == "/new-course/create" and not grader_only:
                 from .new_course_gui import start_create
                 self._json(start_create(data))
             elif self.path == "/ping":
@@ -720,19 +800,21 @@ def _watchdog_should_exit(now: float, started: float,
 
 
 def serve_app(folder: Path | None, port: int = 0,
-              open_browser: bool = True, auto_exit: bool = False) -> int:
+              open_browser: bool = True, auto_exit: bool = False,
+              host: str = "127.0.0.1", grader_only: bool = False) -> int:
     folder = Path(folder) if folder is not None else Path.cwd()
-    holder = AppHolder(root=folder if folder.is_dir() else folder.parent)
+    holder = AppHolder(root=folder if folder.is_dir() else folder.parent,
+                       grader_only=grader_only)
     try:
         holder.open_path(folder)
     except GradeError:
         print(f"note: {folder} is not a grading folder — "
               "opening the assignment picker instead")
+    local = host in ("127.0.0.1", "localhost", "::1")
     try:
-        server = ThreadingHTTPServer(("127.0.0.1", port),
-                                     make_handler(holder))
+        server = ThreadingHTTPServer((host, port), make_handler(holder))
     except OSError as e:
-        if port and e.errno == errno.EADDRINUSE:
+        if port and local and e.errno == errno.EADDRINUSE:
             # a second launch while one is running: just show that one
             url = f"http://127.0.0.1:{port}/"
             print(f"hwGenie is already running at {url}")
@@ -741,10 +823,15 @@ def serve_app(folder: Path | None, port: int = 0,
             return 0
         raise
     # a CLI-opened grading folder goes straight to the grader; the bare
-    # launcher lands on the Courses home page
-    path = "/grading" if holder.current else "/"
-    url = f"http://127.0.0.1:{server.server_address[1]}{path}"
+    # launcher lands on the Courses home page (grading in grader mode)
+    path = "/grading" if (holder.current or grader_only) else "/"
+    shown_host = "127.0.0.1" if local else host
+    url = f"http://{shown_host}:{server.server_address[1]}{path}"
     print(f"hwGenie: {url}")
+    if not local:
+        print(f"(Serving on {host} — reachable from other machines. "
+              + ("Grading pages only.)" if grader_only else
+                 "Consider --grader-only when hosting for graders.)"))
     if auto_exit:
         print("(Closes by itself when the browser tab does.)")
     else:
@@ -763,7 +850,7 @@ def serve_app(folder: Path | None, port: int = 0,
                                          holder.last_ping, holder.bye_at):
                     holder.shutdown.set()
         threading.Thread(target=watchdog, daemon=True).start()
-    if open_browser:
+    if open_browser and local:
         _open_ui(url)
     try:
         holder.shutdown.wait()
@@ -776,17 +863,24 @@ def serve_app(folder: Path | None, port: int = 0,
 
 # -------------------------------------------------------------- the pages --
 
-def render_grader() -> str:
+def render_grader(folder: str, grader_only: bool = False) -> str:
     from .appicon import LAMP_SVG
+    cfg = json.dumps({"folder": folder, "grader": grader_only})
     return GRADER_PAGE.replace("__KATEX__", KATEX_VERSION) \
-                      .replace("__LAMP__", LAMP_SVG)
+                      .replace("__LAMP__", LAMP_SVG) \
+                      .replace("__CFG__", cfg)
 
 
-def render_picker() -> str:
+def render_picker(grader_only: bool = False) -> str:
     from .appicon import LAMP_SVG
     from .webstyle import nav_header
-    return (PICKER_PAGE.replace("__NAV__", nav_header("grading"))
-                       .replace("__LAMP__", LAMP_SVG))
+    nav = ('<div class="appnav">'
+           '<a class="brand" href="/grading">hwGenie __LAMP__</a></div>'
+           if grader_only else nav_header("grading"))
+    return (PICKER_PAGE.replace("__NAV__", nav)
+                       .replace("__LAMP__", LAMP_SVG)
+                       .replace("__CFG__",
+                                json.dumps({"grader": grader_only})))
 
 
 
@@ -1105,6 +1199,26 @@ __BASE__
              margin: 1rem 0; }
   #partnav select { font: inherit; padding: .3rem .5rem; color: var(--fg);
     background: var(--bg); border: 1px solid var(--border); }
+
+  .ecbadge { font-size: .66rem; font-weight: 700; letter-spacing: .05em;
+    padding: .08rem .32rem; background: var(--accent); color: var(--bg);
+    white-space: nowrap; }
+  .gby { font-size: .72rem; color: var(--muted); white-space: nowrap; }
+
+  #nameov { position: fixed; inset: 0; z-index: 60; display: flex;
+    align-items: center; justify-content: center;
+    background: rgba(0,0,0,.45); }
+  .namebox { background: var(--card-bg); padding: 1.4rem 1.6rem;
+    width: min(22rem, 90vw); box-shadow: 0 8px 32px rgba(0,0,0,.4); }
+  .namebox h2 { margin: 0 0 .5rem; font-size: 1.05rem; }
+  .namebox p { margin: 0 0 .9rem; font-size: .85rem; color: var(--muted); }
+  .namebox input { width: 100%; font: inherit; padding: .45rem .6rem;
+    color: var(--fg); background: var(--bg);
+    border: 1px solid var(--border); margin-bottom: .9rem; }
+  .namebox input:focus { outline: 2px solid var(--accent);
+                         border-color: transparent; }
+  .namebox button { padding: .45rem 1.2rem; cursor: pointer; border: none;
+    background: var(--accent); color: var(--bg); }
 </style>
 </head>
 <body>
@@ -1151,6 +1265,8 @@ __BASE__
       </svg> List</button>
   </div>
   <span class="sp"></span>
+  <button class="ghost" id="whoami" style="display:none"
+          title="Your name — recorded on the grades you enter (click to change)"></button>
   <button class="ghost" id="export"
           title="Create the Moodle return files (feedback + zip + CSV)">
     Export</button>
@@ -1185,6 +1301,7 @@ __BASE__
 
 <script>
 "use strict";
+const CFG = __CFG__;             // {folder, grader} from the server
 const $ = s => document.querySelector(s);
 let S = null;                    // /api/state payload
 const P = {};                    // part payload cache: "slug|n" -> payload
@@ -1196,10 +1313,17 @@ function esc(s) {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+// every request names its assignment so several tabs/graders can work
+// different folders on one server
+function withFolder(path) {
+  return path + (path.includes("?") ? "&" : "?") +
+         "folder=" + encodeURIComponent(CFG.folder);
+}
+
 async function api(path, body) {
   const opts = body === undefined ? {} :
     {method: "POST", body: JSON.stringify(body)};
-  const r = await fetch(path, opts);
+  const r = await fetch(withFolder(path), opts);
   const data = await r.json();
   if (!r.ok) throw new Error(data.error || r.statusText);
   return data;
@@ -1236,6 +1360,49 @@ function gradedCount(u) {
   return Object.values(u.parts).filter(p => p.status === "graded").length;
 }
 
+// ---------------------------------------------------------- grader name --
+// On a hosted (grader-only) server each grader identifies themselves
+// once; the name rides along with every save for attribution.
+
+function graderName() {
+  try { return localStorage.hwgName || null; } catch (e) { return null; }
+}
+
+function updateWhoami() {
+  if (!CFG.grader) return;
+  const b = $("#whoami");
+  b.style.display = "";
+  b.textContent = "\u{1F464} " + (graderName() || "who?");
+}
+
+function promptName(force) {
+  if (!CFG.grader || (!force && graderName())) return;
+  if ($("#nameov")) return;
+  const ov = document.createElement("div");
+  ov.id = "nameov";
+  ov.innerHTML = `<div class="namebox">
+    <h2>Who&rsquo;s grading?</h2>
+    <p>Your name is recorded on each grade and comment you enter, so
+       everyone can see who graded what.</p>
+    <input id="namein" maxlength="60" placeholder="e.g. Alex">
+    <button id="namego">Start grading</button></div>`;
+  document.body.appendChild(ov);
+  const inp = ov.querySelector("#namein");
+  inp.value = graderName() || "";
+  const go = () => {
+    const v = inp.value.trim();
+    if (!v) { inp.focus(); return; }
+    try { localStorage.hwgName = v; } catch (e) {}
+    updateWhoami();
+    ov.remove();
+  };
+  ov.querySelector("#namego").addEventListener("click", go);
+  inp.addEventListener("keydown", e => { if (e.key === "Enter") go(); });
+  inp.focus();
+}
+
+$("#whoami").addEventListener("click", () => promptName(true));
+
 // ---------------------------------------------------------------- saving --
 
 const pending = {};              // save key -> {timer, run}
@@ -1265,10 +1432,14 @@ function queueSave(slug, n, fields) {
     delete pending[key];
     inflight++; updateSaveStat();
     try {
-      const r = await api("/api/grade", {slug, part: n, ...fields});
+      const req = {slug, part: n, ...fields};
+      const who = graderName();
+      if (who) req.by = who;
+      const r = await api("/api/grade", req);
       // The client model stays authoritative for in-flight edits; only
       // the derived status (and progress) come back from the server.
       pdata(slug, n).status = r.parts[String(n)].status;
+      pdata(slug, n).by = r.parts[String(n)].by;
       setProgress(...r.progress);
       refreshPartChrome(slug, n);
       refreshSidebarRow(slug);
@@ -1313,10 +1484,10 @@ async function openPdfPanel(slug, part) {
   if (!u || !u.pdf) return;
   pdfSlug = slug;
   $("#pdfname").textContent = slug;
-  $("#pdfext").href = "/pdf/" + encodeURIComponent(slug);
+  $("#pdfext").href = withFolder("/pdf/" + encodeURIComponent(slug));
   const frag = await pdfFragment(slug, part);
   $("#pdfframe").src =
-    "/pdf/" + encodeURIComponent(slug) + "?v=" + (pdfSeq++) + frag;
+    withFolder("/pdf/" + encodeURIComponent(slug) + "?v=" + (pdfSeq++)) + frag;
   $("#pdfpanel").classList.add("open");
   updatePanelBtns();
 }
@@ -1558,14 +1729,18 @@ function partPanel(slug, n, opts) {
   const collab = u.collaborators && u.collaborators.toLowerCase() !== "none"
     ? `<span class="collab real" title="Collaborators &amp; sources">
        collab: <b>${esc(u.collaborators)}</b></span>` : "";
+  const ec = S.rubric[n - 1].ec
+    ? ` <span class="ecbadge" title="Extra credit — not part of the
+        assignment total; exported separately for Moodle">EC</span>` : "";
   const headLeft = opts && opts.who
-    ? `<span class="nm">${esc(slug)}</span>${badges(u)} ${collab}`
-    : `<span class="plabel">${esc(rlabel(n))}</span>`;
+    ? `<span class="nm">${esc(slug)}</span>${ec}${badges(u)} ${collab}`
+    : `<span class="plabel">${esc(rlabel(n))}</span>${ec}`;
   el.innerHTML = `
     <div class="part-head${opts && opts.who ? " who" : ""}">
       ${headLeft}
       <span class="flags"></span>
       <span class="sp"></span>
+      <span class="gby" title="Graded by">${p.by ? esc(p.by) : ""}</span>
       <input class="score" type="number" min="0" step="0.5"
              value="${p.score === null ? "" : p.score}"
              aria-label="score for ${esc(rlabel(n))}">
@@ -1998,7 +2173,10 @@ function refreshPartChrome(slug, n) {
   document.querySelectorAll(
     `.part[data-slug="${CSS.escape(slug)}"][data-part="${n}"]`)
     .forEach(el => {
-      el.classList.toggle("graded", pdata(slug, n).status === "graded");
+      const p = pdata(slug, n);
+      el.classList.toggle("graded", p.status === "graded");
+      const gby = el.querySelector(".gby");
+      if (gby) gby.textContent = p.by || "";
     });
 }
 
@@ -2153,7 +2331,7 @@ function renderSidebarParts() {
     const done = S.units.filter(
       u => u.parts[String(n)].status === "graded").length;
     return `<div class="stu${n === curPart ? " active" : ""}" data-n="${n}">
-      <span class="nm">${esc(rp.label)}</span>
+      <span class="nm">${esc(rp.label)}${rp.ec ? " (EC)" : ""}</span>
       <span class="ct${done === S.units.length ? " done" : ""}">${done}/${S.units.length}</span>
     </div>`;
   }).join("");
@@ -2172,7 +2350,7 @@ function showPart(n) {
       <button class="ghost" id="pprev" ${n <= 1 ? "disabled" : ""}>←</button>
       <select id="psel">${S.rubric.map((rp, i) =>
         `<option value="${i + 1}"${i + 1 === n ? " selected" : ""}>
-         ${esc(rp.label)}</option>`).join("")}</select>
+         ${esc(rp.label)}${rp.ec ? " (EC)" : ""}</option>`).join("")}</select>
       <button class="ghost" id="pnext"
         ${n >= S.n_parts ? "disabled" : ""}>→</button>
       <span class="ptext">${mx === null ? "" : "out of " + mx + " points"}
@@ -2280,8 +2458,7 @@ document.addEventListener("keydown", e => {
 $("#switch").addEventListener("click", async () => {
   await settleSaves();
   if (saveState() !== "clean") { updateSaveStat(); return; }
-  await api("/api/close", {});
-  location.reload();
+  location.href = "/grading?pick=1";
 });
 
 // ---------------------------------------------------------------- export --
@@ -2315,6 +2492,8 @@ $("#export").addEventListener("click", async () => {
       (s.pdf_failures ? `; ${s.pdf_failures} PDF sheets failed` : "") +
       (s.worksheet != null ?
         `; grading worksheet filled with ${s.worksheet} totals` : "") +
+      (s.extra_credit != null ?
+        `; extra-credit CSV with ${s.extra_credit} rows` : "") +
       `. Files are in ${s.out}` +
       (s.warnings && s.warnings.length ? ` — ${s.warnings.join("; ")}` : "") +
       ". Click to dismiss.");
@@ -2324,6 +2503,11 @@ $("#export").addEventListener("click", async () => {
 // ------------------------------------------------------------------ init --
 
 (async function init() {
+  if (CFG.grader) {
+    $("#export").style.display = "none";
+    updateWhoami();
+    promptName(false);
+  }
   S = await api("/api/state");
   setProgress(...S.progress);
   $("#foldname").textContent = S.folder.split("/").filter(Boolean).slice(-2).join("/");
@@ -2403,37 +2587,51 @@ __BASE__
 __NAV__
 <main>
   <p class="sub">Pick the assignment to grade.</p>
-  <h2>Recent</h2>
-  <div id="recents"><span class="none">nothing yet</span></div>
+  <div id="sec-recents">
+    <h2>Recent</h2>
+    <div id="recents"><span class="none">nothing yet</span></div>
+  </div>
   <h2>Found in <span id="root"></span></h2>
   <div id="found"><span class="none">scanning…</span></div>
-  <h2>Somewhere else</h2>
-  <div class="manual">
-    <input id="path" spellcheck="false"
-      placeholder="/path/to/grading-folder or moodle-download.zip">
-    <button id="open">Open</button>
+  <div id="sec-manual">
+    <h2>Somewhere else</h2>
+    <div class="manual">
+      <input id="path" spellcheck="false"
+        placeholder="/path/to/grading-folder or moodle-download.zip">
+      <button id="open">Open</button>
+    </div>
+    <p class="hint">Paste a grading folder (made by <code>hwgenie
+    collect</code>) or a Moodle &ldquo;Download all submissions&rdquo; .zip
+    &mdash; a zip is collected into a folder next to it first.</p>
   </div>
-  <p class="hint">Paste a grading folder (made by <code>hwgenie
-  collect</code>) or a Moodle &ldquo;Download all submissions&rdquo; .zip
-  &mdash; a zip is collected into a folder next to it first.</p>
   <div id="err"></div>
 </main>
 <script>
 "use strict";
+const CFG = __CFG__;
 const $ = s => document.querySelector(s);
 
 function esc(s) {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+function gotoFolder(p) {
+  location.href = "/grading?folder=" + encodeURIComponent(p);
+}
+
 async function openPath(p) {
   $("#err").style.display = "none";
+  if (!p.toLowerCase().endsWith(".zip")) {
+    gotoFolder(p);
+    return;
+  }
   try {
+    // a zip must be collected server-side first
     const r = await fetch("/api/open",
       {method: "POST", body: JSON.stringify({path: p})});
     const data = await r.json();
     if (!data.ok) throw new Error(data.error || "could not open");
-    location.reload();
+    gotoFolder(data.folder);
   } catch (e) {
     $("#err").textContent = e.message;
     $("#err").style.display = "block";
@@ -2453,17 +2651,28 @@ function rows(el, items, rootPrefix) {
       <span class="meta">${esc(meta)}</span></div>`;
   }).join("");
   el.querySelectorAll(".row").forEach(r =>
-    r.addEventListener("click", () => openPath(r.dataset.p)));
+    r.addEventListener("click", () => gotoFolder(r.dataset.p)));
 }
 
 (async function init() {
+  if (CFG.grader) {
+    $("#sec-manual").style.display = "none";
+    $("#sec-recents").style.display = "none";
+  }
+  const err = new URLSearchParams(location.search).get("err");
+  if (err) {
+    $("#err").textContent = err;
+    $("#err").style.display = "block";
+  }
   const s = await (await fetch("/api/scan")).json();
   $("#root").textContent = s.root;
   rows($("#found"), s.folders, s.root);
   if (!s.folders.length)
     $("#found").innerHTML = '<span class="none">no grading folders ' +
-      'found — collect a Moodle zip below</span>';
-  rows($("#recents"), s.recents.map(p => ({path: p})), null);
+      'found' + (CFG.grader ? '' : ' — collect a Moodle zip below') +
+      '</span>';
+  if (!CFG.grader)
+    rows($("#recents"), s.recents.map(p => ({path: p})), null);
 })();
 
 $("#open").addEventListener("click", () => {

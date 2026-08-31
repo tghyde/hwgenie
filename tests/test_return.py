@@ -225,3 +225,71 @@ def test_api_export(grading_folder):
         assert (grading_folder / "return" / "moodle-feedback.zip").is_file()
     finally:
         server.shutdown()
+
+
+# ------------------------------------------------------------- extra credit --
+
+EC_RUBRIC = "parts:\n- 1.1: 4\n- 1.2: 2.5\n- 2.1a: 5 ec\n"
+
+
+def test_extra_credit_export(grading_folder):
+    (grading_folder / "rubric.yml").write_text(EC_RUBRIC)
+    rubric = load_rubric(grading_folder, 3)
+    store = GradeStore(grading_folder, rubric)
+    store.update("Doe-Jane", 1, {"score": 4})
+    store.update("Doe-Jane", 3, {"score": 3})     # the EC part
+    store.update("Roe-Rick", 1, {"score": 2})
+    _write_worksheet(grading_folder, max_grade="6.50")   # base max = 4+2.5
+    result = build_feedback(grading_folder)
+
+    # feedback page: base total, EC broken out, part badge
+    html = (result.out_dir / "feedback" / "Doe-Jane" /
+            "feedback.html").read_text()
+    assert "4 / 6.5 (+3 extra credit)" in html
+    assert 'class="ecbadge"' in html
+
+    # the Moodle worksheet gets the base total only (assignment grades
+    # cannot exceed the activity max)
+    rows = list(csv.reader((result.out_dir / "grading-worksheet-upload.csv")
+                           .open(encoding="utf-8-sig")))
+    jane = next(r for r in rows if r[0] == "Participant 111")
+    assert jane[4] == "4.00"
+    assert not any("Maximum grade" in w for w in result.warnings)
+
+    # gradebook.csv: EC column, base total/out_of
+    rows = list(csv.reader((result.out_dir / "gradebook.csv").open()))
+    assert rows[0][3:6] == ["1.1", "1.2", "2.1a (EC)"]
+    assert rows[0][-3:] == ["total", "out_of", "extra_credit"]
+    jane = next(r for r in rows if r[0] == "Doe-Jane")
+    assert jane[-3:] == ["4", "6.5", "3"]
+    rick = next(r for r in rows if r[0] == "Roe-Rick")
+    assert rick[-3:] == ["2", "6.5", "0"]
+
+    # extra-credit CSV for Moodle's gradebook import, matched by email
+    ec = result.extra_credit
+    assert ec is not None and ec["rows"] == 2 and ec["no_email"] == 0
+    rows = list(csv.reader((result.out_dir / "extra-credit-upload.csv")
+                           .open(encoding="utf-8-sig")))
+    assert rows[0] == ["Email address", "Full name", "Extra credit"]
+    assert ["jd@x.edu", "Jane Doe", "3"] in rows
+    assert ["rr@x.edu", "Rick Roe", "0"] in rows
+
+
+def test_extra_credit_without_worksheet_warns(grading_folder):
+    (grading_folder / "rubric.yml").write_text(EC_RUBRIC)
+    rubric = load_rubric(grading_folder, 3)
+    store = GradeStore(grading_folder, rubric)
+    store.update("Doe-Jane", 3, {"score": 2})
+    result = build_feedback(grading_folder)
+    assert result.extra_credit["rows"] == 1        # only Jane was graded
+    assert result.extra_credit["no_email"] == 1
+    assert any("extra-credit CSV" in w for w in result.warnings)
+    rows = list(csv.reader((result.out_dir / "extra-credit-upload.csv")
+                           .open(encoding="utf-8-sig")))
+    assert rows[1] == ["", "Jane Doe", "2"]        # name fallback, no email
+
+
+def test_no_ec_csv_without_ec_parts(returned):
+    folder, result = returned
+    assert result.extra_credit is None
+    assert not (result.out_dir / "extra-credit-upload.csv").exists()
