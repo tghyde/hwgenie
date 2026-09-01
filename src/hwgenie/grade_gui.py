@@ -603,6 +603,13 @@ def make_handler(holder: AppHolder):
                             "folders": holder.scan(),
                             "recents": ([] if grader_only
                                         else holder.recents())})
+            elif url.path == "/api/remote" and not grader_only:
+                from .remote_grading import api_get as remote_get
+                res = remote_get(url.path)
+                if res is None:
+                    self._send(b"not found", code=404)
+                else:
+                    self._json(res[0], res[1])
             elif url.path == "/api/state":
                 if (app := self._app(folder)):
                     self._json(app.state_payload())
@@ -749,6 +756,13 @@ def make_handler(holder: AppHolder):
 
                 threading.Thread(target=job, daemon=True).start()
                 self._json({"ok": True})
+            elif self.path.startswith("/api/remote/") and not grader_only:
+                from .remote_grading import api_post as remote_post
+                res = remote_post(self.path, data)
+                if res is None:
+                    self._send(b"not found", code=404)
+                else:
+                    self._json(res[0], res[1])
             elif self.path.startswith("/quotes/api/") and not grader_only:
                 from .quotebank import api_post
                 res = api_post(self.path, data)
@@ -2581,12 +2595,49 @@ __BASE__
   .hint { color: var(--muted); font-size: .8rem; margin-top: .4rem; }
   #err { color: var(--alert); margin-top: .8rem; display: none; }
   .none { color: var(--muted); font-style: italic; font-size: .9rem; }
+  h2.sechead {
+    font-size: 1rem; letter-spacing: .06em; color: var(--fg);
+    border-top: 1px solid var(--border);
+    margin: 2.2rem 0 .2rem; padding-top: 1.4rem;
+  }
+  h2.sechead:first-of-type { border-top: none; margin-top: .4rem;
+                             padding-top: 0; }
+  .remhead { display: flex; align-items: baseline; gap: .8rem;
+             margin: .8rem 0 .6rem; }
+  .remhead .grow { flex: 1; }
+  .remhead a { color: var(--accent); text-decoration: none;
+               font-size: .85rem; white-space: nowrap; }
+  .remhead a:hover { background: var(--hover-bg); }
+  button.ghost {
+    font: inherit; font-size: .8rem; padding: .25rem .7rem;
+    cursor: pointer; color: var(--fg); background: transparent;
+    border: 1px solid var(--border);
+  }
+  button.ghost:hover { background: var(--hover-bg); }
+  button.ghost:disabled { opacity: .45; cursor: default; }
+  .remrow {
+    display: flex; align-items: baseline; gap: .8rem;
+    background: var(--card-bg); padding: .55rem .8rem; margin: 0 0 .45rem;
+  }
+  .remrow .path { flex: 1; overflow: hidden; text-overflow: ellipsis;
+                  white-space: nowrap; }
+  .remrow .meta { color: var(--muted); font-size: .8rem;
+                  white-space: nowrap; }
+  .remrow .done { color: var(--sol-accent); font-weight: 600; }
+  #rempush select {
+    flex: 1; font: inherit; padding: .45rem .6rem; color: var(--fg);
+    background: var(--card-bg); border: 1px solid var(--border);
+  }
+  #remlog { white-space: pre-wrap; font-family: ui-monospace, monospace;
+            font-size: .72rem; margin-top: .6rem; }
 </style>
 </head>
 <body>
 __NAV__
 <main>
   <p class="sub">Pick the assignment to grade.</p>
+  <h2 class="sechead" id="head-local" style="display:none">Local
+    Grading</h2>
   <div id="sec-recents">
     <h2>Recent</h2>
     <div id="recents"><span class="none">nothing yet</span></div>
@@ -2605,6 +2656,27 @@ __NAV__
     &mdash; a zip is collected into a folder next to it first.</p>
   </div>
   <div id="err"></div>
+  <div id="sec-remote" style="display:none">
+    <h2 class="sechead">External Grading</h2>
+    <div class="remhead">
+      <span id="remstat" class="none">checking the grading server…</span>
+      <span class="grow"></span>
+      <a id="remurl" target="_blank" style="display:none">Open grading
+        site ↗</a>
+      <button class="ghost" id="remrefresh">Refresh</button>
+    </div>
+    <div id="remrows"></div>
+    <div class="manual" id="rempush" style="display:none">
+      <select id="pushsel"></select>
+      <button id="pushbtn">Push to server</button>
+    </div>
+    <p class="hint" id="remhint" style="display:none">Push mirrors a local
+    grading folder to the server, grades included &mdash; pull first if
+    the graders have work there you haven&rsquo;t fetched. Pull copies
+    the graders&rsquo; grades into the matching local folder (it never
+    deletes anything local).</p>
+    <div id="remlog" class="hint" style="display:none"></div>
+  </div>
 </main>
 <script>
 "use strict";
@@ -2671,9 +2743,151 @@ function rows(el, items, rootPrefix) {
     $("#found").innerHTML = '<span class="none">no grading folders ' +
       'found' + (CFG.grader ? '' : ' — collect a Moodle zip below') +
       '</span>';
-  if (!CFG.grader)
+  if (!CFG.grader) {
     rows($("#recents"), s.recents.map(p => ({path: p})), null);
+    SCAN = s;
+    $("#head-local").style.display = "";
+    $("#sec-remote").style.display = "";
+    fillPushSel();
+    loadRemote(true);
+  }
 })();
+
+// ------------------------------------------------------ external grading --
+
+let SCAN = null, remTimer = null;
+
+function srvName(p) {
+  const parts = p.split("/").filter(Boolean);
+  let b = parts[parts.length - 1] || p;
+  if (b === "grading" && parts.length > 1) b = parts[parts.length - 2];
+  return b;
+}
+
+function fillPushSel() {
+  const folders = (SCAN && SCAN.folders) || [];
+  $("#pushsel").innerHTML = folders.map(f => {
+    const rel = f.path.startsWith(SCAN.root)
+      ? f.path.slice(SCAN.root.length).replace(/^\//, "") : f.path;
+    return `<option value="${esc(f.path)}">${esc(srvName(f.path))}` +
+           `  —  ${esc(rel)}</option>`;
+  }).join("");
+  $("#rempush").style.display = folders.length ? "" : "none";
+}
+
+function renderRemote(st) {
+  const stat = $("#remstat");
+  $("#remurl").style.display = st.url ? "" : "none";
+  if (st.url) $("#remurl").href = st.url;
+  $("#remhint").style.display = st.configured ? "" : "none";
+  const busy = !!st.running;
+  $("#remrefresh").disabled = busy;
+  $("#pushbtn").disabled = busy;
+  document.querySelectorAll("#remrows button").forEach(
+    b => b.disabled = busy);
+  if (!st.configured) {
+    stat.textContent = "No grading server configured — see " +
+      "~/.hwgenie/remote.json";
+    return;
+  }
+  stat.style.color = st.error && !st.running ? "var(--alert)" : "";
+  if (st.running)
+    stat.textContent = `${st.running} running… (server: ${st.host})`;
+  else if (st.error)
+    stat.textContent = st.error;
+  else
+    stat.textContent = `server: ${st.host}` + (st.age == null ? "" :
+      " · updated " + (st.age < 90 ? st.age + "s"
+                            : Math.round(st.age / 60) + " min") + " ago");
+  const log = $("#remlog");
+  const showLog = (st.running || st.error) && st.log.length;
+  log.style.display = showLog ? "" : "none";
+  log.textContent = st.log.slice(-6).join("\n");
+  const rows = $("#remrows");
+  if (st.assignments == null) { rows.innerHTML = ""; return; }
+  if (!st.assignments.length) {
+    rows.innerHTML = '<span class="none">no assignments on the server ' +
+      'yet — push one below</span>';
+    return;
+  }
+  rows.innerHTML = st.assignments.map(a => {
+    if (a.error)
+      return `<div class="remrow"><span class="path">${esc(a.name)}</span>
+        <span class="meta">${esc(a.error)}</span></div>`;
+    const done = a.total && a.graded === a.total;
+    return `<div class="remrow"><span class="path">${esc(a.name)}</span>
+      <span class="meta">${a.units} submissions · <span class="${
+        done ? "done" : ""}">${a.graded}/${a.total} graded</span>${
+        a.created ? " · " + esc(a.created) : ""}</span>
+      <button class="ghost rpull" data-name="${esc(a.name)}">Pull
+        grades</button></div>`;
+  }).join("");
+  rows.querySelectorAll(".rpull").forEach(b =>
+    b.addEventListener("click", () => pullRemote(b.dataset.name)));
+}
+
+async function loadRemote(kick) {
+  let st;
+  try { st = await (await fetch("/api/remote")).json(); }
+  catch (e) { return; }
+  if (st.configured && kick && !st.running && st.assignments == null) {
+    remotePost("/api/remote/scan", {});
+    return;
+  }
+  renderRemote(st);
+  if (st.running && !remTimer)
+    remTimer = setInterval(async () => {
+      let s2;
+      try { s2 = await (await fetch("/api/remote")).json(); }
+      catch (e) { return; }
+      renderRemote(s2);
+      if (!s2.running) { clearInterval(remTimer); remTimer = null; }
+    }, 1000);
+}
+
+async function remotePost(path, body) {
+  $("#err").style.display = "none";
+  try {
+    const r = await fetch(path,
+      {method: "POST", body: JSON.stringify(body)});
+    const data = await r.json();
+    if (!data.ok) throw new Error(data.error || "request failed");
+  } catch (e) {
+    $("#err").textContent = e.message;
+    $("#err").style.display = "block";
+    return;
+  }
+  loadRemote(false);
+}
+
+function pullRemote(name) {
+  const folders = (SCAN && SCAN.folders) || [];
+  const match = folders.find(f => srvName(f.path) === name);
+  if (!match) {
+    $("#err").textContent = `No local grading folder matches "${name}" ` +
+      "— collect the assignment locally first.";
+    $("#err").style.display = "block";
+    return;
+  }
+  if (!confirm(`Pull the graders' grades for "${name}" into\n` +
+      `${match.path}?\n\nServer grade files overwrite local ones with ` +
+      "the same name (nothing local is deleted)."))
+    return;
+  remotePost("/api/remote/pull", {path: match.path});
+}
+
+$("#remrefresh").addEventListener("click",
+  () => remotePost("/api/remote/scan", {}));
+$("#pushbtn").addEventListener("click", () => {
+  const p = $("#pushsel").value;
+  if (!p) return;
+  if (!confirm(`Push "${srvName(p)}" to the grading server?\n\nThis ` +
+      "mirrors the local folder — grades included — over the " +
+      "server copy. If the graders have entered work you haven't " +
+      "pulled yet, pull first."))
+    return;
+  remotePost("/api/remote/push", {path: p});
+});
 
 $("#open").addEventListener("click", () => {
   const p = $("#path").value.trim();
