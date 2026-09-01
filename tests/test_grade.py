@@ -636,3 +636,16 @@ def test_grader_mode_grading_still_works(grader_client, grading_folder):
     # the picker is reachable and flagged grader-mode
     page = grader_client.get("/grading?pick=1")
     assert b"Pick the assignment" in page and b'"grader": true' in page
+
+
+def test_howto_page(picker_client):
+    page = picker_client.get("/grading/howto")
+    assert b"Grading how-to" in page
+    assert b"Download all submissions" in page      # Moodle round trip
+    assert b"extra-credit-upload.csv" in page       # EC pipeline
+    # linked from the picker
+    assert b'href="/grading/howto"' in picker_client.get("/grading")
+
+
+def test_howto_hidden_in_grader_mode(grader_client):
+    grader_client.get("/grading/howto", expect=404)

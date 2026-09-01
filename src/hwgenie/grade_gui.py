@@ -603,6 +603,10 @@ def make_handler(holder: AppHolder):
                             "folders": holder.scan(),
                             "recents": ([] if grader_only
                                         else holder.recents())})
+            elif url.path == "/grading/howto" and not grader_only:
+                from .howto import render_howto
+                holder.alive()
+                self._send(render_howto().encode("utf-8"))
             elif url.path == "/api/remote" and not grader_only:
                 from .remote_grading import api_get as remote_get
                 res = remote_get(url.path)
@@ -2570,6 +2574,9 @@ __BASE__
   body { overflow: auto; display: block; }
   main { max-width: 620px; margin: 0 auto; padding: 1.75rem 1.25rem 4rem; }
   .sub { color: var(--muted); margin: 0 0 1.75rem; }
+  .sub a { color: var(--accent); text-decoration: none;
+           margin-left: .6rem; font-size: .88rem; }
+  .sub a:hover { background: var(--hover-bg); }
   h2 { font-size: .95rem; letter-spacing: .04em; text-transform: uppercase;
        color: var(--muted); margin: 1.6rem 0 .5rem; }
   .row {
@@ -2635,7 +2642,9 @@ __BASE__
 <body>
 __NAV__
 <main>
-  <p class="sub">Pick the assignment to grade.</p>
+  <p class="sub">Pick the assignment to grade.
+    <a id="howto" href="/grading/howto" style="display:none">How-to:
+    the Moodle round trip &rarr;</a></p>
   <h2 class="sechead" id="head-local" style="display:none">Local
     Grading</h2>
   <div id="sec-recents">
@@ -2746,6 +2755,7 @@ function rows(el, items, rootPrefix) {
   if (!CFG.grader) {
     rows($("#recents"), s.recents.map(p => ({path: p})), null);
     SCAN = s;
+    $("#howto").style.display = "";
     $("#head-local").style.display = "";
     $("#sec-remote").style.display = "";
     fillPushSel();
