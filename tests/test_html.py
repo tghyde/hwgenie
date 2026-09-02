@@ -185,3 +185,27 @@ def test_sample_html_end_to_end(tmp_path):
     # handout must not reference solution-only images
     assert "vr_plot.png" not in handout
     assert "vr_plot.png" in solutions
+
+
+def test_toc_html_normalizes_levels_and_numbers():
+    from hwgenie.htmltemplate import toc_html
+    assert toc_html([]) == ""
+    toc = toc_html([
+        (2, "1.1", "The Basics", "sec-1.1"),
+        (3, "", "Cyclic $G$", "sec-cyclic-g"),
+    ])
+    assert '<nav class="toc" id="toc"' in toc
+    # A handout made only of subsections is not indented.
+    assert ('<li class="toc-l1"><a href="#sec-1.1">'
+            '<span class="toc-num">1.1</span>The Basics</a></li>') in toc
+    assert '<li class="toc-l2"><a href="#sec-cyclic-g">Cyclic $G$</a></li>' in toc
+
+
+def test_scrollbar_contents_toggle():
+    from hwgenie.htmltemplate import scrollbar_html
+    plain = scrollbar_html("../", "Home", "Handout 1")
+    assert "sb-toc" not in plain
+    with_toc = scrollbar_html("../", "Home", "Handout 1", toc_toggle=True)
+    assert ('<button type="button" class="sb-toc" aria-controls="toc" '
+            'aria-expanded="false">Contents</button>') in with_toc
+    assert with_toc.index("sb-label") < with_toc.index("sb-toc") < with_toc.index("sb-top")

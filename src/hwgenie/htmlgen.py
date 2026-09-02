@@ -163,6 +163,9 @@ class HtmlConverter:
         self._saw_qedhere = False
         self._in_solution = False
         self.problem_anchors: List[Tuple[str, str]] = []  # (number, anchor id)
+        # (level, number, title html, anchor id) per \section-family heading,
+        # in document order — drives the page table of contents.
+        self.sections: List[Tuple[int, str, str, str]] = []
         self.theorems = self._parse_newtheorems()
         self.eq_prefix = self._parse_eq_prefix()
 
@@ -211,6 +214,7 @@ class HtmlConverter:
         self.eq_counter = 0
         self._label_ctx = []
         self.problem_anchors = []
+        self.sections = []
 
     def convert(self) -> str:
         masked = texscan.mask_verbatim(self.text)
@@ -508,11 +512,24 @@ class HtmlConverter:
                        if self.section else str(self.subsec_counter))
             tag = "h3" if base == "subsubsection" else "h2"
             num_html = f'<span class="sec-num">{esc(num)}</span>' if num else ""
-            anchor = f' id="sec-{_anchor_slug(num)}"' if num else ""
             if num:
+                sec_id = f"sec-{_anchor_slug(num)}"
                 self._last_sec = ("sec", num)
+            else:
+                # Unnumbered headings get a title slug so the ToC can link
+                # them; a counter keeps repeated titles distinct.
+                plain = html_mod.unescape(re.sub(r"<[^>]+>", "", title))
+                slug = _anchor_slug(plain).lower() or "section"
+                sec_id = f"sec-{slug}"
+                taken = {a for _l, _n, _t, a in self.sections}
+                k = 2
+                while sec_id in taken:
+                    sec_id = f"sec-{slug}-{k}"
+                    k += 1
+            level = {"section": 1, "subsection": 2}.get(base, 3)
+            self.sections.append((level, num, title, sec_id))
             flow.block(
-                f'<{tag} class="sec-head"{anchor}>{num_html}{title}</{tag}>')
+                f'<{tag} class="sec-head" id="{sec_id}">{num_html}{title}</{tag}>')
             return j
         if name in self.theorems:
             self.warnings.append(f"\\{name} macro shadowing theorem name; dropped.")

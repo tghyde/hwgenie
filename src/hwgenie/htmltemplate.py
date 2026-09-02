@@ -635,6 +635,9 @@ NAV_CSS = """
 .scrollbar .sb-label { color: var(--muted); }
 .scrollbar .sb-jumps { display: flex; gap: .7rem; }
 .scrollbar .sb-top { margin-left: auto; }
+@media (max-width: 30rem) {
+  .scrollbar { gap: .55rem; padding-left: .7rem; }
+}
 nav.site {
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   font-size: .85rem;
@@ -644,6 +647,82 @@ nav.site {
   gap: .3rem 1rem;
 }
 nav.site .sep-dot { color: var(--muted); }
+.scrollbar .sb-toc {
+  background: none;
+  border: none;
+  font: inherit;
+  color: var(--accent);
+  cursor: pointer;
+  padding: .1rem .3rem;
+}
+.scrollbar .sb-toc:hover { background: var(--hover-bg); }
+.scrollbar .sb-toc::after { content: " ▾"; }
+.scrollbar .sb-toc[aria-expanded="true"]::after { content: " ▴"; }
+
+/* Table of contents: a fixed sidebar in the left gutter when the viewport
+   is wide enough to hold one beside the 44rem text column; otherwise a
+   dropdown panel under the sticky bar, opened by its "Contents" button. */
+nav.toc {
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: .82rem;
+  line-height: 1.4;
+}
+nav.toc .toc-title {
+  font-size: .72rem;
+  font-weight: 600;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0 0 .45rem .6rem;
+}
+nav.toc ul { list-style: none; margin: 0; padding: 0; }
+nav.toc li { margin: 0; }
+nav.toc a {
+  display: block;
+  color: var(--fg);
+  padding: .28rem .6rem;
+  border-left: 2px solid transparent;
+}
+nav.toc a:hover { background: var(--hover-bg); }
+nav.toc a.active {
+  color: var(--accent);
+  font-weight: 600;
+  border-left-color: var(--accent);
+}
+nav.toc .toc-num { color: var(--muted); font-weight: 400; margin-right: .45em; }
+nav.toc li.toc-l2 a { padding-left: 1.5rem; }
+nav.toc li.toc-l3 a { padding-left: 2.4rem; }
+@media (min-width: 74rem) {
+  nav.toc {
+    position: fixed;
+    top: 5rem;
+    left: calc(50% - 37.5rem);   /* 22rem half-column + 1.5rem gap + 14rem */
+    width: 14rem;
+    max-height: calc(100vh - 6.5rem);
+    overflow-y: auto;
+    z-index: 40;
+  }
+  .scrollbar .sb-toc { display: none; }
+}
+@media (max-width: 73.99rem) {
+  nav.toc {
+    position: fixed;
+    left: 0; right: 0;
+    top: 0;                      /* moved below the sticky bar by script */
+    z-index: 49;
+    display: none;
+    background: var(--card-bg);
+    box-shadow: 0 6px 14px rgba(0, 0, 0, .14);
+    max-height: min(70vh, 26rem);
+    overflow-y: auto;
+    padding: .5rem .6rem .7rem;
+  }
+  nav.toc.open { display: block; }
+  nav.toc .toc-title { display: none; }
+}
+@media print {
+  nav.toc, .scrollbar, #themetoggle { display: none; }
+}
 """
 
 
@@ -677,11 +756,112 @@ SCROLLBAR_JS = """
 """
 
 
+TOC_JS = """
+<script>
+(function() {
+  var toc = document.getElementById("toc");
+  if (!toc) return;
+  var bar = document.getElementById("scrollnav");
+  var btn = bar ? bar.querySelector(".sb-toc") : null;
+  var wide = window.matchMedia ? matchMedia("(min-width: 74rem)") : null;
+  var links = Array.prototype.slice.call(toc.querySelectorAll("a[href^='#']"));
+  var targets = links.map(function(a) {
+    return document.getElementById(a.getAttribute("href").slice(1));
+  });
+
+  function setOpen(want) {
+    toc.classList.toggle("open", want);
+    if (btn) btn.setAttribute("aria-expanded", want ? "true" : "false");
+    if (want && bar) toc.style.top = bar.offsetHeight + "px";
+  }
+  if (btn) {
+    btn.addEventListener("click", function(ev) {
+      ev.stopPropagation();
+      setOpen(!toc.classList.contains("open"));
+    });
+  }
+  toc.addEventListener("click", function(ev) {
+    if (ev.target.closest("a")) setOpen(false);
+  });
+  document.addEventListener("click", function(ev) {
+    if (toc.classList.contains("open") && !toc.contains(ev.target)) setOpen(false);
+  });
+  document.addEventListener("keydown", function(ev) {
+    if (ev.key === "Escape") setOpen(false);
+  });
+  window.addEventListener("resize", function() { setOpen(false); });
+
+  var current = -1;
+  function spy() {
+    // The panel only makes sense while the bar it hangs from is on screen.
+    if (bar && toc.classList.contains("open") && !bar.classList.contains("visible")) {
+      setOpen(false);
+    }
+    var limit = 90, idx = -1;
+    for (var i = 0; i < targets.length; i++) {
+      if (targets[i] && targets[i].getBoundingClientRect().top <= limit) idx = i;
+    }
+    if (targets.length &&
+        window.innerHeight + window.scrollY >= document.body.scrollHeight - 2) {
+      idx = targets.length - 1;
+    }
+    if (idx === current) return;
+    current = idx;
+    links.forEach(function(a, i) {
+      a.classList.toggle("active", i === idx);
+      if (i === idx) a.setAttribute("aria-current", "true");
+      else a.removeAttribute("aria-current");
+    });
+    if (idx >= 0 && wide && wide.matches) {
+      var a = links[idx], top = a.offsetTop, bottom = top + a.offsetHeight;
+      if (top < toc.scrollTop) toc.scrollTop = top - 8;
+      else if (bottom > toc.scrollTop + toc.clientHeight) {
+        toc.scrollTop = bottom - toc.clientHeight + 8;
+      }
+    }
+  }
+  var pending = false;
+  window.addEventListener("scroll", function() {
+    if (pending) return;
+    pending = true;
+    requestAnimationFrame(function() { pending = false; spy(); });
+  }, {passive: true});
+  window.addEventListener("load", spy);
+  spy();
+})();
+</script>
+"""
+
+
+def toc_html(sections: List[Tuple[int, str, str, str]]) -> str:
+    """Table-of-contents nav from (level, number, title html, anchor id)
+    entries.  Levels are normalized so the shallowest heading present sits
+    flush left (a handout made only of subsections is not indented)."""
+    if not sections:
+        return ""
+    base = min(level for level, _n, _t, _a in sections)
+    items = []
+    for level, num, title, anchor in sections:
+        depth = min(level - base + 1, 3)
+        num_html = f'<span class="toc-num">{html_mod.escape(num)}</span>' if num else ""
+        items.append(
+            f'<li class="toc-l{depth}"><a href="#{html_mod.escape(anchor)}">'
+            f"{num_html}{title}</a></li>"
+        )
+    return (
+        '<nav class="toc" id="toc" aria-label="Table of contents">\n'
+        '<p class="toc-title">Contents</p>\n<ul>\n'
+        + "\n".join(items)
+        + "\n</ul>\n</nav>"
+    )
+
+
 def scrollbar_html(
     home_href: Optional[str],
     home_label: str,
     page_label: str,
     jump_links: Optional[List[Tuple[str, str]]] = None,
+    toc_toggle: bool = False,
 ) -> str:
     home = (
         f'<a href="{home_href}">← {html_mod.escape(home_label)}</a>'
@@ -694,10 +874,16 @@ def scrollbar_html(
             for num, anchor in jump_links
         )
         jumps = f'<span class="sb-jumps">{items}</span>'
+    toggle = (
+        '<button type="button" class="sb-toc" aria-controls="toc" '
+        'aria-expanded="false">Contents</button>'
+        if toc_toggle else ""
+    )
     return (
         f'<div class="scrollbar" id="scrollnav">'
         f"{home}"
         f'<span class="sb-label">{html_mod.escape(page_label)}</span>'
+        f"{toggle}"
         f"{jumps}"
         f'<a class="sb-top" href="#top" aria-label="Back to top">↑ Top</a>'
         f"</div>"
@@ -718,6 +904,7 @@ def render_page(
     favicon: str = "",
     banner: str = "",
     due: str = "",
+    toc: str = "",
 ) -> str:
     badge = '<div><span class="badge">Solutions</span></div>' if solutions else ""
     due_html = (
@@ -757,6 +944,7 @@ def render_page(
 <body>
 {THEME_TOGGLE_HTML}
 {scrollbar}
+{toc}
 {hero if banner else ""}
 <main>
 {nav_html}
@@ -765,6 +953,7 @@ def render_page(
 <footer class="doc">{FOOTER_HTML}</footer>
 </main>
 {SCROLLBAR_JS if scrollbar else ""}
+{TOC_JS if toc else ""}
 {THEME_TOGGLE_JS}
 </body>
 </html>

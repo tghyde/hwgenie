@@ -327,3 +327,44 @@ def test_no_readings_section_without_entries(repo):
     index = (result.out_dir / "index.html").read_text()
     assert 'id="readings"' not in index
     assert "#readings" not in index
+
+
+TOC_DOC = """\\documentclass{{article}}
+\\usepackage{{hwgenie}}
+\\hwtype{{{doc_type}}}
+\\hwnumber{{1}}
+\\hwtitle{{Review}}
+\\begin{{document}}
+\\hwmaketitle
+Intro.
+\\subsection{{The Basics}}
+A.
+\\subsection{{Cosets}}
+B.
+\\end{{document}}
+"""
+
+
+def test_toc_on_lessons_and_handouts_not_problem_sets(repo):
+    lessons = repo / "source" / "lessons"
+    lessons.mkdir(parents=True)
+    (lessons / "lesson1.tex").write_text(TOC_DOC.format(doc_type="lesson"))
+    handouts = repo / "source" / "handouts"
+    handouts.mkdir(parents=True)
+    (handouts / "review.tex").write_text(TOC_DOC.format(doc_type="handout"))
+    result = build_site(repo, compile_pdfs=False, today=date(2025, 10, 15))
+    assert result.ok, result.errors
+    site = result.out_dir
+
+    for page in ("lessons/1/index.html", "handouts/1/index.html"):
+        html = (site / page).read_text()
+        assert '<nav class="toc" id="toc" aria-label="Table of contents">' in html
+        assert '<a href="#sec-1.1"><span class="toc-num">1.1</span>The Basics</a>' in html
+        assert '<a href="#sec-1.2"><span class="toc-num">1.2</span>Cosets</a>' in html
+        assert 'class="sb-toc" aria-controls="toc"' in html
+        assert 'var toc = document.getElementById("toc")' in html
+        # the nav comes before the column so it never affects text flow
+        assert html.index('id="toc"') < html.index("<main>")
+    ps1 = (site / "ps/1/index.html").read_text()
+    assert 'id="toc"' not in ps1
+    assert 'class="sb-toc"' not in ps1

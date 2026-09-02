@@ -189,3 +189,21 @@ def test_problem_brace_protected_title():
     assert "problem-note" in html
     assert "CRT for" in html
     assert "[CRT" not in html and "[{CRT" not in html
+
+
+def test_sections_collected_for_toc():
+    conv, html = convert(
+        "\\section{Overview}\nA.\n"
+        "\\subsection{The Basics}\nB.\n"
+        "\\subsubsection{Groups $G$}\nC.\n"
+        "\\section{Overview}\nE."
+    )
+    assert conv.sections == [
+        (1, "", "Overview", "sec-overview"),
+        (2, "1.1", "The Basics", "sec-1.1"),
+        (3, "", "Groups $G$", "sec-groups-g"),
+        (1, "", "Overview", "sec-overview-2"),
+    ]
+    assert '<h2 class="sec-head" id="sec-overview">Overview</h2>' in html
+    assert '<h3 class="sec-head" id="sec-groups-g">Groups $G$</h3>' in html
+    assert 'id="sec-overview-2"' in html

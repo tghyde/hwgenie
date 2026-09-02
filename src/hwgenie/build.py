@@ -20,7 +20,7 @@ from . import compile as texcompile
 from . import texscan, tikzsvg, transforms
 from .courseconfig import find_course_config, load_course_config
 from .htmlgen import HtmlConverter
-from .htmltemplate import DEFAULT_THEME_CSS, render_page, scrollbar_html
+from .htmltemplate import DEFAULT_THEME_CSS, render_page, scrollbar_html, toc_html
 from .katexmacros import extract_macros
 from .metadata import Metadata, latex_plain, parse_metadata
 from .themes import theme_from_config
@@ -260,6 +260,12 @@ def build_html(
     if solutions_page:
         title += " (Solutions)"
 
+    # Lessons and handouts get a table of contents built from their
+    # headings (problem sets navigate by problem instead).
+    toc = ""
+    if meta.doc_type != "problemset" and len(conv.sections) >= 2:
+        toc = toc_html(conv.sections)
+
     scrollbar = ""
     if sb_home:
         kind = {"lesson": "Lesson", "syllabus": "Syllabus",
@@ -268,7 +274,8 @@ def build_html(
         if include_solutions and meta.doc_type == "problemset":
             label += " · Solutions"
         scrollbar = scrollbar_html(
-            sb_home[0], sb_home[1], label, conv.problem_anchors
+            sb_home[0], sb_home[1], label, conv.problem_anchors,
+            toc_toggle=bool(toc),
         )
 
     page = render_page(
@@ -285,6 +292,7 @@ def build_html(
         favicon=favicon,
         banner=banner,
         due="" if solutions_page else latex_plain(meta.due or ""),
+        toc=toc,
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(page, encoding="utf-8")
