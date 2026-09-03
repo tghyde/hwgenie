@@ -661,6 +661,18 @@ def make_handler(holder: AppHolder):
                     self._send(b"not found", code=404)
                 else:
                     self._json(res[0], res[1])
+            elif url.path == "/problem-sets" and not grader_only:
+                from .problem_sets import render_problem_sets
+                holder.alive()
+                self._send(render_problem_sets().encode("utf-8"))
+            elif (url.path.startswith("/problem-sets/api/")
+                  and not grader_only):
+                from .problem_sets import api_get as sets_get
+                res = sets_get(url.path)
+                if res is None:
+                    self._send(b"not found", code=404)
+                else:
+                    self._json(res[0], res[1])
             elif url.path == "/new-course" and not grader_only:
                 from .new_course_gui import render_wizard
                 holder.alive()
@@ -777,6 +789,14 @@ def make_handler(holder: AppHolder):
             elif self.path.startswith("/courses/api/") and not grader_only:
                 from .course_admin import api_post as courses_post
                 res = courses_post(self.path, data, course_roots(holder.root))
+                if res is None:
+                    self._send(b"not found", code=404)
+                else:
+                    self._json(res[0], res[1])
+            elif (self.path.startswith("/problem-sets/api/")
+                  and not grader_only):
+                from .problem_sets import api_post as sets_post
+                res = sets_post(self.path, data, course_roots(holder.root))
                 if res is None:
                     self._send(b"not found", code=404)
                 else:

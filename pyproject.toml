@@ -1,6 +1,6 @@
 [project]
 name = "hwgenie"
-version = "0.39.0"
+version = "0.40.0"
 description = "Generate handout/submission/solutions files from a single LaTeX homework source"
 requires-python = ">=3.9"
 dependencies = ["pylatexenc>=2.10,<3", "pypdf>=4"]

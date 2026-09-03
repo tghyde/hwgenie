@@ -336,10 +336,14 @@ def _known_clones() -> dict[str, str]:
             if c.get("local")}
 
 
-def _log_proc(p: subprocess.CompletedProcess) -> None:
+def _log_lines(log, p: subprocess.CompletedProcess) -> None:
     for line in (p.stdout + p.stderr).splitlines():
         if line.strip():
-            COURSES.log(line)
+            log(line)
+
+
+def _log_proc(p: subprocess.CompletedProcess) -> None:
+    _log_lines(COURSES.log, p)
 
 
 def _do_sync(repos: list[str]) -> None:
@@ -394,33 +398,42 @@ def _do_push(repo: str) -> None:
 
 
 def _do_resolve(repo: str) -> None:
+    clone = _known_clones().get(repo)
+    resolve_clone(Path(clone) if clone else None,
+                  repo.split("/")[-1], COURSES.log)
+
+
+def resolve_clone(clone: Path | None, label: str, log) -> None:
     """Diverged clone (ahead AND behind — the Overleaf race): replay the
     local commits onto GitHub's and push, but only when the two sides
-    touched disjoint files, so the rebase cannot conflict."""
-    clone = _known_clones().get(repo)
-    COURSES.log(f"── {repo.split('/')[-1]}: resolve diverged history")
+    touched disjoint files, so the rebase cannot conflict.
+
+    Shared with the Problem Sets page, so it takes its clone and log
+    rather than reading the Courses page's scan.
+    """
+    log(f"── {label}: resolve diverged history")
     if not clone:
-        COURSES.log("no local clone")
+        log("no local clone")
         return
     clone = Path(clone)
     fetch = _run(["git", "fetch", "-q", "origin"], cwd=clone, timeout=120)
     if fetch.returncode != 0:
-        _log_proc(fetch)
-        COURSES.log("fetch failed — not resolving")
+        _log_lines(log, fetch)
+        log("fetch failed — not resolving")
         return
     st = _run(["git", "status", "--porcelain"], cwd=clone, timeout=15)
     if st.returncode != 0 or st.stdout.strip():
-        COURSES.log("uncommitted local edits in the clone — commit or "
-                    "discard them first, then retry")
+        log("uncommitted local edits in the clone — commit or "
+            "discard them first, then retry")
         return
     counts = _run(["git", "rev-list", "--left-right", "--count",
                    "HEAD...@{upstream}"], cwd=clone, timeout=15)
     if counts.returncode != 0:
-        COURSES.log("no upstream — cannot resolve")
+        log("no upstream — cannot resolve")
         return
     ahead, behind = (int(x) for x in counts.stdout.split())
     if not (ahead and behind):
-        COURSES.log("not diverged — use Pull or Push instead")
+        log("not diverged — use Pull or Push instead")
         return
     # A...B diffs from the merge base: what each side changed on its own.
     ours = _run(["git", "diff", "--name-only", "@{upstream}...HEAD"],
@@ -428,28 +441,28 @@ def _do_resolve(repo: str) -> None:
     theirs = _run(["git", "diff", "--name-only", "HEAD...@{upstream}"],
                   cwd=clone, timeout=15)
     if ours.returncode != 0 or theirs.returncode != 0:
-        COURSES.log("could not compare the two histories — not resolving")
+        log("could not compare the two histories — not resolving")
         return
     both = sorted(set(ours.stdout.split()) & set(theirs.stdout.split()))
     if both:
-        COURSES.log("changed on BOTH sides: " + ", ".join(both))
-        COURSES.log("refusing to auto-resolve — reconcile by hand "
-                    "(`git pull --rebase` in Terminal) so nothing is lost")
+        log("changed on BOTH sides: " + ", ".join(both))
+        log("refusing to auto-resolve — reconcile by hand "
+            "(`git pull --rebase` in Terminal) so nothing is lost")
         return
-    COURSES.log(f"replaying {ahead} local commit(s) onto GitHub's {behind}…")
+    log(f"replaying {ahead} local commit(s) onto GitHub's {behind}…")
     rb = _run(["git", "pull", "--rebase", "-q"], cwd=clone, timeout=120)
     if rb.returncode != 0:
-        _log_proc(rb)
+        _log_lines(log, rb)
         _run(["git", "rebase", "--abort"], cwd=clone, timeout=60)
-        COURSES.log("rebase failed — aborted; the clone is back as it was")
+        log("rebase failed — aborted; the clone is back as it was")
         return
     push = _run(["git", "push", "-q"], cwd=clone, timeout=120)
-    _log_proc(push)
+    _log_lines(log, push)
     if push.returncode == 0:
-        COURSES.log("resolved and pushed — re-pull the project in Overleaf "
-                    "so it sees the merged history")
+        log("resolved and pushed — re-pull the project in Overleaf "
+            "so it sees the merged history")
     else:
-        COURSES.log("push failed")
+        log("push failed")
 
 
 def find_clone_of(repo: str, roots: list[Path]) -> Path | None:
