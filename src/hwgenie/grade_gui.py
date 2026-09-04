@@ -1261,6 +1261,8 @@ __BASE__
 </head>
 <body>
 <header>
+  <button class="ghost" id="home" title="Back to the hwGenie home page">
+    ← Home</button>
   <h1>hwGenie __LAMP__</h1>
   <button class="ghost" id="switch" title="Grade a different assignment">
     ⇄ <span id="foldname"></span></button>
@@ -2499,6 +2501,12 @@ $("#switch").addEventListener("click", async () => {
   location.href = "/grading?pick=1";
 });
 
+$("#home").addEventListener("click", async () => {
+  await settleSaves();
+  if (saveState() !== "clean") { updateSaveStat(); return; }
+  location.href = "/";
+});
+
 // ---------------------------------------------------------------- export --
 
 function notice(msg) {
@@ -2543,6 +2551,7 @@ $("#export").addEventListener("click", async () => {
 (async function init() {
   if (CFG.grader) {
     $("#export").style.display = "none";
+    $("#home").style.display = "none";
     updateWhoami();
     promptName(false);
   }
