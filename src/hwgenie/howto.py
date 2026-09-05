@@ -79,14 +79,29 @@ __NAV__
       <b class="ui">Offline grading worksheet</b> and <b class="ui">
       Feedback files</b> under the assignment&rsquo;s Feedback types
       settings.)</li>
-    <li>On the <b class="ui">Grading</b> tab here, paste the zip&rsquo;s
-      path into <b class="ui">Somewhere else</b> and click Open. hwGenie
-      collects it into a grading folder next to the zip and opens
-      it.</li>
-    <li>Drop the <code>Grades-&hellip;.csv</code> worksheet into that
+    <li>Make a folder for the assignment, e.g.
+      <code>grading-lab/math221/ps01/</code>, with the zip and worksheet
+      in <code>moodle-raw/</code> and the submission template students
+      downloaded (the <code>&hellip;-submission-&hellip;.tex</code> link
+      on the course site&rsquo;s problem-set page) in
+      <code>build/</code>.</li>
+    <li>Collect, in Terminal from the <code>hwgenie</code> folder:
+      <code>.venv/bin/hwgenie collect "&lt;zip&gt;" --dest
+      "&lt;assignment&gt;/grading" --template "&lt;template.tex&gt;"</code>.
+      The template enables the problem-statement pane and the
+      solution-box count check; the report flags students who submitted
+      no tex, didn&rsquo;t use the template, or uploaded several PDFs
+      (pick the right one by copying it to
+      <code>submissions/&lt;slug&gt;/submission.pdf</code>).
+      <em>Shortcut without a template:</em> paste the zip&rsquo;s path
+      into <b class="ui">Somewhere else</b> on the Grading tab.</li>
+    <li>Drop the <code>Grades-&hellip;.csv</code> worksheet into the
       grading folder (next to <code>manifest.json</code>). It carries the
       students&rsquo; email addresses and is what fills grades back into
       Moodle later.</li>
+    <li>Write <code>rubric.yml</code> in the grading folder (next
+      section) &mdash; without one every part is &ldquo;Part k&rdquo; out
+      of 5.</li>
   </ol>
 
   <h2 id="rubric">2. Setting up the rubric (and extra credit)</h2>
