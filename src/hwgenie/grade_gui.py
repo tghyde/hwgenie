@@ -35,6 +35,7 @@ from pathlib import Path
 
 from .grade import (
     MANIFEST_NAME,
+    RUBRIC_NAME,
     SOLUTION_BEGIN,
     SOLUTION_END,
     GradeError,
@@ -426,26 +427,41 @@ class AppHolder:
         self.root = Path(root).resolve()
         self.grader_only = grader_only
         self.current: GradingApp | None = None
-        self.apps: dict[str, GradingApp] = {}
+        self.apps: dict[str, tuple[GradingApp, tuple]] = {}
         self.apps_lock = threading.Lock()
         self.shutdown = threading.Event()
         self.last_ping: float | None = None   # for --auto-exit
         self.bye_at: float | None = None
 
+    @staticmethod
+    def _folder_sig(p: Path) -> tuple:
+        """What a re-push changes: the manifest and rubric.  (A push also
+        touches the manifest, so new submission files invalidate too.)"""
+        def mt(f: Path):
+            try:
+                return f.stat().st_mtime_ns
+            except OSError:
+                return None
+        return (mt(p / MANIFEST_NAME), mt(p / RUBRIC_NAME))
+
     def get_app(self, path: Path | str) -> GradingApp:
         """The (cached) GradingApp for a grading folder.  One instance per
         folder no matter how many clients use it, so all writes share its
-        lock and render caches.  Raises GradeError for anything that is
-        not an openable grading folder."""
+        lock and render caches.  The instance is rebuilt when the folder's
+        manifest or rubric changes on disk (an instructor re-push to a
+        hosted server), so its cached units/rubric/bodies never go stale.
+        Raises GradeError for anything that is not an openable grading
+        folder."""
         p = Path(path).expanduser().resolve()
         if self.grader_only and self.root not in (p, *p.parents):
             raise GradeError(f"{p} is outside the served folder")
         key = str(p)
+        sig = self._folder_sig(p)
         with self.apps_lock:
-            app = self.apps.get(key)
-            if app is None:
-                app = self.apps[key] = GradingApp(p)
-        return app
+            entry = self.apps.get(key)
+            if entry is None or entry[1] != sig:
+                entry = self.apps[key] = (GradingApp(p), sig)
+        return entry[0]
 
     def alive(self) -> None:
         self.last_ping = time.monotonic()

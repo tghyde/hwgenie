@@ -159,9 +159,12 @@ def push(folder: Path, cfg: dict, log=lambda s: None) -> str:
         _bundle_template(stage, log)
         _run(["rsync", "-rlt", "--delete", f"{stage}/",
               f"{cfg['host']}:{cfg['root']}/{name}/"], log)
+    # touching the manifest makes a running grader server rebuild its
+    # cached view of the assignment even when only submissions changed
+    post = f"touch '{cfg['root']}/{name}/{MANIFEST_NAME}'"
     if cfg.get("owner"):
-        _run(["ssh", *SSH_OPTS, cfg["host"],
-              f"chown -R {cfg['owner']} '{cfg['root']}/{name}'"], log)
+        post += f" && chown -R {cfg['owner']} '{cfg['root']}/{name}'"
+    _run(["ssh", *SSH_OPTS, cfg["host"], post], log)
     log(f"pushed '{name}'")
     return name
 

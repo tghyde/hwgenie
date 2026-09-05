@@ -649,3 +649,20 @@ def test_howto_page(picker_client):
 
 def test_howto_hidden_in_grader_mode(grader_client):
     grader_client.get("/grading/howto", expect=404)
+
+
+def test_get_app_rebuilds_when_folder_changes(grading_folder):
+    import os
+    from hwgenie.grade_gui import AppHolder
+
+    holder = AppHolder(root=grading_folder)
+    a1 = holder.get_app(grading_folder)
+    assert holder.get_app(grading_folder) is a1          # cached
+    # an instructor re-push rewrites the rubric (and touches the manifest)
+    rub = grading_folder / "rubric.yml"
+    rub.write_text("parts:\n- 1.1: 10\n- 1.2: 2.5\n- 2.1a\n")
+    st = rub.stat()
+    os.utime(rub, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
+    a2 = holder.get_app(grading_folder)
+    assert a2 is not a1
+    assert a2.rubric[0].max == 10
