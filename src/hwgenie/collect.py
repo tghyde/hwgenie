@@ -445,9 +445,11 @@ def collect(src: Path, dest: Path, template: Path | None = None,
     if timezone_name:
         late_mod.write_setting(dest, "timezone", timezone_name)
     if ws is not None and ws.parent.resolve() != dest.resolve():
-        # the worksheet also drives the return trip; keep a copy handy
+        # the worksheet also drives the return trip; keep the freshest
+        # copy next to the manifest (Moodle reuses the filename, so a
+        # re-download must replace the stale one)
         target = dest / ws.name
-        if not target.exists():
+        if not target.exists() or _sha256(target) != _sha256(ws):
             shutil.copy2(ws, target)
     manifest = {
         "created": (old_manifest or {}).get("created") or _now(),

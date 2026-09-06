@@ -247,6 +247,13 @@ def test_collect_reads_worksheet_times(tmp_path):
     assert res.late["Pitt Roe-Rick"]["late_text"] == "1 h 16 min"
     # the worksheet was copied next to the manifest for the return trip
     assert (dest / "Grades-TEST-PS1--1.csv").is_file()
+    # ...and a re-download under the same name replaces that copy
+    _write_ws(src / "Grades-TEST-PS1--1.csv", [
+        ("111", "Jane Doe", "Friday, September 4, 2026, 10:36 PM"),
+        ("222", "Rick Roe", "Saturday, September 5, 2026, 1:15 AM"),
+        ("333", "Kim Lee", "Sunday, September 6, 2026, 9:00 AM")])
+    collect(src, dest)
+    assert "Kim Lee" in (dest / "Grades-TEST-PS1--1.csv").read_text()
 
 
 def test_collect_zip_times_fallback(tmp_path):
