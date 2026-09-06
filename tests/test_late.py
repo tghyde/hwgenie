@@ -353,6 +353,10 @@ def test_collect_update_legacy_manifest_trusts_clock(tmp_path):
         u.pop("source_sha256"); u.pop("submitted"); u.pop("collected")
         u["sha256"]["pdf"] = "0" * 64        # pdf swapped by hand
     (dest / "manifest.json").write_text(json.dumps(mf))
+    # the worksheet from the FIRST download is still in the grading folder
+    _write_ws(dest / "Grades-TEST--1.csv", [
+        ("111", "Jane Doe", "Friday, September 4, 2026, 10:36 PM"),
+        ("222", "Rick Roe", "Friday, September 4, 2026, 9:00 PM")])
     _write_ws(src / "Grades-TEST--1.csv", [
         ("111", "Jane Doe", "Friday, September 4, 2026, 10:36 PM"),
         ("222", "Rick Roe", "Sunday, September 6, 2026, 9:00 AM")])
@@ -362,7 +366,11 @@ def test_collect_update_legacy_manifest_trusts_clock(tmp_path):
     mf2 = {u["slug"]: u for u in
            json.loads((dest / "manifest.json").read_text())["units"]}
     assert mf2["Doe-Jane"]["submitted"] == "2026-09-04T22:36-04:00"
+    # Rick's on-time first submission survives; the re-upload is separate
+    assert mf2["Pitt Roe-Rick"]["submitted"] == "2026-09-04T21:00-04:00"
     assert mf2["Pitt Roe-Rick"]["resubmitted"] == "2026-09-06T09:00-04:00"
+    assert "Rick Roe,222@x.edu" not in (dest / "Grades-TEST--1.csv").read_text() \
+        or "Sunday" in (dest / "Grades-TEST--1.csv").read_text()  # refreshed
 
 
 def test_collect_fresh_overwrites(tmp_path):

@@ -334,6 +334,17 @@ def collect(src: Path, dest: Path, template: Path | None = None,
     except late_mod.LateError as e:
         raise CollectError(str(e))
 
+    # Manifests from before v0.41 recorded no submission times, but the
+    # worksheet copy already in the grading folder has the ORIGINAL ones —
+    # read it before a fresh download replaces it, so a student who
+    # re-uploads one file later keeps their on-time first submission.
+    if update:
+        old_ws = find_worksheet_near(dest)
+        for mid, when in (worksheet_times(old_ws, tz) if old_ws else {}).items():
+            old = old_by_id.get(mid)
+            if old is not None and not old.get("submitted"):
+                old["submitted"] = late_mod.iso(when)
+
     tmp = None
     try:
         if src.is_file() and src.suffix.lower() == ".zip":
