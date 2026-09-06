@@ -568,15 +568,55 @@ class AppHolder:
             if self.grader_only:
                 raise GradeError("collecting a zip is disabled on a "
                                  "grader-only server")
-            dest = path.with_name(path.stem + "-grading")
-            if not (dest / MANIFEST_NAME).is_file():
-                from .collect import collect
-                collect(path, dest)
-            path = dest
+            path = self.run_collect(zip_path=path)["folder"]
         app = self.get_app(path)
         self.current = app
         self.remember(app.folder)
         return app
+
+    def run_collect(self, zip_path=None, folder=None, due=None,
+                    timezone_name=None) -> dict:
+        """Collect (or re-collect) from the assignment-folder layout; the
+        result is the report the picker page shows."""
+        from . import late as late_mod
+        from .collect import collect, locate
+        if self.grader_only:
+            raise GradeError("collecting is done by the instructor, not "
+                             "on the hosted grader")
+        plan = locate(zip_path=zip_path, folder=folder)
+        res = collect(plan["zip"], plan["dest"], template=plan["template"],
+                      due=(due or None), timezone_name=(timezone_name or None))
+        # a fresh view for anyone who has the folder open
+        with self.apps_lock:
+            self.apps.pop(str(plan["dest"].resolve()), None)
+        lines = []
+        for u in res.units:
+            tag = ("+new" if u.slug in res.added else
+                   "~resubmitted (kept)" if u.slug in res.resubmitted else
+                   "~replaced" if u.slug in res.replaced else "")
+            lt = res.late.get(u.slug)
+            late = (f"LATE {lt['late_text']} ({lt['label']})"
+                    if lt and lt.get("is_late") else "")
+            notes = "; ".join(u.anomalies)
+            bits = [b for b in (tag, late, ("!! " + notes) if notes else "")
+                    if b]
+            if bits or not res.update:
+                lines.append(f"{u.slug}: " + "  ".join(bits) if bits
+                             else u.slug)
+        settings = late_mod.read_settings(plan["dest"])
+        return {
+            "ok": True, "folder": str(plan["dest"]), "zip": str(plan["zip"]),
+            "template": str(plan["template"]) if plan["template"] else None,
+            "update": res.update, "units": len(res.units),
+            "added": res.added, "replaced": res.replaced,
+            "resubmitted": res.resubmitted, "unchanged": len(res.unchanged),
+            "skipped": res.skipped,
+            "worksheet": str(res.worksheet) if res.worksheet else None,
+            "due": settings.get("due"),
+            "late": sorted(s_ for s_, lt in res.late.items()
+                           if lt.get("is_late")),
+            "lines": lines,
+        }
 
 
 def course_roots(root: Path) -> list[Path]:
@@ -796,6 +836,20 @@ def make_handler(holder: AppHolder):
                 if not grader_only:
                     holder.current = None
                 self._json({"ok": True})
+            elif self.path == "/api/collect":
+                if grader_only:
+                    self._json({"ok": False, "error": "not available on a "
+                                "grader-only server"}, 403)
+                    return
+                from .collect import CollectError
+                try:
+                    res = holder.run_collect(
+                        zip_path=data.get("zip") or None,
+                        folder=data.get("folder") or None,
+                        due=data.get("due"), timezone_name=data.get("timezone"))
+                    self._json(res)
+                except (GradeError, CollectError, OSError) as e:
+                    self._json({"ok": False, "error": str(e)}, 400)
             elif self.path == "/api/late":
                 if grader_only:
                     self._json({"ok": False, "error": "late-work decisions "
@@ -2947,6 +3001,9 @@ __BASE__
   }
   #remlog { white-space: pre-wrap; font-family: ui-monospace, monospace;
             font-size: .72rem; margin-top: .6rem; }
+  #clog { white-space: pre-wrap; font-family: ui-monospace, monospace;
+          font-size: .72rem; margin-top: .6rem; }
+  .row .recollect { margin-left: .5rem; padding: 0 .4rem; font-size: .9rem; }
 </style>
 </head>
 <body>
@@ -2973,6 +3030,24 @@ __NAV__
     <p class="hint">Paste a grading folder (made by <code>hwgenie
     collect</code>) or a Moodle &ldquo;Download all submissions&rdquo; .zip
     &mdash; a zip is collected into a folder next to it first.</p>
+  </div>
+  <div id="sec-collect">
+    <h2 class="sechead">Collect from Moodle</h2>
+    <div class="manual">
+      <input id="czip" spellcheck="false"
+        placeholder="/path/to/<assignment>/moodle-raw/<download>.zip">
+      <input id="cdue" spellcheck="false" style="flex:0 0 11rem"
+        placeholder="due: 2026-09-04 23:59" title="Deadline in course time
+(optional; kept from a previous collect if blank)">
+      <button id="collect">Collect</button>
+    </div>
+    <p class="hint">Put the zip and the <code>Grades-&hellip;.csv</code>
+    worksheet in <code>&lt;assignment&gt;/moodle-raw/</code> and the
+    submission template in <code>&lt;assignment&gt;/build/</code>; the
+    grading folder becomes <code>&lt;assignment&gt;/grading/</code>.
+    Re-collecting an existing folder (or the &#x21bb; on a row above)
+    adds late students and re-uploads without touching graded work.</p>
+    <pre id="clog" class="hint" style="display:none"></pre>
   </div>
   <div id="err"></div>
   <div id="sec-remote" style="display:none">
@@ -3037,19 +3112,73 @@ function rows(el, items, rootPrefix) {
     const meta = [f.units !== null && f.units !== undefined ?
                   f.units + " submissions" : "", f.created]
                  .filter(Boolean).join(" · ");
+    const rc = !CFG.grader && f.units !== null && f.units !== undefined
+      ? `<button class="ghost recollect" title="Collect again from the newest
+zip in this assignment's moodle-raw/ — adds late students and re-uploads,
+never touches graded work">&#x21bb;</button>` : "";
     return `<div class="row" data-p="${esc(f.path)}">
       <span class="path">${esc(rel || f.path)}</span>
-      <span class="meta">${esc(meta)}</span></div>`;
+      <span class="meta">${esc(meta)}</span>${rc}</div>`;
   }).join("");
   el.querySelectorAll(".row").forEach(r =>
     r.addEventListener("click", () => gotoFolder(r.dataset.p)));
+  el.querySelectorAll(".recollect").forEach(b =>
+    b.addEventListener("click", e => {
+      e.stopPropagation();
+      runCollect({folder: b.closest(".row").dataset.p});
+    }));
+}
+
+async function runCollect(body) {
+  const log = $("#clog");
+  log.style.display = "block";
+  log.textContent = "Collecting…";
+  $("#err").style.display = "none";
+  try {
+    const r = await fetch("/api/collect",
+      {method: "POST", body: JSON.stringify(body)});
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error || "collect failed");
+    const head = (d.update ? "Updated" : "Collected") +
+      ` ${d.units} submissions in ${d.folder}` +
+      (d.update ? ` — ${d.added.length} added, ${d.replaced.length} replaced, ` +
+        `${d.resubmitted.length} re-uploaded after grading (kept), ` +
+        `${d.unchanged} unchanged` : "") +
+      `\n  zip: ${d.zip}` +
+      `\n  template: ${d.template || "none — no problem pane / box check"}` +
+      `\n  times from: ${d.worksheet || "zip file dates (no worksheet found)"}` +
+      `\n  due: ${d.due || "not set — nothing will be flagged late"}` +
+      (d.late.length ? `\n  late: ${d.late.join(", ")}` : "") +
+      (d.skipped.length ? `\n  skipped: ${d.skipped.join("; ")}` : "");
+    log.textContent = head + (d.lines.length ? "\n\n" + d.lines.join("\n") : "");
+    const a = document.createElement("a");
+    a.href = "/grading?folder=" + encodeURIComponent(d.folder);
+    a.textContent = "\nOpen it →";
+    log.appendChild(a);
+    const s = await (await fetch("/api/scan")).json();
+    rows($("#found"), s.folders, s.root);
+  } catch (e) {
+    log.textContent = "";
+    log.style.display = "none";
+    $("#err").textContent = e.message;
+    $("#err").style.display = "block";
+  }
 }
 
 (async function init() {
   if (CFG.grader) {
     $("#sec-manual").style.display = "none";
+    $("#sec-collect").style.display = "none";
     $("#sec-recents").style.display = "none";
   }
+  $("#collect").addEventListener("click", () => {
+    const zip = $("#czip").value.trim();
+    if (!zip) { $("#czip").focus(); return; }
+    runCollect({zip, due: $("#cdue").value.trim()});
+  });
+  $("#czip").addEventListener("keydown", e => {
+    if (e.key === "Enter") $("#collect").click();
+  });
   const err = new URLSearchParams(location.search).get("err");
   if (err) {
     $("#err").textContent = err;

@@ -550,3 +550,105 @@ def test_api_late_locked_on_grader_server(course):
         client.get("/gradebook", expect=404)
     finally:
         server.shutdown()
+
+
+# ------------------------------------------------------- gui collect ------
+
+def _assignment(tmp_path):
+    """<tmp>/math221/ps01/{moodle-raw/<zip>+worksheet, build/template}."""
+    src = make_moodle_dir(tmp_path)
+    ps = tmp_path / "math221" / "ps01"
+    (ps / "moodle-raw").mkdir(parents=True)
+    (ps / "build").mkdir()
+    zpath = ps / "moodle-raw" / "MATH-221-PS1.zip"
+    with zipfile.ZipFile(zpath, "w") as z:
+        for f in src.rglob("*"):
+            if f.is_file():
+                z.write(f, str(f.relative_to(src)))
+    _write_ws(ps / "moodle-raw" / "Grades-MATH-221-PS1--9.csv", [
+        ("111", "Jane Doe", "Friday, September 4, 2026, 10:36 PM"),
+        ("222", "Rick Roe", "Saturday, September 5, 2026, 1:15 AM")])
+    (ps / "build" / "PS1-submission.tex").write_text(TEMPLATE)
+    return ps, zpath, src
+
+
+def test_locate_layout(tmp_path):
+    from hwgenie.collect import CollectError, locate
+    ps, zpath, _ = _assignment(tmp_path)
+    plan = locate(zip_path=zpath)
+    assert plan["dest"] == ps / "grading" and not plan["update"]
+    assert plan["template"] == ps / "build" / "PS1-submission.tex"
+    # a zip anywhere else: <stem>-grading beside it, no template
+    loose = tmp_path / "loose.zip"
+    loose.write_bytes(zpath.read_bytes())
+    plan2 = locate(zip_path=loose)
+    assert plan2["dest"] == tmp_path / "loose-grading"
+    assert plan2["template"] is None
+    with pytest.raises(CollectError, match="no Moodle zip"):
+        locate(folder=tmp_path / "math221" / "ps02" / "grading")
+    with pytest.raises(CollectError):
+        locate()
+
+
+def test_api_collect_and_recollect(tmp_path):
+    from hwgenie.grade_gui import AppHolder
+    ps, zpath, src = _assignment(tmp_path)
+    holder = AppHolder(root=tmp_path / "math221")
+    server, client = _start_server(holder)
+    try:
+        r = client.post("/api/collect", {"zip": str(zpath),
+                                         "due": "2026-09-04 23:59",
+                                         "timezone": "America/New_York"})
+        assert r["ok"] and not r["update"] and r["units"] == 2
+        assert r["folder"] == str(ps / "grading")
+        assert r["template"].endswith("PS1-submission.tex")
+        assert r["worksheet"].endswith("Grades-MATH-221-PS1--9.csv")
+        assert r["due"] == "2026-09-04 23:59"
+        assert r["late"] == ["Pitt Roe-Rick"]
+        assert any("LATE 1 h 16 min" in ln for ln in r["lines"])
+        # the folder now shows up in the scan, and opens
+        scan = client.get("/api/scan")
+        assert [f["path"] for f in scan["folders"]] == [str(ps / "grading")]
+        st = client.get("/api/state?folder=" + str(ps / "grading"))
+        assert st["late"]["due"] == "2026-09-04T23:59-04:00"
+        assert st["n_parts"] == 2                      # template found
+        # a late student arrives; Moodle's zip is re-downloaded
+        kim = src / "Lee-Kim_333_assignsubmission_file_"
+        kim.mkdir()
+        (kim / "kim.pdf").write_bytes(b"%PDF-1.4 kim")
+        time.sleep(0.02)
+        with zipfile.ZipFile(zpath, "w") as z:
+            for f in src.rglob("*"):
+                if f.is_file():
+                    z.write(f, str(f.relative_to(src)))
+        r2 = client.post("/api/collect", {"folder": str(ps / "grading")})
+        assert r2["update"] and r2["added"] == ["Lee-Kim"]
+        assert r2["unchanged"] == 2 and r2["due"] == "2026-09-04 23:59"
+        assert r2["template"].endswith("PS1-submission.tex")
+        st = client.get("/api/state?folder=" + str(ps / "grading"))
+        assert [u["slug"] for u in st["units"]] == [
+            "Doe-Jane", "Lee-Kim", "Pitt Roe-Rick"]   # cache refreshed
+        client.post("/api/collect", {"zip": "/nope.zip"}, expect=400)
+        client.post("/api/collect", {}, expect=400)
+    finally:
+        server.shutdown()
+
+
+def test_api_collect_locked_on_grader_server(tmp_path):
+    from hwgenie.grade_gui import AppHolder
+    ps, zpath, _ = _assignment(tmp_path)
+    holder = AppHolder(root=tmp_path / "math221", grader_only=True)
+    server, client = _start_server(holder)
+    try:
+        client.post("/api/collect", {"zip": str(zpath)}, expect=403)
+    finally:
+        server.shutdown()
+
+
+def test_open_zip_shortcut_uses_layout(tmp_path):
+    from hwgenie.grade_gui import AppHolder
+    ps, zpath, _ = _assignment(tmp_path)
+    holder = AppHolder(root=tmp_path / "math221")
+    app = holder.open_path(zpath)
+    assert app.folder == ps / "grading"
+    assert app.n_parts == 2

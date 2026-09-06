@@ -95,15 +95,19 @@ __NAV__
       <code>submissions/&lt;slug&gt;/submission.pdf</code>).
       Add <code>--due "2026-09-04 23:59"</code> (course time) so late
       work is flagged &mdash; see <a href="#late">Late work</a>.
-      <em>Shortcut without a template:</em> paste the zip&rsquo;s path
-      into <b class="ui">Somewhere else</b> on the Grading tab.</li>
+      <em>Or skip Terminal:</em> paste the zip&rsquo;s path (and the due
+      date) into <b class="ui">Collect from Moodle</b> on the Grading
+      tab &mdash; with the layout above it finds the worksheet and the
+      template itself.</li>
     <li><em>Late work arriving afterwards:</em> download the zip (and
       worksheet) from Moodle again and re-run the same
       <code>collect</code> command. Existing students are left exactly as
       they were; new ones are added and tagged &ldquo;added by a later
       collect&rdquo;; a student who re-uploaded after grading began is
-      flagged but not replaced. Then push again (section 3) &mdash; a
-      re-push never touches the graders&rsquo; work.</li>
+      flagged but not replaced. The &#x21bb; button on the
+      assignment&rsquo;s row on the Grading tab does the same re-collect
+      with one click. Then push again (section 3) &mdash; a re-push
+      never touches the graders&rsquo; work.</li>
     <li>Drop the <code>Grades-&hellip;.csv</code> worksheet into the
       grading folder (next to <code>manifest.json</code>). It carries the
       students&rsquo; email addresses and is what fills grades back into

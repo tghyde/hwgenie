@@ -488,6 +488,68 @@ def collect(src: Path, dest: Path, template: Path | None = None,
     return result
 
 
+# ------------------------------------------------------- assignment layout --
+
+def locate(zip_path: Path | None = None, folder: Path | None = None) -> dict:
+    """Resolve the pieces of a collect from the assignment-folder layout
+    the how-to describes (``<assignment>/moodle-raw/*.zip`` + worksheet,
+    ``<assignment>/build/*submission*.tex``, ``<assignment>/grading/``)::
+
+        {"zip", "dest", "template", "update"}
+
+    Given a zip: dest is ``<assignment>/grading`` when the zip sits in a
+    ``moodle-raw`` folder, else ``<stem>-grading`` beside the zip.  Given a
+    grading folder (a re-collect): the newest zip in ``../moodle-raw``,
+    the folder's parent, or the folder itself.  The template comes from
+    the existing manifest when it still exists, else from ``../build``.
+    """
+    if zip_path is None and folder is None:
+        raise CollectError("nothing to collect: give a zip or a folder")
+    if folder is not None:
+        dest = Path(folder).expanduser().resolve()
+        assignment = dest.parent      # ps01/grading -> ps01; x-grading -> x's dir
+    else:
+        zp = Path(zip_path).expanduser().resolve()
+        if not zp.is_file():
+            raise CollectError(f"{zp} is not a file")
+        if zp.parent.name == "moodle-raw":
+            assignment = zp.parent.parent
+            dest = assignment / "grading"
+        else:
+            assignment = zp.parent
+            dest = zp.with_name(zp.stem + "-grading")
+    if zip_path is None:
+        cands: list[Path] = []
+        for d in (assignment / "moodle-raw", assignment, dest):
+            if d.is_dir():
+                cands += [z for z in d.glob("*.zip") if z.is_file()]
+        if not cands:
+            raise CollectError(
+                f"no Moodle zip found in {assignment / 'moodle-raw'} (or "
+                f"{assignment}) — download it from Moodle first")
+        zp = max(cands, key=lambda z: z.stat().st_mtime)
+    template: Path | None = None
+    mf = dest / MANIFEST_NAME
+    if mf.is_file():
+        try:
+            t = (json.loads(mf.read_text()).get("template") or {}).get("path")
+        except json.JSONDecodeError:
+            t = None
+        if t:
+            tp = Path(t)
+            if not tp.is_absolute():
+                tp = dest / tp
+            if tp.is_file():
+                template = tp
+    if template is None and (assignment / "build").is_dir():
+        hits = sorted(assignment.glob("build/*submission*.tex"),
+                      key=lambda x: x.stat().st_mtime)
+        if hits:
+            template = hits[-1]
+    return {"zip": zp, "dest": dest, "template": template,
+            "update": mf.is_file()}
+
+
 def add_parser(sub) -> None:
     p = sub.add_parser(
         "collect",
