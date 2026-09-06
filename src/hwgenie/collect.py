@@ -52,6 +52,7 @@ COLLAB_RE = re.compile(r"\\newcommand\{\\yourcollaborators\}\{(?P<val>[^{}]*)\}"
 TEMPLATE_MARKER = "%Write your solution here"
 MANIFEST_NAME = "manifest.json"
 GRADES_DIR = "grades"
+COURSE_MACROS = "course-macros.tex"   # hwgenie.sty + coursedata.tex copy
 
 
 class CollectError(Exception):
@@ -465,8 +466,21 @@ def collect(src: Path, dest: Path, template: Path | None = None,
         target = dest / ws.name
         if not target.exists() or _sha256(target) != _sha256(ws):
             shutil.copy2(ws, target)
+    # course macros for the grader's KaTeX (the raw source says only
+    # \usepackage{hwgenie}); a copy lives in the folder so the server
+    # has it too
+    macros_name = (old_manifest or {}).get("macros")
+    course = find_course_dir(template, dest)
+    if course is not None:
+        text = course_macro_text(course)
+        if text.strip():
+            (dest / COURSE_MACROS).write_text(text)
+            macros_name = COURSE_MACROS
+    elif macros_name and not (dest / macros_name).is_file():
+        macros_name = None
     manifest = {
         "created": (old_manifest or {}).get("created") or _now(),
+        "macros": macros_name,
         "updated": _now() if update else None,
         "source": str(src),
         # absolute: the push bundlers and the GUI resolve it from anywhere
@@ -491,6 +505,45 @@ def collect(src: Path, dest: Path, template: Path | None = None,
     except late_mod.LateError:
         pass
     return result
+
+
+# ---------------------------------------------------------- course macros --
+
+def find_course_dir(template: Path | None, dest: Path) -> Path | None:
+    """The course repo (the folder holding hwgenie.sty) for an assignment:
+    walk up from the template (a source file inside the course repo), else
+    match the assignment's course folder name (grading-lab/math221/…) to a
+    sibling course clone (…/math221-fall2026) next to the grading lab."""
+    if template is not None:
+        d = Path(template).expanduser().resolve().parent
+        for _ in range(6):
+            if (d / "hwgenie.sty").is_file():
+                return d
+            if d.parent == d:
+                break
+            d = d.parent
+    course = late_mod.course_dir(dest)          # grading-lab/math221
+    name = course.name.lower()
+    for root in (course.parent, course.parent.parent):
+        if not root.is_dir():
+            continue
+        hits = sorted(p for p in root.iterdir()
+                      if p.is_dir() and p.name.lower().startswith(name)
+                      and (p / "hwgenie.sty").is_file())
+        if hits:
+            return hits[0]
+    return None
+
+
+def course_macro_text(course: Path) -> str:
+    """hwgenie.sty + coursedata.tex — everything KaTeX needs to know
+    about the course's own macros (RR, ZZ, theorem names…)."""
+    parts = []
+    for name in ("hwgenie.sty", "coursedata.tex"):
+        p = Path(course) / name
+        if p.is_file():
+            parts.append(f"% ---- {name}\n" + p.read_text(errors="replace"))
+    return "\n".join(parts)
 
 
 # ------------------------------------------------------- assignment layout --

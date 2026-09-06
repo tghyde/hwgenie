@@ -143,7 +143,7 @@ def _statement_segments(app) -> tuple[dict, dict]:
     if path is None or not path.is_file():
         return {}, {}
     text = path.read_text(errors="replace")
-    preamble = split_preamble(text)
+    preamble = app.course_preamble() + "\n" + split_preamble(text)
     m = re.search(r"\\hwnumber\{(\d+)\}", text)
     section = m.group(1) if m else None
     try:

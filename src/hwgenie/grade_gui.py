@@ -209,8 +209,36 @@ class GradingApp:
         self._pdfmaps: dict[str, dict] = {}
         self._problems: dict | None = None
         self._tmpl_labels: dict = {}   # \label targets from the template
+        self._course_preamble: str | None = None
         self.export_state: dict = {"running": False, "error": None,
                                    "summary": None}
+
+    # ---------------------------------------------------------- macros --
+
+    def course_preamble(self) -> str:
+        """The course's own macro definitions (hwgenie.sty + coursedata),
+        from the copy collect leaves in the folder, else found next to
+        the template / the course clone on this machine.  Prepended to
+        every preamble handed to the HTML converter."""
+        if self._course_preamble is not None:
+            return self._course_preamble
+        from .collect import COURSE_MACROS, course_macro_text, find_course_dir
+        text = ""
+        name = self.manifest.get("macros") or COURSE_MACROS
+        p = self.folder / name
+        if p.is_file():
+            text = p.read_text(errors="replace")
+        else:
+            tmpl = (self.manifest.get("template") or {}).get("path")
+            tp = Path(tmpl) if tmpl else None
+            if tp is not None and not tp.is_absolute():
+                tp = self.folder / tp
+            course = find_course_dir(tp if tp and tp.is_file() else None,
+                                     self.folder)
+            if course is not None:
+                text = course_macro_text(course)
+        self._course_preamble = text
+        return text
 
     # ------------------------------------------------------------ late --
 
@@ -271,6 +299,7 @@ class GradingApp:
             preamble = self._preambles.get(slug, "")
             payload["tex"] = body
             payload["empty"] = body_is_empty(body)
+            preamble = self.course_preamble() + "\n" + preamble
             try:
                 payload["macros"] = extract_macros(preamble)
             except Exception:
@@ -360,7 +389,7 @@ class GradingApp:
             path = self.folder / path
         if path is not None and path.is_file():
             text = path.read_text(errors="replace")
-            preamble = split_preamble(text)
+            preamble = self.course_preamble() + "\n" + split_preamble(text)
             m = re.search(r"\\hwnumber\{(\d+)\}", text)
             section = m.group(1) if m else None
             try:
@@ -1954,11 +1983,16 @@ async function ensureStmtPane() {
     }
   });
   if (Object.keys(isols).length) {
+    let on = true;
+    try { on = localStorage.getItem("hwg-isol-all") !== "0"; } catch (e) {}
     const all = document.createElement("label");
     all.className = "isolall";
-    all.innerHTML = `<input type="checkbox"> show all solutions`;
+    all.innerHTML = `<input type="checkbox"${on ? " checked" : ""}> show all solutions`;
+    const setAll = v => body.querySelectorAll("details.isol").forEach(d => d.open = v);
+    setAll(on);
     all.querySelector("input").addEventListener("change", e => {
-      body.querySelectorAll("details.isol").forEach(d => d.open = e.target.checked);
+      setAll(e.target.checked);
+      try { localStorage.setItem("hwg-isol-all", e.target.checked ? "1" : "0"); } catch (err) {}
     });
     body.prepend(all);
   }

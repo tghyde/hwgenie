@@ -734,3 +734,73 @@ def test_solutions_reach_grader_pane_but_not_feedback(tmp_path):
     result = build_feedback(folder, pdf=False)
     html = (result.out_dir / "feedback/Doe-Jane/feedback.html").read_text()
     assert "Part a." in html and "x = 2" not in html and "trivially" not in html
+
+
+# ------------------------------------------------------- course macros ----
+
+STY = "\\def\\RR{\\mathbb{R}}\n\\newcommand{\\vecv}{\\mathbf{v}}\n"
+
+
+def test_find_course_dir_walks_up_then_matches_name(tmp_path):
+    from hwgenie.collect import find_course_dir, course_macro_text
+    course = tmp_path / "math221-fall2026"
+    (course / "source" / "problem-sets" / "ps01").mkdir(parents=True)
+    (course / "hwgenie.sty").write_text(STY)
+    (course / "coursedata.tex").write_text("\\def\\CC{\\mathbb{C}}\n")
+    src = course / "source" / "problem-sets" / "ps01" / "ps01.tex"
+    src.write_text("x")
+    lab = tmp_path / "grading-lab" / "math221" / "ps01" / "grading"
+    lab.mkdir(parents=True)
+    assert find_course_dir(src, lab) == course              # walked up
+    assert find_course_dir(tmp_path / "elsewhere.tex", lab) == course  # by name
+    other = tmp_path / "grading-lab" / "math999" / "ps01" / "grading"
+    other.mkdir(parents=True)
+    assert find_course_dir(None, other) is None
+    text = course_macro_text(course)
+    assert "\\RR" in text and "\\CC" in text
+
+
+def test_collect_bundles_course_macros_and_grader_uses_them(tmp_path):
+    from hwgenie.collect import COURSE_MACROS
+    from hwgenie.grade_gui import GradingApp
+    course = tmp_path / "math221-fall2026"
+    course.mkdir()
+    (course / "hwgenie.sty").write_text(STY)
+    src = make_moodle_dir(tmp_path)
+    ps = tmp_path / "grading-lab" / "math221" / "ps01"
+    (ps / "build").mkdir(parents=True)
+    tpl = ps / "build" / "ps01.tex"
+    tpl.write_text(SOURCE_TEX.replace("Part a.", r"Part a: $\\vecv \\in \\RR^2$."))
+    collect(src, ps / "grading", template=tpl)
+    mf = json.loads((ps / "grading" / "manifest.json").read_text())
+    assert mf["macros"] == COURSE_MACROS
+    assert "\\RR" in (ps / "grading" / COURSE_MACROS).read_text()
+    (ps / "grading" / "rubric.yml").write_text("parts:\n- 1.1\n- 1.2\n- 2\n")
+    app = GradingApp(ps / "grading")
+    pay = app.problems_payload()
+    assert pay["macros"]["\\RR"] == "\\mathbb{R}"
+    assert pay["macros"]["\\vecv"] == "\\mathbf{v}"
+    assert app.part_payload("Doe-Jane", 1)["macros"]["\\RR"] == "\\mathbb{R}"
+    # a re-collect without --template keeps the bundle
+    collect(src, ps / "grading")
+    assert json.loads((ps / "grading" / "manifest.json").read_text())["macros"] \
+        == COURSE_MACROS
+    # the feedback export sees them too (statement segments)
+    GradeStore(ps / "grading", load_rubric(ps / "grading", 3)).update(
+        "Doe-Jane", 1, {"score": 4})
+    res = build_feedback(ps / "grading", pdf=False)
+    html = (res.out_dir / "feedback/Doe-Jane/feedback.html").read_text()
+    assert "\\\\RR" in html or "mathbb{R}" in html   # macro table shipped
+
+
+def test_course_preamble_runtime_fallback(tmp_path):
+    """No bundled copy (older folder) but the course clone is on this
+    machine: the grader still finds the macros."""
+    from hwgenie.grade_gui import GradingApp
+    course = tmp_path / "c-fall"
+    course.mkdir()
+    (course / "hwgenie.sty").write_text(STY)
+    folder = make_grading_folder(tmp_path / "grading-lab" / "c" / "ps01")
+    assert GradingApp(folder).course_preamble().count("\\RR") == 1
+    assert GradingApp(make_grading_folder(tmp_path / "lab2" / "zz" / "ps01")) \
+        .course_preamble() == ""
