@@ -636,6 +636,88 @@ class AppHolder:
         self.remember(app.folder)
         return app
 
+    # ------------------------------------------------ assignment layout --
+
+    NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
+    def lab_courses(self) -> list[dict]:
+        """Course folders directly under the lab root, with their
+        assignment folders (anything holding moodle-raw/, build/ or a
+        grading folder)."""
+        out = []
+        try:
+            dirs = sorted(d for d in self.root.iterdir()
+                          if d.is_dir() and not d.name.startswith("."))
+        except OSError:
+            return out
+        for d in dirs:
+            asg = []
+            for a in sorted(x for x in d.iterdir()
+                            if x.is_dir() and not x.name.startswith(".")):
+                if any((a / sub).is_dir() for sub in ("moodle-raw", "build",
+                                                      "grading")) \
+                        or (a / MANIFEST_NAME).is_file():
+                    asg.append({"name": a.name, "path": str(a),
+                                "collected": (a / "grading" / MANIFEST_NAME)
+                                .is_file() or (a / MANIFEST_NAME).is_file()})
+            if asg or (d / "gradebook.json").is_file() \
+                    or d.name.lower().startswith(("math", "cs", "stat")):
+                out.append({"name": d.name, "path": str(d),
+                            "assignments": asg})
+        return out
+
+    def new_assignment(self, course: str, name: str) -> dict:
+        """Create <root>/<course>/<name>/{moodle-raw,build} (idempotent)."""
+        if self.grader_only:
+            raise GradeError("not available on a grader-only server")
+        course, name = (course or "").strip(), (name or "").strip()
+        for label, val in (("course", course), ("assignment", name)):
+            if not self.NAME_RE.match(val):
+                raise GradeError(f"{label} name {val!r}: use letters, digits, "
+                                 ". _ - (e.g. math301, ps01)")
+        asg = self.root / course / name
+        existed = asg.is_dir()
+        for sub in ("moodle-raw", "build"):
+            (asg / sub).mkdir(parents=True, exist_ok=True)
+        return {"ok": True, "path": str(asg), "existed": existed,
+                "course": course, "name": name,
+                "files": self.assignment_files(asg)}
+
+    @staticmethod
+    def assignment_files(asg: Path) -> dict:
+        def ls(sub):
+            d = asg / sub
+            return sorted(f.name for f in d.iterdir()
+                          if f.is_file() and not f.name.startswith(".")) \
+                if d.is_dir() else []
+        return {"moodle-raw": ls("moodle-raw"), "build": ls("build"),
+                "collected": (asg / "grading" / MANIFEST_NAME).is_file()}
+
+    def save_upload(self, course: str, name: str, filename: str,
+                    body: bytes) -> dict:
+        """Drop a browser-uploaded file into the assignment: zips and
+        worksheets go to moodle-raw/, .tex to build/."""
+        if self.grader_only:
+            raise GradeError("not available on a grader-only server")
+        fname = Path(filename or "").name
+        if not fname or fname.startswith("."):
+            raise GradeError("bad filename")
+        ext = Path(fname).suffix.lower()
+        sub = {".zip": "moodle-raw", ".csv": "moodle-raw",
+               ".tex": "build"}.get(ext)
+        if sub is None:
+            raise GradeError(f"{fname}: only .zip, .csv and .tex files go "
+                             "into an assignment")
+        asg = self.root / course / name
+        if not asg.is_dir() or not self.NAME_RE.match(course) \
+                or not self.NAME_RE.match(name):
+            raise GradeError(f"no assignment {course}/{name} — create it first")
+        dest = asg / sub / fname
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(body)
+        return {"ok": True, "saved": str(dest), "kind": sub, "name": fname,
+                "size": len(body), "files": self.assignment_files(asg)}
+
     def run_collect(self, zip_path=None, folder=None, due=None,
                     timezone_name=None) -> dict:
         """Collect (or re-collect) from the assignment-folder layout; the
@@ -759,6 +841,9 @@ def make_handler(holder: AppHolder):
                 page = (render_grader(str(app.folder), grader_only) if app
                         else render_picker(grader_only))
                 self._send(page.encode("utf-8"))
+            elif url.path == "/api/lab" and not grader_only:
+                self._json({"root": str(holder.root),
+                            "courses": holder.lab_courses()})
             elif url.path == "/api/scan":
                 self._json({"root": str(holder.root),
                             "folders": holder.scan(),
@@ -874,12 +959,30 @@ def make_handler(holder: AppHolder):
 
         def do_POST(self):
             n = int(self.headers.get("Content-Length", 0))
+            url = urllib.parse.urlparse(self.path)
+            if url.path == "/api/assignment/upload":
+                # raw file body (a browser file picker), not JSON
+                if holder.grader_only:
+                    self._json({"ok": False, "error": "not available on a "
+                                "grader-only server"}, 403)
+                    return
+                if n > 500 * 1024 * 1024:
+                    self._json({"ok": False, "error": "file too large"}, 413)
+                    return
+                qs = urllib.parse.parse_qs(url.query)
+                body = self.rfile.read(n)
+                try:
+                    self._json(holder.save_upload(
+                        qs.get("course", [""])[0], qs.get("name", [""])[0],
+                        qs.get("filename", [""])[0], body))
+                except (GradeError, OSError) as e:
+                    self._json({"ok": False, "error": str(e)}, 400)
+                return
             try:
                 data = json.loads(self.rfile.read(n) or b"{}")
             except json.JSONDecodeError:
                 self._json({"ok": False, "error": "bad json"}, 400)
                 return
-            url = urllib.parse.urlparse(self.path)
             folder = urllib.parse.parse_qs(url.query).get(
                 "folder", [None])[0]
             grader_only = holder.grader_only
@@ -906,6 +1009,16 @@ def make_handler(holder: AppHolder):
                 if not grader_only:
                     holder.current = None
                 self._json({"ok": True})
+            elif self.path == "/api/assignment/new":
+                if grader_only:
+                    self._json({"ok": False, "error": "not available on a "
+                                "grader-only server"}, 403)
+                    return
+                try:
+                    self._json(holder.new_assignment(
+                        str(data.get("course", "")), str(data.get("name", ""))))
+                except (GradeError, OSError) as e:
+                    self._json({"ok": False, "error": str(e)}, 400)
             elif self.path == "/api/collect":
                 if grader_only:
                     self._json({"ok": False, "error": "not available on a "
@@ -3258,6 +3371,12 @@ __BASE__
   .card .mini a:hover { color: var(--accent); }
   .card .mini.muted { font-size: .8rem; color: var(--muted); }
   #back a { color: var(--accent); text-decoration: none; }
+  .filebtn { padding: .45rem .9rem; cursor: pointer; background: var(--accent);
+             color: var(--bg); font: inherit; }
+  #nlist .f { display: block; } #nlist .f b { font-weight: 600; }
+  #ncourse { flex: 0 0 12rem; font: inherit; padding: .45rem .6rem;
+             color: var(--fg); background: var(--card-bg);
+             border: 1px solid var(--border); }
 </style>
 </head>
 <body>
@@ -3316,6 +3435,37 @@ __NAV__
     <p class="hint">Paste a grading folder (made by <code>hwgenie
     collect</code>) or a Moodle &ldquo;Download all submissions&rdquo; .zip
     &mdash; a zip is collected into a folder next to it first.</p>
+  </div>
+  <div id="sec-new" data-view="collect">
+    <h2 class="sechead">New assignment</h2>
+    <div class="manual">
+      <select id="ncourse" title="Course folder in the grading lab"></select>
+      <input id="ncoursenew" spellcheck="false" style="flex:0 0 12rem"
+        placeholder="new course folder, e.g. math301" hidden>
+      <input id="nname" spellcheck="false" style="flex:0 0 9rem"
+        placeholder="ps01">
+      <button id="ncreate">Create</button>
+    </div>
+    <p class="hint">Makes <code>&lt;lab&gt;/&lt;course&gt;/&lt;ps&gt;/</code>
+      with <code>moodle-raw/</code> and <code>build/</code>. Picking an
+      existing assignment just reopens it so you can add files.</p>
+    <div id="nfiles" hidden>
+      <p class="hint" id="npath"></p>
+      <div class="manual">
+        <label class="filebtn">Add files…
+          <input type="file" id="nupload" multiple accept=".zip,.csv,.tex" hidden>
+        </label>
+        <input id="ndue" spellcheck="false" style="flex:0 0 11rem"
+          placeholder="due: 2026-09-11 23:59" title="Deadline in course time">
+        <button id="ncollect" disabled>Collect now</button>
+      </div>
+      <p class="hint">From Moodle: the <b>Download all submissions</b> zip and
+        the <b>grading worksheet</b> csv; from the course repo: the
+        assignment&rsquo;s <b>.tex source</b> (solutions show to graders).
+        Zips and csvs land in <code>moodle-raw/</code>, tex in
+        <code>build/</code>.</p>
+      <div id="nlist" class="hint"></div>
+    </div>
   </div>
   <div id="sec-collect" data-view="collect">
     <h2 class="sechead">Collect from Moodle</h2>
@@ -3457,6 +3607,9 @@ async function runCollect(body) {
     log.appendChild(a);
     const s = await (await fetch("/api/scan")).json();
     rows($("#found"), s.folders, s.root);
+    if (NEW) { const r = await (await fetch("/api/assignment/new",
+      {method: "POST", body: JSON.stringify({course: NEW.course, name: NEW.name})})).json();
+      if (r.ok) renderNewFiles(r.files); }
   } catch (e) {
     log.textContent = "";
     log.style.display = "none";
@@ -3467,6 +3620,96 @@ async function runCollect(body) {
 
 const VIEW_TITLES = {grade: "Grade", collect: "Collect from Moodle",
                      remote: "External grading"};
+
+// ------------------------------------------------------- new assignment --
+
+let LAB = null, NEW = null;   // lab layout; the assignment being set up
+
+async function loadLab() {
+  try { LAB = await (await fetch("/api/lab")).json(); }
+  catch (e) { LAB = {root: "", courses: []}; }
+  const sel = $("#ncourse");
+  sel.innerHTML = LAB.courses.map(c =>
+    `<option value="${esc(c.name)}">${esc(c.name)}</option>`).join("") +
+    `<option value="__new__">new course folder…</option>`;
+  if (!LAB.courses.length) sel.value = "__new__";
+  $("#ncoursenew").hidden = sel.value !== "__new__";
+}
+
+function showNew(r) {
+  NEW = r;
+  $("#nfiles").hidden = false;
+  $("#npath").innerHTML = (r.existed ? "Reopened " : "Created ") +
+    `<code>${esc(r.path)}</code>`;
+  renderNewFiles(r.files);
+}
+
+function renderNewFiles(files) {
+  const raw = files["moodle-raw"] || [], build = files["build"] || [];
+  const zip = raw.find(f => f.toLowerCase().endsWith(".zip"));
+  const csv = raw.find(f => f.toLowerCase().endsWith(".csv"));
+  const tex = build.find(f => f.toLowerCase().endsWith(".tex"));
+  const li = (ok, what, name) =>
+    `<span class="f">${ok ? "✓" : "○"} ${what}: ${name ? "<b>" + esc(name) + "</b>" : "<i>missing</i>"}</span>`;
+  $("#nlist").innerHTML = li(!!zip, "Moodle zip", zip) + li(!!csv, "worksheet", csv) +
+    li(!!tex, "assignment .tex", tex) +
+    (files.collected ? `<span class="f">✓ already collected — “Collect now” updates it</span>` : "");
+  $("#ncollect").disabled = !zip;
+  NEW.zip = zip ? NEW.path + "/moodle-raw/" + zip : null;
+}
+
+async function uploadFiles(list) {
+  for (const f of list) {
+    $("#npath").innerHTML += ` <span class="muted">uploading ${esc(f.name)}…</span>`;
+    const q = `course=${encodeURIComponent(NEW.course)}&name=${encodeURIComponent(NEW.name)}` +
+              `&filename=${encodeURIComponent(f.name)}`;
+    try {
+      const r = await fetch("/api/assignment/upload?" + q, {method: "POST", body: f});
+      const d = await r.json();
+      if (!d.ok) throw new Error(d.error || "upload failed");
+      renderNewFiles(d.files);
+    } catch (e) {
+      $("#err").textContent = e.message; $("#err").style.display = "block";
+    }
+  }
+  $("#npath").innerHTML = `<code>${esc(NEW.path)}</code>`;
+}
+
+function wireNew() {
+  $("#ncourse").addEventListener("change", () => {
+    $("#ncoursenew").hidden = $("#ncourse").value !== "__new__";
+    if (!$("#ncoursenew").hidden) $("#ncoursenew").focus();
+  });
+  $("#ncreate").addEventListener("click", async () => {
+    const course = $("#ncourse").value === "__new__"
+      ? $("#ncoursenew").value.trim() : $("#ncourse").value;
+    const name = $("#nname").value.trim();
+    if (!course) { $("#ncoursenew").focus(); return; }
+    if (!name) { $("#nname").focus(); return; }
+    $("#err").style.display = "none";
+    try {
+      const r = await fetch("/api/assignment/new",
+        {method: "POST", body: JSON.stringify({course, name})});
+      const d = await r.json();
+      if (!d.ok) throw new Error(d.error || "could not create");
+      showNew(d);
+      await loadLab();
+      $("#ncourse").value = course;
+      $("#ncoursenew").hidden = true;
+    } catch (e) {
+      $("#err").textContent = e.message; $("#err").style.display = "block";
+    }
+  });
+  $("#nname").addEventListener("keydown", e => {
+    if (e.key === "Enter") $("#ncreate").click();
+  });
+  $("#nupload").addEventListener("change", e => {
+    uploadFiles([...e.target.files]); e.target.value = "";
+  });
+  $("#ncollect").addEventListener("click", () => {
+    if (NEW && NEW.zip) runCollect({zip: NEW.zip, due: $("#ndue").value.trim()});
+  });
+}
 
 function showView(view) {
   // grader-only servers: just the list; instructors: hub or one view
@@ -3497,6 +3740,7 @@ function showView(view) {
   $("#czip").addEventListener("keydown", e => {
     if (e.key === "Enter") $("#collect").click();
   });
+  if (!CFG.grader) { wireNew(); loadLab(); }
   const err = params.get("err");
   if (err) {
     $("#err").textContent = err;

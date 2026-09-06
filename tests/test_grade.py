@@ -332,6 +332,11 @@ def _start_server(holder):
                 base + path, data=json.dumps(obj).encode(), method="POST")
             return self._req(req, expect)
 
+        def post_raw(self, path, body, expect=200):
+            req = urllib.request.Request(base + path, data=body,
+                                         method="POST")
+            return self._req(req, expect)
+
         def _req(self, req, expect):
             try:
                 with urllib.request.urlopen(req) as r:

@@ -80,7 +80,12 @@ __NAV__
       Feedback files</b> under the assignment&rsquo;s Feedback types
       settings.)</li>
     <li>Make a folder for the assignment, e.g.
-      <code>grading-lab/math221/ps01/</code>, with the zip and worksheet
+      <code>grading-lab/math221/ps01/</code> &mdash; easiest via
+      <b class="ui">New assignment</b> under <b class="ui">Collect from
+      Moodle</b> on the Grading tab: pick or name the course folder, name
+      the problem set, then <b class="ui">Add files&hellip;</b> picks the
+      zip, worksheet and .tex straight from Downloads and files them
+      for you &mdash; with the zip and worksheet
       in <code>moodle-raw/</code> and the assignment&rsquo;s .tex in
       <code>build/</code> &mdash; the <em>source</em> file (e.g.
       <code>ps01.tex</code> from the course repo) if graders should see

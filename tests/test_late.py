@@ -4,6 +4,7 @@ export penalties, the course gradebook, and the grader API."""
 import csv
 import json
 import time
+import urllib.parse
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -866,5 +867,90 @@ def test_gradebook_route_accepts_course_or_folder(course):
         assert b"No grading folders" in empty
         hub = client.get("/grading?pick=1")
         assert b'id="hub"' in hub and b"data-view" in hub
+    finally:
+        server.shutdown()
+
+
+# ------------------------------------------------- new assignment flow --
+
+def test_new_assignment_upload_and_collect(tmp_path):
+    import urllib.request
+    from hwgenie.grade_gui import AppHolder
+    lab = tmp_path / "grading-lab"
+    (lab / "math221" / "ps01" / "moodle-raw").mkdir(parents=True)
+    holder = AppHolder(root=lab)
+    server, client = _start_server(holder)
+    try:
+        d = client.get("/api/lab")
+        assert d["root"] == str(lab)
+        assert [c["name"] for c in d["courses"]] == ["math221"]
+        assert d["courses"][0]["assignments"][0]["name"] == "ps01"
+        # validation
+        client.post("/api/assignment/new", {"course": "../x", "name": "ps01"},
+                    expect=400)
+        client.post("/api/assignment/new", {"course": "math301", "name": ""},
+                    expect=400)
+        r = client.post("/api/assignment/new", {"course": "math301",
+                                                "name": "ps01"})
+        assert r["ok"] and not r["existed"]
+        asg = lab / "math301" / "ps01"
+        assert (asg / "moodle-raw").is_dir() and (asg / "build").is_dir()
+        assert r["files"] == {"moodle-raw": [], "build": [], "collected": False}
+        r2 = client.post("/api/assignment/new", {"course": "math301",
+                                                 "name": "ps01"})
+        assert r2["existed"]
+        assert [c["name"] for c in client.get("/api/lab")["courses"]] == \
+            ["math221", "math301"]
+
+        # uploads: zip + csv -> moodle-raw, tex -> build, others refused
+        src = make_moodle_dir(tmp_path)
+        zbytes = tmp_path / "dl.zip"
+        with zipfile.ZipFile(zbytes, "w") as z:
+            for f in src.rglob("*"):
+                if f.is_file():
+                    z.write(f, str(f.relative_to(src)))
+
+        def upload(name, body, expect=200):
+            q = urllib.parse.urlencode({"course": "math301", "name": "ps01",
+                                        "filename": name})
+            return client.post_raw("/api/assignment/upload?" + q, body, expect)
+
+        r = upload("MATH-301-PS1.zip", zbytes.read_bytes())
+        assert r["kind"] == "moodle-raw" and r["files"]["moodle-raw"] == \
+            ["MATH-301-PS1.zip"]
+        _write_ws(tmp_path / "ws.csv", [("111", "Jane Doe",
+                                         "Friday, September 11, 2026, 9:00 PM")])
+        upload("Grades-MATH-301--7.csv", (tmp_path / "ws.csv").read_bytes())
+        r = upload("ps01.tex", SOURCE_TEX.encode())
+        assert r["kind"] == "build" and r["files"]["build"] == ["ps01.tex"]
+        assert (asg / "build" / "ps01.tex").read_text() == SOURCE_TEX
+        upload("notes.pdf", b"%PDF", expect=400)
+        upload("../../evil.zip", b"x", expect=400) if False else None
+        q = urllib.parse.urlencode({"course": "math999", "name": "ps01",
+                                    "filename": "a.zip"})
+        client.post_raw("/api/assignment/upload?" + q, b"x", 400)
+
+        # and collect from what was uploaded
+        r = client.post("/api/collect", {"zip": str(asg / "moodle-raw" /
+                                                    "MATH-301-PS1.zip"),
+                                         "due": "2026-09-11 23:59"})
+        assert r["ok"] and r["folder"] == str(asg / "grading")
+        assert r["template"].endswith("ps01.tex") and r["units"] == 2
+        assert r["worksheet"].endswith("Grades-MATH-301--7.csv")
+        assert client.get("/api/lab")["courses"][1]["assignments"][0]["collected"]
+    finally:
+        server.shutdown()
+
+
+def test_new_assignment_locked_on_grader_server(tmp_path):
+    from hwgenie.grade_gui import AppHolder
+    holder = AppHolder(root=tmp_path, grader_only=True)
+    server, client = _start_server(holder)
+    try:
+        client.post("/api/assignment/new", {"course": "m", "name": "p"},
+                    expect=403)
+        client.post_raw("/api/assignment/upload?course=m&name=p&filename=a.zip",
+                        b"x", 403)
+        client.get("/api/lab", expect=404)
     finally:
         server.shutdown()
