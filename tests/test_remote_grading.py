@@ -246,3 +246,32 @@ def test_api_remote_job_error_surfaces(grading_folder, cfg, fresh_state,
         assert st["running"] is None      # not stuck
     finally:
         server.shutdown()
+
+
+def test_push_bundles_template_from_relative_or_build(grading_folder, cfg,
+                                                       monkeypatch):
+    """A manifest with a relative (cwd-dependent) template path, or none
+    that resolves, still ships the ../build template to the server."""
+    mf = grading_folder / "manifest.json"
+    m = json.loads(mf.read_text())
+    m["template"]["path"] = "../somewhere/else/PS1-submission.tex"
+    mf.write_text(json.dumps(m))
+    (grading_folder / "template.tex").unlink()
+    build = grading_folder.parent / "build"
+    build.mkdir()
+    (build / "PS1-submission-Math.tex").write_text("TEMPLATE FROM BUILD")
+    staged = {}
+
+    def fake_run(cmd, log, input_text=None, timeout=600):
+        if cmd[0] == "ssh" and "test -d" in cmd[-1]:
+            raise GradeError("no grades yet")
+        if cmd[0] == "rsync":
+            stage = rg.Path(cmd[-2].rstrip("/"))
+            staged["manifest"] = json.loads((stage / "manifest.json").read_text())
+            staged["template"] = (stage / "template.tex").read_text()
+        return ""
+
+    monkeypatch.setattr(rg, "_run", fake_run)
+    rg.push(grading_folder, cfg)
+    assert staged["manifest"]["template"]["path"] == "template.tex"
+    assert staged["template"] == "TEMPLATE FROM BUILD"

@@ -466,8 +466,10 @@ def collect(src: Path, dest: Path, template: Path | None = None,
         "created": (old_manifest or {}).get("created") or _now(),
         "updated": _now() if update else None,
         "source": str(src),
+        # absolute: the push bundlers and the GUI resolve it from anywhere
         "template": (None if template is None else
-                     {"path": str(template), "parts": template_parts}),
+                     {"path": str(Path(template).expanduser().resolve()),
+                      "parts": template_parts}),
         "units": units,
     }
     if template is None and old_manifest and old_manifest.get("template"):

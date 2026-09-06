@@ -120,29 +120,45 @@ def remote_list(cfg: dict, log=lambda s: None) -> list[dict]:
     return data
 
 
-def _bundle_template(stage: Path, log) -> None:
-    """Copy an absolute-path template into the staged folder and point
-    the manifest at the copy, so the server can render the problem
-    statements."""
+def find_template(folder: Path, tmpl: str | None) -> Path | None:
+    """The submission template for a grading folder: the manifest's path
+    (absolute, or relative to the folder), else the newest
+    ``<assignment>/build/*submission*.tex`` beside it."""
+    folder = Path(folder)
+    if tmpl:
+        p = Path(tmpl).expanduser()
+        for cand in ([p] if p.is_absolute() else [folder / p]):
+            if cand.is_file():
+                return cand
+    build = folder.parent / "build"
+    hits = sorted(build.glob("*submission*.tex"),
+                  key=lambda x: x.stat().st_mtime) if build.is_dir() else []
+    return hits[-1] if hits else None
+
+
+def _bundle_template(stage: Path, log, folder: Path | None = None) -> None:
+    """Copy the submission template into the staged folder and point the
+    manifest at the copy, so the server can render the problem
+    statements.  ``folder`` is the real grading folder (relative manifest
+    paths and the ../build fallback resolve against it, not the stage)."""
     mf = stage / MANIFEST_NAME
     try:
         m = json.loads(mf.read_text())
     except (OSError, ValueError):
         return
     tmpl = (m.get("template") or {}).get("path")
-    if not tmpl:
-        return
-    p = Path(tmpl)
-    if not p.is_absolute():
-        return                       # already folder-relative: fine as-is
-    if p.is_file():
-        shutil.copy2(p, stage / "template.tex")
-        m["template"]["path"] = "template.tex"
+    if tmpl and not Path(tmpl).is_absolute() and (stage / tmpl).is_file():
+        return                       # already bundled in the folder itself
+    found = find_template(folder or stage, tmpl)
+    if found is not None:
+        shutil.copy2(found, stage / "template.tex")
+        m.setdefault("template", {})["path"] = "template.tex"
         mf.write_text(json.dumps(m, indent=2) + "\n")
-        log("bundled the submission template into the push")
+        log(f"bundled the submission template ({found.name}) into the push")
     else:
-        log(f"note: template {p} not found — the problem-statement "
-            "pane will be empty on the server")
+        log(f"note: template {tmpl or '(none in manifest)'} not found and "
+            "nothing in ../build — the problem-statement pane will be empty "
+            "on the server")
 
 
 def push(folder: Path, cfg: dict, log=lambda s: None) -> str:
@@ -156,7 +172,7 @@ def push(folder: Path, cfg: dict, log=lambda s: None) -> str:
         stage = Path(tmp) / "stage"
         shutil.copytree(folder, stage,
                         ignore=shutil.ignore_patterns("return"))
-        _bundle_template(stage, log)
+        _bundle_template(stage, log, folder)
         # Once graders have started, the server's grades/ is the source
         # of truth: never overwrite it on a re-push (late additions,
         # rubric tweaks).  The first push seeds it; late.json holds the

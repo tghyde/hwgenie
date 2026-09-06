@@ -162,3 +162,13 @@ def test_cli_wiring(moodle_dir, tmp_path, capsys):
     out = capsys.readouterr().out
     assert "Collected 2 submissions" in out
     assert "Doe-Jane" in out
+
+
+def test_collect_records_absolute_template_path(moodle_dir, template_file,
+                                                tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    dest = tmp_path / "grading"
+    collect(moodle_dir, dest, template=Path(template_file.name))  # relative
+    m = json.loads((dest / "manifest.json").read_text())
+    assert Path(m["template"]["path"]).is_absolute()
+    assert Path(m["template"]["path"]).is_file()
