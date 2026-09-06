@@ -157,8 +157,17 @@ def push(folder: Path, cfg: dict, log=lambda s: None) -> str:
         shutil.copytree(folder, stage,
                         ignore=shutil.ignore_patterns("return"))
         _bundle_template(stage, log)
-        _run(["rsync", "-rlt", "--delete", f"{stage}/",
-              f"{cfg['host']}:{cfg['root']}/{name}/"], log)
+        # Once graders have started, the server's grades/ is the source
+        # of truth: never overwrite it on a re-push (late additions,
+        # rubric tweaks).  The first push seeds it; late.json holds the
+        # instructor's late-work decisions and stays local.
+        remote = f"{cfg['host']}:{cfg['root']}/{name}/"
+        has_grades = _remote_has_grades(cfg, name, log)
+        excl = ["--exclude", "late.json", "--exclude", "gradebook.*"]
+        if has_grades:
+            excl += ["--exclude", "grades/"]
+            log("server already has grades/ — leaving it untouched")
+        _run(["rsync", "-rlt", "--delete", *excl, f"{stage}/", remote], log)
     # touching the manifest makes a running grader server rebuild its
     # cached view of the assignment even when only submissions changed
     post = f"touch '{cfg['root']}/{name}/{MANIFEST_NAME}'"
@@ -167,6 +176,15 @@ def push(folder: Path, cfg: dict, log=lambda s: None) -> str:
     _run(["ssh", *SSH_OPTS, cfg["host"], post], log)
     log(f"pushed '{name}'")
     return name
+
+
+def _remote_has_grades(cfg: dict, name: str, log) -> bool:
+    try:
+        _run(["ssh", *SSH_OPTS, cfg["host"],
+              f"test -d '{cfg['root']}/{name}/grades'"], log)
+        return True
+    except GradeError:
+        return False
 
 
 def pull(folder: Path, cfg: dict, log=lambda s: None) -> str:

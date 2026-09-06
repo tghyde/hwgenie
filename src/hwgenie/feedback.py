@@ -39,6 +39,8 @@ from .grade import GradeError, split_preamble
 from .htmlgen import HtmlConverter
 from .htmltemplate import KATEX_VERSION
 from .katexmacros import extract_macros
+from . import late as late_mod
+from datetime import datetime, timezone
 
 RETURN_DIR = "return"
 ZIP_NAME = "moodle-feedback.zip"
@@ -55,6 +57,8 @@ class ReturnResult:
     warnings: list[str]
     worksheet: dict | None = None   # {"out", "filled", "locked", "unmatched"}
     extra_credit: dict | None = None   # {"out", "rows", "no_email"}
+    late: dict | None = None        # {"due", "held", "penalized", "free",
+                                    #  "waived", "gradebook", "notes"}
 
     @property
     def ok(self) -> bool:
@@ -262,11 +266,46 @@ def _score_overview(app, data: dict) -> str:
     return f'<nav class="scoregrid">{"".join(cols)}</nav>'
 
 
+def _late_sentence(st, out_of: float) -> str:
+    """The student-facing explanation of a late outcome ('' if on time)."""
+    if st is None or not st.is_late:
+        return ""
+    when = late_mod.fmt_hours(st.hours_late_original)
+    if st.action == "free":
+        return (f"Submitted {when} after the deadline. This used your free "
+                "late assignment; no penalty was applied.")
+    if st.action == "waive":
+        return f"Submitted {when} after the deadline; no penalty was applied."
+    if st.action == "extension" and not st.penalty_pts:
+        return (f"Submitted {when} after the original deadline, within your "
+                "extension; no penalty was applied.")
+    if st.hold:
+        return (f"Submitted {when} after the deadline. Your grade for this "
+                "assignment is pending a conversation with the instructor.")
+    pct = late_mod._num(st.penalty_pct)
+    pts = _fmt_score(st.penalty_pts)
+    ext = (" (after your extension)" if st.action == "extension" else "")
+    return (f"Submitted {when} after the deadline{ext}: a {pct}% late "
+            f"penalty ({pts} of {_fmt_score(out_of)} points) was deducted "
+            "from the total.")
+
+
 def _feedback_html(app, unit: dict, data: dict, title: str,
-                   stmts: dict, tmacros: dict) -> str:
+                   stmts: dict, tmacros: dict, st=None) -> str:
     slug = unit["slug"]
     total, ec_total = _split_totals(app, data)
     out_of = _base_out_of(app)
+    raw_total = total
+    if st is not None:
+        total = late_mod.apply_penalty(total, st)
+    late_line = _late_sentence(st, out_of)
+    late_html = (f'<p class="latenote">{html_mod.escape(late_line)}</p>'
+                 if late_line else "")
+    total_text = (f"{_fmt_score(total)} / {_fmt_score(out_of)}"
+                  if not (st and st.hold) else "pending")
+    if st is not None and st.penalty_pts:
+        total_text += (f" (after a {_fmt_score(st.penalty_pts)}-point late "
+                       f"penalty; {_fmt_score(raw_total)} before it)")
     cdata: dict = {}
     sections = []
     for n, rp in enumerate(app.rubric, start=1):
@@ -328,9 +367,10 @@ def _feedback_html(app, unit: dict, data: dict, title: str,
         .replace("__KATEX__", KATEX_VERSION) \
         .replace("__TITLE__", html_mod.escape(title)) \
         .replace("__NAME__", html_mod.escape(display_name(slug))) \
-        .replace("__TOTAL__", f"{_fmt_score(total)} / {_fmt_score(out_of)}"
+        .replace("__TOTAL__", total_text
                  + (f" (+{_fmt_score(ec_total)} extra credit)"
                     if ec_total else "")) \
+        .replace("__LATE__", late_html) \
         .replace("__RECON__", recon) \
         .replace("__OVERVIEW__", _score_overview(app, data)) \
         .replace("__JUMPS__", jumps) \
@@ -340,7 +380,7 @@ def _feedback_html(app, unit: dict, data: dict, title: str,
 
 # ------------------------------------------------------------ feedback pdf --
 
-def _feedback_tex(app, unit: dict, data: dict, title: str) -> str:
+def _feedback_tex(app, unit: dict, data: dict, title: str, st=None) -> str:
     """Score table + comments (no anchors) on the template's preamble, so
     grader comments may use the course macros ($\\ZZ$ etc.)."""
     tmpl = (app.manifest.get("template") or {}).get("path")
@@ -355,6 +395,12 @@ def _feedback_tex(app, unit: dict, data: dict, title: str) -> str:
         ])
     total, ec_total = _split_totals(app, data)
     out_of = _base_out_of(app)
+    if st is not None:
+        total = late_mod.apply_penalty(total, st)
+    late_line = _late_sentence(st, out_of)
+    total_tex = (rf"{_fmt_score(total).replace('—', '--')} / "
+                 rf"{_fmt_score(out_of)}" if not (st and st.hold)
+                 else "pending")
     rows = "\n".join(
         rf"{_tex_escape(rp.label)}{' (extra credit)' if rp.ec else ''} & "
         rf"{_fmt_score(data['parts'][str(n)]['score']).replace('—', '--')} & "
@@ -375,10 +421,11 @@ def _feedback_tex(app, unit: dict, data: dict, title: str) -> str:
         rf"{{\LARGE Feedback}}\\[.3em]",
         rf"{{\large {_tex_escape(title)}}}\\[.3em]",
         rf"{{\large {_tex_escape(display_name(unit['slug']))}}}\\[.5em]",
-        rf"{{\large Total: {_fmt_score(total).replace('—', '--')} / "
-        rf"{_fmt_score(out_of)}"
+        rf"{{\large Total: {total_tex}"
         + (rf" \ (+{_fmt_score(ec_total)} extra credit)" if ec_total else "")
         + "}",
+        (rf"\\[.4em] {{\small {_tex_escape(late_line)}}}" if late_line
+         else ""),
         r"\end{center}",
         r"\begin{center}",
         r"\begin{tabular}{lcc}",
@@ -434,6 +481,20 @@ def build_feedback(folder: Path, out: Path | None = None, pdf: bool = False,
     pdf_failures: list[str] = []
     warnings: list[str] = []
 
+    # late policy: raw part scores stay raw; the penalty (or free late,
+    # waiver, hold) is resolved here, once per unit, and threaded through
+    # every output below
+    ctx = None
+    statuses: dict = {}
+    try:
+        ctx = late_mod.LateContext(app.folder, out_of=_base_out_of(app),
+                                   with_book=True)
+    except late_mod.LateError as e:
+        warnings.append(f"late policy not applied: {e}")
+    if ctx is not None and ctx.due is not None:
+        for unit in app.units:
+            statuses[unit["slug"]] = ctx.status(unit)
+
     fb_root = out_dir / "feedback"
     for unit in app.units:
         slug = unit["slug"]
@@ -441,12 +502,13 @@ def build_feedback(folder: Path, out: Path | None = None, pdf: bool = False,
         if not include_ungraded and not _gradable(data):
             skipped.append(slug)
             continue
+        st = statuses.get(slug)
         udir = fb_root / slug
         udir.mkdir(parents=True, exist_ok=True)
         (udir / "feedback.html").write_text(
-            _feedback_html(app, unit, data, title, stmts, tmacros))
+            _feedback_html(app, unit, data, title, stmts, tmacros, st))
         if pdf:
-            if not _compile_pdf(_feedback_tex(app, unit, data, title),
+            if not _compile_pdf(_feedback_tex(app, unit, data, title, st),
                                 udir / "feedback.pdf"):
                 pdf_failures.append(slug)
         else:
@@ -470,12 +532,15 @@ def build_feedback(folder: Path, out: Path | None = None, pdf: bool = False,
                 z.write(f, f"{unit['moodle_folder']}/{f.name}")
 
     has_ec = _has_ec(app)
+    has_late = bool(statuses)
     labels = [rp.label + (" (EC)" if rp.ec else "") for rp in app.rubric]
     with (out_dir / "gradebook.csv").open("w", newline="") as f:
         w = csv.writer(f)
         w.writerow(["submission", "moodle_id", "student"] + labels +
                    ["total", "out_of"] +
-                   (["extra_credit"] if has_ec else []))
+                   (["extra_credit"] if has_ec else []) +
+                   (["raw_total", "submitted", "late_by", "late_action",
+                     "penalty"] if has_late else []))
         out_of = _base_out_of(app)
         for unit in app.units:
             slug = unit["slug"]
@@ -485,12 +550,26 @@ def build_feedback(folder: Path, out: Path | None = None, pdf: bool = False,
             scores = [data["parts"][str(n)]["score"]
                       for n in range(1, len(app.rubric) + 1)]
             total, ec_total = _split_totals(app, data)
+            st = statuses.get(slug)
+            eff = late_mod.apply_penalty(total, st) if st else total
+            late_cols = []
+            if has_late:
+                late_cols = [_fmt_score(total),
+                             late_mod.fmt_when(st.submitted, ctx.tz)
+                             if st else "",
+                             late_mod.fmt_hours(st.hours_late_original)
+                             if st else "",
+                             (st.action if st and st.is_late else ""),
+                             (_fmt_score(st.penalty_pts)
+                              if st and st.penalty_pts else "")]
             for member in _unit_members(app, slug):
                 w.writerow([slug, unit["moodle_id"], member] +
                            ["" if s is None else _fmt_score(s)
                             for s in scores] +
-                           [_fmt_score(total), _fmt_score(out_of)] +
-                           ([_fmt_score(ec_total)] if has_ec else []))
+                           ["pending" if st and st.hold else _fmt_score(eff),
+                            _fmt_score(out_of)] +
+                           ([_fmt_score(ec_total)] if has_ec else []) +
+                           late_cols)
 
     if pdf and shutil.which("pdflatex") is None:
         warnings.append("pdflatex not found — no PDF sheets were produced")
@@ -499,7 +578,11 @@ def build_feedback(folder: Path, out: Path | None = None, pdf: bool = False,
     ws_info = None
     if ws is not None:
         try:
-            ws_info = fill_worksheet(app, exported, out_dir, ws)
+            ws_info = fill_worksheet(app, exported, out_dir, ws, statuses)
+            if ws_info.get("held"):
+                warnings.append(
+                    "held for discussion (grade left blank in the "
+                    "worksheet): " + ", ".join(ws_info["held"]))
             if ws_info["max_mismatch"]:
                 got, want = ws_info["max_mismatch"]
                 warnings.append(
@@ -526,9 +609,67 @@ def build_feedback(folder: Path, out: Path | None = None, pdf: bool = False,
                 "email address — drop the Moodle grading worksheet into the "
                 "grading folder and re-export (the gradebook import matches "
                 "students by email)")
+    late_info = None
+    if ctx is not None and (ctx.due is not None or
+                            (ctx.book and ctx.book.path.is_file())):
+        late_info = _update_gradebook(app, ctx, statuses, exported, ws)
+        for slug, st in statuses.items():
+            if slug in exported:
+                for n in st.notes:
+                    warnings.append(f"{slug}: {n}")
     return ReturnResult(out_dir=out_dir, exported=exported, skipped=skipped,
                         pdf_failures=pdf_failures, warnings=warnings,
-                        worksheet=ws_info, extra_credit=ec_info)
+                        worksheet=ws_info, extra_credit=ec_info,
+                        late=late_info)
+
+
+def _update_gradebook(app, ctx, statuses: dict, exported: list[str],
+                      ws: Path | None) -> dict:
+    """Record every exported unit in the course gradebook (totals after
+    the late policy, lateness, the action taken) and rewrite its CSV."""
+    people = _worksheet_people(ws) if ws is not None else {}
+    book = ctx.book or late_mod.Gradebook.for_folder(app.folder)
+    out_of = _base_out_of(app)
+    counts = {"held": [], "penalized": 0, "free": 0, "waived": 0, "late": 0}
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    for unit in app.units:
+        slug = unit["slug"]
+        if slug not in exported:
+            continue
+        data = app.store.load(slug)
+        raw, ec_total = _split_totals(app, data)
+        st = statuses.get(slug)
+        eff = late_mod.apply_penalty(raw, st) if st else raw
+        entry = {
+            "raw": raw, "total": (None if st and st.hold else eff),
+            "out_of": out_of, "extra_credit": ec_total or 0,
+            "submitted": late_mod.iso(st.submitted) if st else
+            unit.get("submitted"),
+            "hours_late": (round(st.hours_late_original, 2)
+                           if st and st.is_late else 0),
+            "action": (st.action if st and st.is_late else "none"),
+            "penalty_pct": st.penalty_pct if st else 0,
+            "penalty_pts": st.penalty_pts if st else 0,
+            "slug": slug, "exported": now,
+        }
+        if st and st.is_late:
+            counts["late"] += 1
+            if st.hold:
+                counts["held"].append(slug)
+            elif st.action == "free":
+                counts["free"] += 1
+            elif st.action == "waive":
+                counts["waived"] += 1
+            elif st.penalty_pts:
+                counts["penalized"] += 1
+        person = people.get(str(unit["moodle_id"])) or {}
+        book.record(str(unit["moodle_id"]), ctx.key, entry,
+                    name=person.get("name") or display_name(slug),
+                    email=person.get("email", ""))
+    book.save()
+    counts["gradebook"] = str(book.path)
+    counts["due"] = late_mod.iso(ctx.due)
+    return counts
 
 
 # ------------------------------------------------------------ extra credit --
@@ -611,15 +752,17 @@ def find_worksheet(folder: Path) -> Path | None:
 
 
 def fill_worksheet(app, exported: list[str], out_dir: Path,
-                   path: Path) -> dict:
+                   path: Path, statuses: dict | None = None) -> dict:
     """Copy a Moodle offline grading worksheet with the Grade column set
     to each exported submission's total, ready to upload back.
 
     Moodle matches rows by its own Identifier ("Participant <id>", the
     same id as in the download-zip folder names), so every other column is
     passed through untouched.  Rows marked "Grade can be changed" = No are
-    left alone and reported.
+    left alone and reported, as are submissions held for a late-work
+    discussion (``statuses``: slug -> LateStatus; penalties apply here).
     """
+    statuses = statuses or {}
     with open(path, newline="", encoding="utf-8-sig") as f:
         reader = csv.reader(f)
         try:
@@ -640,7 +783,7 @@ def fill_worksheet(app, exported: list[str], out_dir: Path,
 
     by_id = {u["moodle_id"]: u for u in app.units}
     out_of = _base_out_of(app)
-    filled, locked, seen = 0, [], set()
+    filled, locked, seen, held = 0, [], set(), []
     max_mismatch = None
     for row in rows:
         m = re.search(r"\d+", row[ci]) if len(row) > ci else None
@@ -651,8 +794,14 @@ def fill_worksheet(app, exported: list[str], out_dir: Path,
         if clock is not None and row[clock].strip().lower() == "no":
             locked.append(unit["slug"])
             continue
+        st = statuses.get(unit["slug"])
+        if st is not None and st.hold:
+            held.append(unit["slug"])
+            continue
         data = app.store.load(unit["slug"])
         total, _ = _split_totals(app, data)
+        if st is not None:
+            total = late_mod.apply_penalty(total, st)
         row[cg] = f"{total:.2f}"
         filled += 1
         if cmax is not None and max_mismatch is None:
@@ -669,7 +818,7 @@ def fill_worksheet(app, exported: list[str], out_dir: Path,
         w.writerows(rows)
     info = {"out": str(out_path), "filled": filled, "locked": locked,
             "unmatched": sorted(set(exported) - seen),
-            "max_mismatch": max_mismatch}
+            "max_mismatch": max_mismatch, "held": held}
     return info
 
 
@@ -708,6 +857,15 @@ def run_return(args: argparse.Namespace) -> int:
     print(f"Exported {len(result.exported)} submissions to {result.out_dir}")
     print(f"  Moodle zip: {result.out_dir / ZIP_NAME}")
     print(f"  Gradebook:  {result.out_dir / 'gradebook.csv'}")
+    if result.late:
+        lt = result.late
+        print(f"  Late work:  {lt['late']} late"
+              + (f", {lt['penalized']} penalized" if lt['penalized'] else "")
+              + (f", {lt['free']} used a free late" if lt['free'] else "")
+              + (f", {lt['waived']} waived" if lt['waived'] else "")
+              + (f", {len(lt['held'])} held: {', '.join(lt['held'])}"
+                 if lt['held'] else "")
+              + f"; course gradebook updated at {lt['gradebook']}")
     if result.worksheet:
         print(f"  Worksheet:  {result.worksheet['out']} "
               f"({result.worksheet['filled']} grades filled — upload via "
@@ -768,6 +926,8 @@ FEEDBACK_PAGE = r"""<!doctype html>
   header.doc .course { font-size: .85rem; letter-spacing: .1em;
     text-transform: uppercase; color: var(--muted); margin: 0 0 .4rem; }
   header.doc h1 { font-size: 1.4rem; margin: 0; }
+  header.doc .latenote { margin: .6rem auto 0; max-width: 34rem;
+    font-size: .9rem; opacity: .85; }
   header.doc .total { display: inline-block; margin-top: .8rem;
     padding: .2rem .9rem; font-weight: 600; color: var(--sol-accent);
     background: var(--card-bg); }
@@ -905,6 +1065,7 @@ FEEDBACK_PAGE = r"""<!doctype html>
   <p class="course">__TITLE__</p>
   <h1>Feedback — __NAME__</h1>
   <span class="total">Total: __TOTAL__</span>
+  __LATE__
 </header>
 __OVERVIEW__
 __RECON__

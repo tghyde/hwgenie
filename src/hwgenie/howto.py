@@ -93,8 +93,17 @@ __NAV__
       no tex, didn&rsquo;t use the template, or uploaded several PDFs
       (pick the right one by copying it to
       <code>submissions/&lt;slug&gt;/submission.pdf</code>).
+      Add <code>--due "2026-09-04 23:59"</code> (course time) so late
+      work is flagged &mdash; see <a href="#late">Late work</a>.
       <em>Shortcut without a template:</em> paste the zip&rsquo;s path
       into <b class="ui">Somewhere else</b> on the Grading tab.</li>
+    <li><em>Late work arriving afterwards:</em> download the zip (and
+      worksheet) from Moodle again and re-run the same
+      <code>collect</code> command. Existing students are left exactly as
+      they were; new ones are added and tagged &ldquo;added by a later
+      collect&rdquo;; a student who re-uploaded after grading began is
+      flagged but not replaced. Then push again (section 3) &mdash; a
+      re-push never touches the graders&rsquo; work.</li>
     <li>Drop the <code>Grades-&hellip;.csv</code> worksheet into the
       grading folder (next to <code>manifest.json</code>). It carries the
       students&rsquo; email addresses and is what fills grades back into
@@ -151,7 +160,8 @@ __NAV__
       pages for Moodle.</li>
     <li><code>grading-worksheet-upload.csv</code> &mdash; your worksheet
       with the Grade column filled in (base points only, never above the
-      assignment max).</li>
+      assignment max, after any late penalty; students held for a
+      late-work discussion are left blank).</li>
     <li><code>extra-credit-upload.csv</code> &mdash; only when the rubric
       has EC parts: each student&rsquo;s EC points, matched by email.</li>
     <li><code>gradebook.csv</code> &mdash; per-part scores for your own
@@ -187,6 +197,46 @@ __NAV__
   file</b>, upload <code>extra-credit-upload.csv</code>, map
   <b class="ui">Email address</b> as the identifier, and map the
   <b class="ui">Extra credit</b> column onto the grade item.</p>
+
+  <h2 id="late">7. Late work and the course gradebook</h2>
+  <p>Moodle stamps every submission (&ldquo;Last modified
+  (submission)&rdquo; in the worksheet, and the zip&rsquo;s file dates);
+  <code>collect</code> records it per student. Give the assignment a
+  deadline &mdash; <code>collect --due "2026-09-04 23:59"</code>, or a
+  <code>due: 2026-09-04 23:59</code> line in <code>rubric.yml</code>
+  (add <code>timezone: America/New_York</code> if the machine isn&rsquo;t
+  in course time) &mdash; and hwGrader shows a red <b class="ui">late</b>
+  badge with the delay on every late student, in the sidebar and in both
+  views. Graders see the badge; the decision is yours.</p>
+  <p><b>The policy</b> (edit <code>policy</code> in the course
+  <code>gradebook.json</code> to change it): each student&rsquo;s first
+  late assignment within 72 h is free. After that, up to 24 h late costs
+  5% of the possible points, 24&ndash;72 h costs 10%, and anything later
+  is <em>held</em> &mdash; the worksheet grade is left blank until you
+  decide. Part scores are never touched: graders grade the work as
+  submitted and the penalty is applied to the total at export, where the
+  feedback page tells the student what happened
+  (&ldquo;Submitted 2 h after the deadline. This used your free late
+  assignment&hellip;&rdquo;).</p>
+  <p><b>Intervening.</b> On your own (local) hwGrader, the late line
+  under a student&rsquo;s name has a dropdown: <b class="ui">Follow the
+  policy</b>, <b class="ui">Use the free late</b>, <b class="ui">Apply
+  the penalty</b>, <b class="ui">Waive</b> (a two-minutes-late grace),
+  <b class="ui">Extension to&hellip;</b> (tiers then count from the new
+  deadline), or <b class="ui">Hold</b>. Add a note if you like and click
+  <b class="ui">Save</b>. Decisions live in <code>late.json</code> in the
+  grading folder &mdash; never pushed or pulled &mdash; so pulling grades
+  cannot undo them.</p>
+  <p><b>The gradebook.</b> Every export records each student&rsquo;s
+  totals (after the policy), lateness and the action taken in
+  <code>gradebook.json</code> one level above the assignment folders
+  (e.g. <code>grading-lab/math221/</code>), with a <code>gradebook.csv</code>
+  twin for spreadsheets. It also remembers which assignment consumed
+  the free late, which is how the next export knows the student no
+  longer has one. The <b class="ui">Gradebook</b> button in the header
+  shows it as a table. Exporting again after changing a decision
+  updates the record (and releases the free late if you switched a
+  student off it).</p>
 
   <h2 id="trouble">Troubleshooting</h2>
   <ul>

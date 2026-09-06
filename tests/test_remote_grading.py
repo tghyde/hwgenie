@@ -57,6 +57,8 @@ def test_push_stages_and_bundles_template(grading_folder, cfg, monkeypatch,
 
     def fake_run(cmd, log, input_text=None, timeout=600):
         calls.append(cmd)
+        if cmd[0] == "ssh" and "test -d" in cmd[-1]:
+            raise GradeError("no grades/ on the server yet")
         if cmd[0] == "rsync":
             # the staged copy is arg -2 (trailing slash) — check contents
             stage = cmd[-2].rstrip("/")
@@ -71,10 +73,42 @@ def test_push_stages_and_bundles_template(grading_folder, cfg, monkeypatch,
     name = rg.push(grading_folder, cfg)
     # the fixture folder is literally named "grading" -> parent's name
     assert name == grading_folder.parent.name
-    assert calls[0][0] == "rsync" and "--delete" in calls[0]
-    assert calls[0][-1] == f"testhost:/srv/lab/{name}/"
-    assert calls[1][0] == "ssh"       # chown follows
-    assert "chown -R hwgrader:hwgrader" in calls[1][-1]
+    assert calls[0][0] == "ssh" and "test -d" in calls[0][-1]  # grades?
+    rs = calls[1]
+    assert rs[0] == "rsync" and "--delete" in rs
+    assert rs[-1] == f"testhost:/srv/lab/{name}/"
+    assert "late.json" in rs and "grades/" not in rs   # first push seeds
+    assert calls[2][0] == "ssh"       # chown follows
+    assert "chown -R hwgrader:hwgrader" in calls[2][-1]
+
+
+def test_repush_never_touches_server_grades(grading_folder, cfg, monkeypatch):
+    calls = []
+
+    def fake_run(cmd, log, input_text=None, timeout=600):
+        calls.append(cmd)
+        if cmd[0] == "ssh" and "test -d" in cmd[-1]:
+            return ""          # the server already has grades/
+        return ""
+
+    monkeypatch.setattr(rg, "_run", fake_run)
+    rg.push(grading_folder, cfg)
+    rs = next(c for c in calls if c[0] == "rsync")
+    assert "grades/" in rs and rs[rs.index("grades/") - 1] == "--exclude"
+
+
+def test_first_push_seeds_grades(grading_folder, cfg, monkeypatch):
+    def fake_run(cmd, log, input_text=None, timeout=600):
+        if cmd[0] == "ssh" and "test -d" in cmd[-1]:
+            raise GradeError("no such dir")
+        return ""
+
+    calls = []
+    monkeypatch.setattr(rg, "_run", lambda *a, **k: (calls.append(a[0]),
+                                                      fake_run(*a, **k))[1])
+    rg.push(grading_folder, cfg)
+    rs = next(c for c in calls if c[0] == "rsync")
+    assert "grades/" not in rs
 
 
 def test_push_rejects_non_grading_folder(tmp_path, cfg):

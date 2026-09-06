@@ -23,6 +23,7 @@ cannot be located in a view.
 from __future__ import annotations
 
 import errno
+import html
 import json
 import re
 import subprocess
@@ -171,8 +172,9 @@ def template_problem_blocks(text: str) -> list[dict]:
 
 
 class GradingApp:
-    def __init__(self, folder: Path):
+    def __init__(self, folder: Path, grader_only: bool = False):
         self.folder = Path(folder)
+        self.grader_only = grader_only   # hosted: no course gradebook here
         self.manifest = load_manifest(self.folder)
         self.units = self.manifest["units"]
         self.by_slug = {u["slug"]: u for u in self.units}
@@ -189,6 +191,40 @@ class GradingApp:
         self._tmpl_labels: dict = {}   # \label targets from the template
         self.export_state: dict = {"running": False, "error": None,
                                    "summary": None}
+
+    # ------------------------------------------------------------ late --
+
+    def late_context(self):
+        """Fresh each call: rubric.yml's due date, late.json decisions and
+        the course gradebook are all small files other tools edit.  The
+        hosted grader has no course gradebook, so it shows the policy tier
+        but leaves the free-late question to the instructor's export."""
+        from . import late as late_mod
+        out_of = sum(rp.max or 0 for rp in self.rubric if not rp.ec)
+        try:
+            return late_mod.LateContext(self.folder, out_of=out_of,
+                                        with_book=not self.grader_only), None
+        except late_mod.LateError as e:
+            return None, str(e)
+
+    def set_late(self, req: dict) -> dict:
+        from . import late as late_mod
+        slug = req.get("slug")
+        if slug not in self.by_slug:
+            raise GradeError(f"unknown submission {slug!r}")
+        ctx, err = self.late_context()
+        if ctx is None:
+            raise GradeError(err or "late policy unavailable")
+        try:
+            late_mod.save_decision(
+                self.folder, slug, str(req.get("action", "auto")),
+                note=str(req.get("note") or ""),
+                extension=req.get("extension") or None, tz=ctx.tz)
+        except late_mod.LateError as e:
+            raise GradeError(str(e))
+        ctx, _ = self.late_context()
+        return {"ok": True, "slug": slug,
+                "late": ctx.payload(self.by_slug[slug])}
 
     # ------------------------------------------------------------- tex --
 
@@ -238,6 +274,7 @@ class GradingApp:
 
     def state_payload(self) -> dict:
         slugs = [u["slug"] for u in self.units]
+        ctx, late_err = self.late_context()
         with self.lock:
             units = []
             for u in self.units:
@@ -252,8 +289,12 @@ class GradingApp:
                     "parts_found": u.get("parts_found"),
                     "members": self.groups.get(u["slug"]),
                     "parts": data["parts"],
+                    "late": ctx.payload(u) if ctx else None,
                 })
             graded, total = self.store.progress(slugs)
+        late_summary = ctx.summary() if ctx else {"due": None}
+        if late_err:
+            late_summary["error"] = late_err
         return {
             "folder": str(self.folder),
             "n_parts": self.n_parts,
@@ -262,6 +303,7 @@ class GradingApp:
             "groups": self.groups,
             "progress": [graded, total],
             "units": units,
+            "late": late_summary,
         }
 
     def apply_grade(self, req: dict) -> dict:
@@ -460,7 +502,8 @@ class AppHolder:
         with self.apps_lock:
             entry = self.apps.get(key)
             if entry is None or entry[1] != sig:
-                entry = self.apps[key] = (GradingApp(p), sig)
+                entry = self.apps[key] = (
+                    GradingApp(p, grader_only=self.grader_only), sig)
         return entry[0]
 
     def alive(self) -> None:
@@ -630,6 +673,10 @@ def make_handler(holder: AppHolder):
                     self._send(b"not found", code=404)
                 else:
                     self._json(res[0], res[1])
+            elif url.path == "/gradebook" and not grader_only:
+                if not (app := self._app(folder)):
+                    return
+                self._send(render_gradebook(app).encode("utf-8"))
             elif url.path == "/api/state":
                 if (app := self._app(folder)):
                     self._json(app.state_payload())
@@ -749,6 +796,18 @@ def make_handler(holder: AppHolder):
                 if not grader_only:
                     holder.current = None
                 self._json({"ok": True})
+            elif self.path == "/api/late":
+                if grader_only:
+                    self._json({"ok": False, "error": "late-work decisions "
+                                "are the instructor's, made on their own "
+                                "copy"}, 403)
+                    return
+                if not (app := self._app(folder)):
+                    return
+                try:
+                    self._json(app.set_late(data))
+                except GradeError as e:
+                    self._json({"ok": False, "error": str(e)}, 400)
             elif self.path == "/api/export":
                 if grader_only:
                     self._json({"ok": False, "error": "exporting is done by "
@@ -781,6 +840,7 @@ def make_handler(holder: AppHolder):
                                     "filled"),
                                 "extra_credit": (res.extra_credit
                                                  or {}).get("rows"),
+                                "late": res.late,
                             }}
                     except Exception as e:
                         app.export_state = {"running": False,
@@ -923,6 +983,96 @@ def render_grader(folder: str, grader_only: bool = False) -> str:
     return GRADER_PAGE.replace("__KATEX__", KATEX_VERSION) \
                       .replace("__LAMP__", LAMP_SVG) \
                       .replace("__CFG__", cfg)
+
+
+def render_gradebook(app) -> str:
+    """Instructor-only: the course gradebook as a plain table (totals after
+    the late policy, lateness, who has spent their free late)."""
+    from . import late as late_mod
+    from .appicon import LAMP_SVG
+    from .webstyle import BASE_CSS, nav_header
+    try:
+        book = late_mod.Gradebook.for_folder(app.folder)
+        err = None
+    except late_mod.LateError as e:
+        book, err = None, str(e)
+    esc = html.escape
+    body = ""
+    if err:
+        body = f'<p class="err">{esc(err)}</p>'
+    elif book is None or not book.data["students"]:
+        body = ('<p>No gradebook yet. It is written the first time an '
+                'assignment with a <code>due:</code> date in its '
+                '<code>rubric.yml</code> is exported.</p>')
+    else:
+        keys = book.assignment_keys()
+        head = "".join(f"<th>{esc(k)}</th>" for k in keys)
+        rows = []
+        for mid, st in sorted(book.data["students"].items(),
+                              key=lambda kv: (kv[1].get("name") or "",
+                                              kv[0])):
+            cells = []
+            for k in keys:
+                a = st["assignments"].get(k)
+                if not a:
+                    cells.append("<td></td>")
+                    continue
+                tot = ("pending" if a.get("total") is None
+                       else late_mod._num(a["total"]))
+                cls, tip = "", ""
+                if a.get("hours_late"):
+                    cls = f' class="late {esc(a.get("action", ""))}"'
+                    tip = (f' title="{late_mod.fmt_hours(a["hours_late"])} '
+                           f'late — {esc(a.get("action", "auto"))}'
+                           + (f'; −{late_mod._num(a["penalty_pts"])} pts'
+                              if a.get("penalty_pts") else "") + '"')
+                cells.append(f"<td{cls}{tip}>{tot}"
+                             f'<span class="oo">/{late_mod._num(a["out_of"])}'
+                             "</span></td>")
+            free = st.get("free_late_used")
+            rows.append(
+                f"<tr><td class=\"nm\">{esc(st.get('name') or mid)}</td>"
+                + "".join(cells)
+                + f"<td class=\"free\">{esc(free) if free else '✓ available'}"
+                "</td></tr>")
+        body = (f'<table class="gb"><thead><tr><th>Student</th>{head}'
+                '<th>Free late</th></tr></thead><tbody>'
+                + "".join(rows) + "</tbody></table>"
+                f'<p class="src">Source: <code>{esc(str(book.path))}</code> '
+                '(a CSV twin sits next to it). Shaded cells were late: '
+                'hover for details.</p>')
+    return (GRADEBOOK_PAGE.replace("__NAV__", nav_header("grading"))
+                          .replace("__LAMP__", LAMP_SVG)
+                          .replace("__CSS__", BASE_CSS)
+                          .replace("__FOLDER__", esc(str(app.folder)))
+                          .replace("__BODY__", body))
+
+
+GRADEBOOK_PAGE = r"""<!doctype html>
+<html><head><meta charset="utf-8">
+<title>hwGenie — Gradebook</title>
+<style>
+__CSS__
+main { max-width: 70rem; margin: 1.5rem auto; padding: 0 1rem; }
+table.gb { border-collapse: collapse; font-size: .9rem; }
+table.gb th, table.gb td { padding: .35rem .6rem; text-align: right;
+  border-bottom: 1px solid var(--line, #ddd); white-space: nowrap; }
+table.gb th:first-child, table.gb td.nm { text-align: left; }
+table.gb td .oo { color: var(--muted); font-size: .8em; margin-left: .15em; }
+table.gb td.late { background: color-mix(in srgb, var(--alert, #c60) 18%,
+  transparent); }
+table.gb td.late.free, table.gb td.late.waive { background:
+  color-mix(in srgb, var(--accent, #08c) 14%, transparent); }
+table.gb td.free { text-align: left; color: var(--muted); }
+p.src { color: var(--muted); font-size: .85rem; }
+</style></head><body>
+__NAV__
+<main>
+<h1>Course gradebook</h1>
+<p class="src">Opened from <code>__FOLDER__</code>.
+<a href="/grading?folder=__FOLDER__">← back to grading</a></p>
+__BODY__
+</main></body></html>"""
 
 
 def render_picker(grader_only: bool = False) -> str:
@@ -1119,6 +1269,29 @@ __BASE__
   .badge.recon { background: var(--mark-bg); color: var(--fg); }
   .badge.notex { background: var(--alert); color: var(--bg); }
   .badge.grp { background: var(--accent); color: var(--bg); }
+  .badge.late { background: var(--alert); color: var(--bg); }
+  .badge.late.ok { background: var(--mark-bg); color: var(--fg); }
+  .badge.late.hold { outline: 2px solid var(--alert); outline-offset: -2px;
+                     background: transparent; color: var(--alert); }
+  .ltdot { display: inline-block; font-size: .62rem; font-weight: 700;
+    line-height: 1; padding: .1rem .25rem; margin-left: .3rem;
+    background: var(--alert); color: var(--bg); vertical-align: middle; }
+  .ltdot.hold { background: transparent; color: var(--alert);
+    outline: 1.5px solid var(--alert); }
+  .latebar { display: flex; flex-wrap: wrap; align-items: center;
+    gap: .4rem; margin-top: .4rem; font-size: .85rem; color: var(--muted);
+    padding: .35rem .6rem; border-left: 3px solid var(--line, #ccc); }
+  .latebar.islate { border-left-color: var(--alert); color: var(--fg); }
+  .latebar .lt { color: var(--alert); }
+  .latebar .muted { color: var(--muted); }
+  .latebar .verdict { font-weight: 600; padding: .05rem .4rem;
+    background: var(--mark-bg); }
+  .latebar .verdict.apply, .latebar .verdict.discuss { background: var(--alert);
+    color: var(--bg); }
+  .latebar select, .latebar input { font-size: .8rem; padding: .15rem .3rem; }
+  .latebar .latenote { width: 12rem; }
+  .latebar .lateext { width: 9.5rem; }
+  .latenotes { flex-basis: 100%; font-size: .78rem; color: var(--alert); }
   .collab { font-size: .85rem; color: var(--muted); margin: .15rem 0 0; }
   .collab.real { color: var(--fg); }
   .collab.real b { color: var(--accent); }
@@ -1323,6 +1496,9 @@ __BASE__
   <span class="sp"></span>
   <button class="ghost" id="whoami" style="display:none"
           title="Your name — recorded on the grades you enter (click to change)"></button>
+  <button class="ghost" id="gradebook"
+          title="Course gradebook: totals, late work, free lates used">
+    Gradebook</button>
   <button class="ghost" id="export"
           title="Create the Moodle return files (feedback + zip + CSV)">
     Export</button>
@@ -2249,6 +2425,13 @@ function refreshSidebarRow(slug) {
 
 function badges(u) {
   let b = "";
+  const L = u.late;
+  if (L && L.is_late) {
+    const cls = L.hold ? " hold" : (L.action === "free" || L.action === "waive"
+      || (L.action === "extension" && !L.penalty_pts)) ? " ok" : "";
+    b += ` <span class="badge late${cls}" title="Submitted ${esc(L.submitted_text)}
+      — ${esc(L.label)}">${esc(L.late_text)} late</span>`;
+  }
   if (u.tex_source === "reconstructed")
     b += ` <span class="badge recon" title="This tex was reconstructed from
       the student's PDF — it is not their original source.">reconstructed tex</span>`;
@@ -2270,8 +2453,74 @@ function unitHeader(u, buttons) {
   }
   if (u.anomalies && u.anomalies.length)
     h += `<div class="anom">⚠ ${u.anomalies.map(esc).join("; ")}</div>`;
+  return h + lateBlock(u) + "</div>";
+}
+
+// ------------------------------------------------------------- late work --
+
+const LATE_ACTIONS = [
+  ["auto", "Follow the policy"],
+  ["free", "Use the free late"],
+  ["apply", "Apply the penalty"],
+  ["waive", "Waive (grace)"],
+  ["extension", "Extension to…"],
+  ["discuss", "Hold — discuss with student"],
+];
+
+function lateBlock(u) {
+  const L = u.late;
+  if (!L || !L.submitted) return "";
+  const due = S.late && S.late.due;
+  let h = `<div class="latebar${L.is_late ? " islate" : ""}" data-slug="${esc(u.slug)}">
+    <span>Submitted <b>${esc(L.submitted_text)}</b></span>`;
+  if (L.resubmitted) h += `<span>· re-uploaded ${esc(L.resubmitted_text)}</span>`;
+  if (!due) h += `<span class="muted">· no due date set (rubric.yml
+    <code>due:</code>)</span>`;
+  else if (L.is_late)
+    h += `<span>· <b class="lt">${esc(L.late_text)} late</b></span>
+      <span class="verdict ${esc(L.action)}">${esc(L.label)}</span>`;
+  else h += `<span class="muted">· on time</span>`;
+  if (L.is_late && !CFG.grader) {
+    const d = L.decision || {action: "auto"};
+    const opts = LATE_ACTIONS.map(([v, t]) =>
+      `<option value="${v}"${d.action === v ? " selected" : ""}>${t}</option>`).join("");
+    h += `<span class="sp"></span>
+      <select class="lateact" title="Instructor decision">${opts}</select>
+      <input class="lateext" type="text" placeholder="2026-09-07 23:59"
+        title="New deadline (course time)" value="${esc((d.extension || "").replace("T", " ").slice(0, 16))}"
+        ${d.action === "extension" ? "" : "hidden"}>
+      <input class="latenote" type="text" placeholder="note (optional)"
+        value="${esc(d.note || "")}">
+      <button class="latesave ghost">Save</button>`;
+  } else if (L.is_late && L.decision && L.decision.note) {
+    h += `<span class="muted">· ${esc(L.decision.note)}</span>`;
+  }
+  if (L.notes && L.notes.length)
+    h += `<div class="latenotes">${L.notes.map(esc).join("<br>")}</div>`;
   return h + "</div>";
 }
+
+document.addEventListener("change", e => {
+  if (!e.target.classList.contains("lateact")) return;
+  const bar = e.target.closest(".latebar");
+  bar.querySelector(".lateext").hidden = e.target.value !== "extension";
+});
+
+document.addEventListener("click", async e => {
+  if (!e.target.classList.contains("latesave")) return;
+  const bar = e.target.closest(".latebar");
+  const slug = bar.dataset.slug;
+  const body = {slug, action: bar.querySelector(".lateact").value,
+                note: bar.querySelector(".latenote").value,
+                extension: bar.querySelector(".lateext").value || null};
+  try {
+    const r = await api("/api/late", body);
+    unit(slug).late = r.late;
+    if (view === "student" && curSlug === slug) showStudent(slug);
+    else renderSidebarStudents();
+    notice(`Late decision saved for ${slug}: ${r.late.label}`);
+  } catch (err) { notice("Could not save: " + err.message); }
+});
 
 // -------------------------------------------------------- by-student view --
 
@@ -2281,13 +2530,16 @@ function renderSidebarStudents() {
     const done = gradedCount(u);
     const star = u.tex_source === "reconstructed" ? "*" :
                  (!u.tex ? "†" : "");
+    const late = u.late && u.late.is_late
+      ? ` <span class="ltdot${u.late.hold ? " hold" : ""}" title="${esc(u.late.late_text)} late — ${esc(u.late.label)}">L</span>` : "";
     return `<div class="stu${u.slug === curSlug ? " active" : ""}"
       data-slug="${esc(u.slug)}">
-      <span class="nm">${esc(u.slug)}${star}</span>
+      <span class="nm">${esc(u.slug)}${star}${late}</span>
       <span class="ct${done === S.n_parts ? " done" : ""}">${done}/${S.n_parts}</span>
     </div>`;
   }).join("") + `<div style="padding:.5rem .7rem;font-size:.72rem;
-    color:var(--muted)">* reconstructed tex &nbsp; † no tex</div>`;
+    color:var(--muted)">* reconstructed tex &nbsp; † no tex &nbsp;
+    <span class="ltdot">L</span> late</div>`;
   sb.querySelectorAll(".stu").forEach(row => {
     row.addEventListener("click", () => showStudent(row.dataset.slug));
   });
@@ -2556,6 +2808,12 @@ $("#export").addEventListener("click", async () => {
         `; grading worksheet filled with ${s.worksheet} totals` : "") +
       (s.extra_credit != null ?
         `; extra-credit CSV with ${s.extra_credit} rows` : "") +
+      (s.late ? `; ${s.late.late} late` +
+        (s.late.penalized ? `, ${s.late.penalized} penalized` : "") +
+        (s.late.free ? `, ${s.late.free} used a free late` : "") +
+        (s.late.held && s.late.held.length ?
+          `, ${s.late.held.length} HELD (${s.late.held.join(", ")})` : "") +
+        `; course gradebook updated` : "") +
       `. Files are in ${s.out}` +
       (s.warnings && s.warnings.length ? ` — ${s.warnings.join("; ")}` : "") +
       ". Click to dismiss.");
@@ -2565,8 +2823,12 @@ $("#export").addEventListener("click", async () => {
 // ------------------------------------------------------------------ init --
 
 (async function init() {
+  $("#gradebook").addEventListener("click", () => {
+    location.href = "/gradebook?folder=" + encodeURIComponent(CFG.folder);
+  });
   if (CFG.grader) {
     $("#export").style.display = "none";
+    $("#gradebook").style.display = "none";
     $("#home").style.display = "none";
     updateWhoami();
     promptName(false);
@@ -2574,6 +2836,9 @@ $("#export").addEventListener("click", async () => {
   S = await api("/api/state");
   setProgress(...S.progress);
   $("#foldname").textContent = S.folder.split("/").filter(Boolean).slice(-2).join("/");
+  if (S.late && S.late.due_text)
+    $("#foldname").title = `Due ${S.late.due_text} (${S.late.timezone})`;
+  if (S.late && S.late.error) notice("Late policy: " + S.late.error);
   document.title = `hwGenie — ${S.folder.split("/").pop()}`;
   updateSaveStat();
   setView("student");
