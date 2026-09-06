@@ -304,11 +304,14 @@ def collect(src: Path, dest: Path, template: Path | None = None,
             ) -> CollectResult:
     template_parts = None
     if template is not None:
-        template_parts = template.read_text(errors="replace").count(TEMPLATE_MARKER)
+        # the blank [submission] variant has one marker per box; the
+        # assignment source (which also carries the solutions the grader
+        # can show) has the boxes filled in — count those instead
+        template_parts = _count_parts(template)
         if template_parts == 0:
             raise CollectError(
-                f"{template} has no '{TEMPLATE_MARKER}' markers — is it the "
-                "generated [submission] variant?")
+                f"{template} has no solution boxes — is it the assignment's "
+                "source or its generated [submission] variant?")
 
     old_manifest: dict | None = None
     if not fresh and (dest / MANIFEST_NAME).is_file():
@@ -492,6 +495,20 @@ def collect(src: Path, dest: Path, template: Path | None = None,
 
 # ------------------------------------------------------- assignment layout --
 
+def newest_tex(build: Path) -> Path | None:
+    """The assignment tex to show graders: the newest .tex in build/.
+    The source (with solutions) is preferred over a blank [submission]
+    variant of the same age, since it shows the grader more."""
+    build = Path(build)
+    if not build.is_dir():
+        return None
+    hits = [t for t in build.glob("*.tex") if t.is_file()]
+    if not hits:
+        return None
+    return max(hits, key=lambda t: (round(t.stat().st_mtime),
+                                    "submission" not in t.name.lower()))
+
+
 def locate(zip_path: Path | None = None, folder: Path | None = None) -> dict:
     """Resolve the pieces of a collect from the assignment-folder layout
     the how-to describes (``<assignment>/moodle-raw/*.zip`` + worksheet,
@@ -503,7 +520,9 @@ def locate(zip_path: Path | None = None, folder: Path | None = None) -> dict:
     ``moodle-raw`` folder, else ``<stem>-grading`` beside the zip.  Given a
     grading folder (a re-collect): the newest zip in ``../moodle-raw``,
     the folder's parent, or the folder itself.  The template comes from
-    the existing manifest when it still exists, else from ``../build``.
+    the existing manifest when it still exists, else the newest .tex in
+    ``../build`` (the assignment source, ideally — its solutions show in
+    the grader's problem pane).
     """
     if zip_path is None and folder is None:
         raise CollectError("nothing to collect: give a zip or a folder")
@@ -544,10 +563,7 @@ def locate(zip_path: Path | None = None, folder: Path | None = None) -> dict:
             if tp.is_file():
                 template = tp
     if template is None and (assignment / "build").is_dir():
-        hits = sorted(assignment.glob("build/*submission*.tex"),
-                      key=lambda x: x.stat().st_mtime)
-        if hits:
-            template = hits[-1]
+        template = newest_tex(assignment / "build")
     return {"zip": zp, "dest": dest, "template": template,
             "update": mf.is_file()}
 

@@ -118,24 +118,39 @@ PROBLEM_RE = re.compile(r"^Problem\s+(\d+(?:\.\d+)*)[.:]?$")
 def template_problem_blocks(text: str) -> list[dict]:
     """Problem statements from the assignment's submission-template tex.
 
-    Returns [{"num", "tex", "boxes"}] where tex is the problem body with
-    each solution box replaced by an ``HWGRADERBOX<n>`` token (n = the
-    box's global ordinal, matching grading part numbers) and boxes lists
-    the ordinals appearing in that problem.  Comment-aware, like
-    extract_solution_bodies.
+    Returns [{"num", "tex", "boxes", "solutions"}] where tex is the problem
+    body with each solution box replaced by an ``HWGRADERBOX<n>`` token
+    (n = the box's global ordinal, matching grading part numbers), boxes
+    lists the ordinals appearing in that problem, and solutions maps an
+    ordinal to the box's own content when the file carries any — the
+    assignment *source* (or a solutions variant) rather than the blank
+    submission template — so graders can see the instructor's solution.
+    Comment-aware, like extract_solution_bodies.
     """
     problems: list[dict] = []
     cur: list[str] | None = None
     boxes: list[int] = []
+    sols: dict[int, str] = {}
+    sol_lines: list[str] = []
     box = 0
     in_sol = False
+
+    def close_solution(body: list[str]) -> None:
+        text_ = "\n".join(body)
+        code_ = "\n".join(_strip_comment(ln) for ln in body).strip()
+        if code_ and cur is not None:
+            sols[box] = text_.strip("\n")
+
     for line in text.splitlines():
         code = _strip_comment(line)
         if in_sol:
             j = code.find(SOLUTION_END)
             if j == -1:
+                sol_lines.append(line)
                 continue
             in_sol = False
+            sol_lines.append(line[:j])
+            close_solution(sol_lines)
             rest = line[j + len(SOLUTION_END):]
             if cur is not None and rest.strip():
                 cur.append(rest)
@@ -151,19 +166,24 @@ def template_problem_blocks(text: str) -> list[dict]:
             j = code.find(SOLUTION_END, i + len(SOLUTION_BEGIN))
             if j == -1:
                 in_sol = True
-            elif cur is not None and line[j + len(SOLUTION_END):].strip():
-                cur.append(line[j + len(SOLUTION_END):])
+                sol_lines = [line[i + len(SOLUTION_BEGIN):]]
+            else:
+                close_solution([line[i + len(SOLUTION_BEGIN):j]])
+                if cur is not None and line[j + len(SOLUTION_END):].strip():
+                    cur.append(line[j + len(SOLUTION_END):])
             continue
         b = code.find(r"\begin{problem}")
         if b != -1:
             cur = [line[b + len(r"\begin{problem}"):]]
             boxes = []
+            sols = {}
             continue
         e = code.find(r"\end{problem}")
         if e != -1 and cur is not None:
             cur.append(line[:e])
             problems.append({"num": len(problems) + 1,
-                             "tex": "\n".join(cur), "boxes": boxes})
+                             "tex": "\n".join(cur), "boxes": boxes,
+                             "solutions": sols})
             cur = None
             continue
         if cur is not None:
@@ -332,7 +352,8 @@ class GradingApp:
         is unknown or missing."""
         if self._problems is not None:
             return self._problems
-        result: dict = {"problems": [], "macros": {}, "warnings": []}
+        result: dict = {"problems": [], "macros": {}, "warnings": [],
+                        "solutions": {}}
         tmpl = (self.manifest.get("template") or {}).get("path")
         path = Path(tmpl) if tmpl else None
         if path is not None and not path.is_absolute():
@@ -360,6 +381,18 @@ class GradingApp:
                         f"problem {blk['num']}: {e}")
                 result["problems"].append(
                     {"num": blk["num"], "boxes": blk["boxes"], "html": html})
+                # instructor solutions (only when the template file has
+                # them, i.e. it is the assignment source) — grader-facing
+                # only; the feedback export never touches these
+                for n, stex in blk.get("solutions", {}).items():
+                    try:
+                        sconv = HtmlConverter(stex, include_solutions=True,
+                                              extra_preamble=preamble,
+                                              section=section)
+                        result["solutions"][str(n)] = sconv.convert()
+                    except Exception as e:
+                        result["warnings"].append(
+                            f"solution for part {n}: {e}")
         self._problems = result
         return result
 
@@ -1415,6 +1448,17 @@ __BASE__
   .pcontent .thm-head, .pcontent .proof-label { font-weight: 700;
     font-family: system-ui, sans-serif; font-size: .85rem; margin: 0 0 .2em; }
   .pcontent details.solution > summary { display: none; }
+  .pcontent details.isol { margin: .3rem 0 .8rem; padding: 0 .6rem;
+    border-left: 3px solid var(--sol-accent, var(--accent));
+    font-size: .92em; }
+  .pcontent details.isol > summary { cursor: pointer; font-weight: 600;
+    font-family: system-ui, sans-serif; font-size: .8rem; padding: .2rem 0;
+    color: var(--sol-accent, var(--accent)); }
+  .pcontent details.isol .isolbody { padding: .2rem 0 .4rem; }
+  .pcontent .isolall { display: block; font-size: .78rem;
+    color: var(--muted); font-family: system-ui, sans-serif;
+    margin: 0 0 .5rem; }
+  .pcontent .isolall input { vertical-align: middle; margin-right: .3rem; }
   .pcontent table { border-collapse: collapse; }
   .pcontent td, .pcontent th { border: 1px solid var(--border);
                                padding: .2rem .55rem; }
@@ -1887,9 +1931,12 @@ async function ensureStmtPane() {
   body.innerHTML = stmtData.problems.map(p =>
     `<div class="pprob" data-num="${p.num}" style="display:none">
        <h3>Problem ${p.num}</h3>${p.html}</div>`).join("") ||
-    `<div class="nodata">No assignment template on record — re-run
-     collect with --template to enable problem statements.</div>`;
+    `<div class="nodata">No assignment template on record — put the
+     assignment's .tex (the source, so solutions show too) in the
+     assignment's build/ folder and re-collect (↻ on the Grading tab).</div>`;
   // the template's solution boxes became tokens; show them as part chips
+  // (+ the instructor's solution, collapsed, when the file carries one)
+  const isols = stmtData.solutions || {};
   body.querySelectorAll("details.solution").forEach(d => {
     const m = d.textContent.match(/HWGRADERBOX(\d+)/);
     if (!m) return;
@@ -1898,7 +1945,23 @@ async function ensureStmtPane() {
     div.className = "pbox"; div.dataset.part = n;
     div.textContent = "✎ " + (S.rubric[n - 1] ? S.rubric[n - 1].label : n);
     d.replaceWith(div);
+    if (isols[String(n)]) {
+      const det = document.createElement("details");
+      det.className = "isol"; det.dataset.part = n;
+      det.innerHTML = `<summary>Solution</summary>
+        <div class="isolbody">${isols[String(n)]}</div>`;
+      div.after(det);
+    }
   });
+  if (Object.keys(isols).length) {
+    const all = document.createElement("label");
+    all.className = "isolall";
+    all.innerHTML = `<input type="checkbox"> show all solutions`;
+    all.querySelector("input").addEventListener("change", e => {
+      body.querySelectorAll("details.isol").forEach(d => d.open = e.target.checked);
+    });
+    body.prepend(all);
+  }
   typeset(body, stmtData.macros);
   stmtBuilt = true;
 }

@@ -130,10 +130,8 @@ def find_template(folder: Path, tmpl: str | None) -> Path | None:
         for cand in ([p] if p.is_absolute() else [folder / p]):
             if cand.is_file():
                 return cand
-    build = folder.parent / "build"
-    hits = sorted(build.glob("*submission*.tex"),
-                  key=lambda x: x.stat().st_mtime) if build.is_dir() else []
-    return hits[-1] if hits else None
+    from .collect import newest_tex
+    return newest_tex(folder.parent / "build")
 
 
 def _bundle_template(stage: Path, log, folder: Path | None = None) -> None:

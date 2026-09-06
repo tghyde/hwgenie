@@ -652,3 +652,85 @@ def test_open_zip_shortcut_uses_layout(tmp_path):
     app = holder.open_path(zpath)
     assert app.folder == ps / "grading"
     assert app.n_parts == 2
+
+
+# -------------------------------------------------- instructor solutions --
+
+SOURCE_TEX = "\n".join([
+    r"\documentclass[11pt]{article}",
+    r"\hwnumber{1}",
+    r"\begin{document}",
+    r"\begin{problem}",
+    r"Part a.  % \begin{solution} in a comment",
+    r"\begin{solution}",
+    r"    The answer is $x = 2$.",
+    r"\end{solution}",
+    r"Part b.",
+    r"\begin{solution}Inline: trivially.\end{solution}",
+    r"\end{problem}",
+    r"\begin{problem}",
+    r"Only one part.",
+    r"\begin{solution}",
+    "    \t%Write your solution here",      # a real tab, like the template
+    r"\end{solution}",
+    r"\end{problem}",
+    r"\end{document}",
+])
+
+
+def test_problem_blocks_capture_solutions():
+    from hwgenie.grade_gui import template_problem_blocks
+    blocks = template_problem_blocks(SOURCE_TEX)
+    assert [b["boxes"] for b in blocks] == [[1, 2], [3]]
+    assert blocks[0]["solutions"] == {1: "    The answer is $x = 2$.",
+                                      2: "Inline: trivially."}
+    assert blocks[1]["solutions"] == {}          # blank box: nothing
+    assert "HWGRADERBOX1" in blocks[0]["tex"] and "x = 2" not in blocks[0]["tex"]
+    # the blank submission template still yields no solutions at all
+    assert all(b["solutions"] == {} for b in template_problem_blocks(TEMPLATE))
+
+
+def test_collect_accepts_source_as_template(tmp_path):
+    src = make_moodle_dir(tmp_path)
+    tpl = tmp_path / "ps01.tex"
+    tpl.write_text(SOURCE_TEX)
+    res = collect(src, tmp_path / "grading", template=tpl)
+    assert res.template_parts == 3
+    blank = tmp_path / "empty.tex"
+    blank.write_text(r"\begin{document}nothing\end{document}")
+    from hwgenie.collect import CollectError
+    with pytest.raises(CollectError, match="no solution boxes"):
+        collect(src, tmp_path / "grading2", template=blank)
+
+
+def test_newest_tex_prefers_source(tmp_path):
+    from hwgenie.collect import newest_tex
+    build = tmp_path / "build"
+    build.mkdir()
+    assert newest_tex(build) is None
+    sub = build / "PS1-submission.tex"
+    sub.write_text("x")
+    src = build / "ps01.tex"
+    src.write_text("y")
+    import os
+    now = time.time()
+    os.utime(sub, (now, now)); os.utime(src, (now, now))
+    assert newest_tex(build) == src                # same age: source wins
+    os.utime(sub, (now + 5, now + 5))
+    assert newest_tex(build) == sub                # newer file wins
+
+
+def test_solutions_reach_grader_pane_but_not_feedback(tmp_path):
+    from hwgenie.grade_gui import GradingApp
+    folder = make_grading_folder(tmp_path / "c" / "ps01")
+    (folder / "template.tex").write_text(SOURCE_TEX)
+    app = GradingApp(folder)
+    pay = app.problems_payload()
+    assert set(pay["solutions"]) == {"1", "2"}
+    assert "x = 2" in pay["solutions"]["1"]
+    assert all("x = 2" not in p["html"] for p in pay["problems"])
+    GradeStore(folder, load_rubric(folder, 3)).update("Doe-Jane", 1,
+                                                      {"score": 4})
+    result = build_feedback(folder, pdf=False)
+    html = (result.out_dir / "feedback/Doe-Jane/feedback.html").read_text()
+    assert "Part a." in html and "x = 2" not in html and "trivially" not in html

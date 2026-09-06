@@ -81,10 +81,12 @@ __NAV__
       settings.)</li>
     <li>Make a folder for the assignment, e.g.
       <code>grading-lab/math221/ps01/</code>, with the zip and worksheet
-      in <code>moodle-raw/</code> and the submission template students
-      downloaded (the <code>&hellip;-submission-&hellip;.tex</code> link
-      on the course site&rsquo;s problem-set page) in
-      <code>build/</code>.</li>
+      in <code>moodle-raw/</code> and the assignment&rsquo;s .tex in
+      <code>build/</code> &mdash; the <em>source</em> file (e.g.
+      <code>ps01.tex</code> from the course repo) if graders should see
+      your solutions in the problem pane, or the blank submission
+      template students downloaded if they shouldn&rsquo;t. Solutions
+      never reach the student feedback either way.</li>
     <li>Collect, in Terminal from the <code>hwgenie</code> folder:
       <code>.venv/bin/hwgenie collect "&lt;zip&gt;" --dest
       "&lt;assignment&gt;/grading" --template "&lt;template.tex&gt;"</code>.
