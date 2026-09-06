@@ -503,7 +503,7 @@ def test_watchdog_decision():
 def test_picker_flow(picker_client, grading_folder):
     # nothing open: /grading serves the picker, APIs refuse politely
     page = picker_client.get("/grading")
-    assert b"Pick the assignment" in page
+    assert b"Collect from Moodle" in page
     err = picker_client.get("/api/state", expect=409)
     assert "no assignment open" in err["error"]
     # the scan finds the grading folder under the root
@@ -518,7 +518,7 @@ def test_picker_flow(picker_client, grading_folder):
     assert picker_client.get("/api/scan")["recents"] == [str(grading_folder)]
     # closing returns to the picker
     picker_client.post("/api/close", {})
-    assert b"Pick the assignment" in picker_client.get("/grading")
+    assert b"Collect from Moodle" in picker_client.get("/grading")
 
 
 def test_picker_open_errors(picker_client, tmp_path):
@@ -589,10 +589,10 @@ def test_grading_page_folder_param(picker_client, grading_folder):
     assert b"katex" in page                      # the grader, not the picker
     assert grading_folder.name.encode() in page  # folder baked into CFG
     # ?pick=1 forces the picker even while an assignment is open
-    assert b"Pick the assignment" in picker_client.get("/grading?pick=1")
+    assert b"Collect from Moodle" in picker_client.get("/grading?pick=1")
     # a bad folder redirects back to the picker (urllib follows the 302)
     bad = urllib.parse.quote(str(grading_folder / "nope"))
-    assert b"Pick the assignment" in picker_client.get(
+    assert b"Collect from Moodle" in picker_client.get(
         f"/grading?folder={bad}")
 
 
@@ -635,7 +635,7 @@ def test_grader_mode_grading_still_works(grader_client, grading_folder):
     assert raw["parts"]["1"]["by"] == "Grader Two"
     # the picker is reachable and flagged grader-mode
     page = grader_client.get("/grading?pick=1")
-    assert b"Pick the assignment" in page and b'"grader": true' in page
+    assert b"Collect from Moodle" in page and b'"grader": true' in page
 
 
 def test_howto_page(picker_client):

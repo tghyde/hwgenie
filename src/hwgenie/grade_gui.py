@@ -776,9 +776,17 @@ def make_handler(holder: AppHolder):
                 else:
                     self._json(res[0], res[1])
             elif url.path == "/gradebook" and not grader_only:
-                if not (app := self._app(folder)):
+                from .late import course_dir
+                course = q.get("course", [None])[0]
+                if not course and folder:
+                    course = str(course_dir(Path(folder)))
+                if not course and holder.current:
+                    course = str(course_dir(holder.current.folder))
+                if not course:
+                    self._redirect("/grading?pick=1&err="
+                                   + urllib.parse.quote("no course given"))
                     return
-                self._send(render_gradebook(app).encode("utf-8"))
+                self._send(render_gradebook(Path(course)).encode("utf-8"))
             elif url.path == "/api/state":
                 if (app := self._app(folder)):
                     self._json(app.state_payload())
@@ -1101,66 +1109,186 @@ def render_grader(folder: str, grader_only: bool = False) -> str:
                       .replace("__CFG__", cfg)
 
 
-def render_gradebook(app) -> str:
-    """Instructor-only: the course gradebook as a plain table (totals after
-    the late policy, lateness, who has spent their free late)."""
+def course_assignments(course: Path) -> list[Path]:
+    """Grading folders of a course: <course>/<ps>/grading or a direct
+    <course>/<x>-grading folder, in name order."""
+    course = Path(course)
+    out: list[Path] = []
+    if not course.is_dir():
+        return out
+    for d in sorted(course.iterdir()):
+        if not d.is_dir():
+            continue
+        if (d / "grading" / MANIFEST_NAME).is_file():
+            out.append(d / "grading")
+        elif (d / MANIFEST_NAME).is_file():
+            out.append(d)
+    return out
+
+
+def gradebook_data(course: Path) -> dict:
+    """The live course gradebook: every assignment folder under the course
+    × every student seen in any of them.  Exported totals come from
+    gradebook.json; everything else is read straight from the grading
+    folders (progress, provisional total under the late policy)."""
+    from . import late as late_mod
+    from .feedback import (_split_totals, _worksheet_people, display_name,
+                           find_worksheet)
+    course = Path(course).resolve()
+    errors: list[str] = []
+    try:
+        book = late_mod.Gradebook(course / late_mod.GRADEBOOK_JSON)
+    except late_mod.LateError as e:
+        errors.append(str(e))
+        book = late_mod.Gradebook(course / "missing-gradebook.json")
+    students: dict[str, dict] = {}
+    for mid, rec in book.data["students"].items():
+        students[mid] = {"moodle_id": mid, "name": rec.get("name", ""),
+                         "email": rec.get("email", ""), "cells": {}}
+    keys: list[str] = []
+    for folder in course_assignments(course):
+        key = late_mod.assignment_key(folder)
+        keys.append(key)
+        try:
+            app = GradingApp(folder)
+        except Exception as e:  # noqa: BLE001 — one bad folder, not the page
+            errors.append(f"{key}: {e}")
+            continue
+        ctx, err = app.late_context()
+        if err:
+            errors.append(f"{key}: {err}")
+        ws = find_worksheet(folder)
+        people = _worksheet_people(ws) if ws else {}
+        out_of = sum(rp.max or 0 for rp in app.rubric if not rp.ec)
+        for u in app.units:
+            mid = str(u["moodle_id"])
+            st = students.setdefault(mid, {"moodle_id": mid, "name": "",
+                                           "email": "", "cells": {}})
+            person = people.get(mid) or {}
+            st["name"] = st["name"] or person.get("name") or \
+                display_name(u["slug"])
+            st["email"] = st["email"] or person.get("email", "")
+            data = app.store.load(u["slug"])
+            raw, ec = _split_totals(app, data)
+            graded = sum(1 for part in data["parts"].values()
+                         if part["status"] == "graded")
+            ls = ctx.status(u) if ctx else None
+            exported = ((book.data["students"].get(mid) or {})
+                        .get("assignments", {}).get(key))
+            st["cells"][key] = {
+                "slug": u["slug"], "folder": str(folder),
+                "graded": graded, "n_parts": app.n_parts,
+                "raw": raw, "ec": ec, "out_of": out_of,
+                "provisional": (late_mod.apply_penalty(raw, ls) if ls
+                                else raw),
+                "hold": bool(ls and ls.hold),
+                "late": ls.to_json(ctx.tz) if ls else None,
+                "exported": exported,
+            }
+    for st in students.values():
+        used = book.free_late_used_on(st["moodle_id"])
+        prov = None
+        if not used:
+            for key in keys:
+                c = st["cells"].get(key)
+                if c and c["late"] and c["late"].get("is_late") \
+                        and c["late"].get("action") == "free":
+                    prov = key
+                    break
+        st["free_late"] = {"used": used, "provisional": prov}
+    def by_last(st: dict) -> tuple:
+        words = st["name"].split()
+        return ((words[-1].lower() if words else ""), st["name"].lower(),
+                st["moodle_id"])
+    rows = sorted(students.values(), key=by_last)
+    return {"course": str(course), "name": course.name, "keys": keys,
+            "students": rows, "errors": errors, "book": str(book.path),
+            "has_book": book.path.is_file()}
+
+
+def render_gradebook(course: Path) -> str:
+    """Instructor-only: the course gradebook page (live progress +
+    exported totals + who has spent their free late)."""
     from . import late as late_mod
     from .appicon import LAMP_SVG
     from .webstyle import BASE_CSS, nav_header
-    try:
-        book = late_mod.Gradebook.for_folder(app.folder)
-        err = None
-    except late_mod.LateError as e:
-        book, err = None, str(e)
+    d = gradebook_data(course)
     esc = html.escape
+    num = late_mod._num
     body = ""
-    if err:
-        body = f'<p class="err">{esc(err)}</p>'
-    elif book is None or not book.data["students"]:
-        body = ('<p>No gradebook yet. It is written the first time an '
-                'assignment with a <code>due:</code> date in its '
-                '<code>rubric.yml</code> is exported.</p>')
+    if d["errors"]:
+        body += '<p class="err">' + " · ".join(map(esc, d["errors"])) + "</p>"
+    if not d["keys"]:
+        body += ('<p class="none">No grading folders under this course '
+                 'folder yet — collect an assignment first.</p>')
     else:
-        keys = book.assignment_keys()
-        head = "".join(f"<th>{esc(k)}</th>" for k in keys)
-        rows = []
-        for mid, st in sorted(book.data["students"].items(),
-                              key=lambda kv: (kv[1].get("name") or "",
-                                              kv[0])):
+        head = "".join(f"<th>{esc(k)}</th>" for k in d["keys"])
+        trs = []
+        for st in d["students"]:
             cells = []
-            for k in keys:
-                a = st["assignments"].get(k)
-                if not a:
-                    cells.append("<td></td>")
+            for k in d["keys"]:
+                c = st["cells"].get(k)
+                if not c:
+                    cells.append('<td class="none">—</td>')
                     continue
-                tot = ("pending" if a.get("total") is None
-                       else late_mod._num(a["total"]))
-                cls, tip = "", ""
-                if a.get("hours_late"):
-                    cls = f' class="late {esc(a.get("action", ""))}"'
-                    tip = (f' title="{late_mod.fmt_hours(a["hours_late"])} '
-                           f'late — {esc(a.get("action", "auto"))}'
-                           + (f'; −{late_mod._num(a["penalty_pts"])} pts'
-                              if a.get("penalty_pts") else "") + '"')
-                cells.append(f"<td{cls}{tip}>{tot}"
-                             f'<span class="oo">/{late_mod._num(a["out_of"])}'
-                             "</span></td>")
-            free = st.get("free_late_used")
-            rows.append(
-                f"<tr><td class=\"nm\">{esc(st.get('name') or mid)}</td>"
-                + "".join(cells)
-                + f"<td class=\"free\">{esc(free) if free else '✓ available'}"
-                "</td></tr>")
-        body = (f'<table class="gb"><thead><tr><th>Student</th>{head}'
-                '<th>Free late</th></tr></thead><tbody>'
-                + "".join(rows) + "</tbody></table>"
-                f'<p class="src">Source: <code>{esc(str(book.path))}</code> '
-                '(a CSV twin sits next to it). Shaded cells were late: '
-                'hover for details.</p>')
+                link = ("/grading?folder=" + urllib.parse.quote(c["folder"]))
+                L = c.get("late") or {}
+                late_bits = ""
+                cls = ""
+                if L.get("is_late"):
+                    cls = " late " + esc(L.get("action") or "")
+                    late_bits = (f'<span class="lt" title="{esc(L.get("label") or "")}">'
+                                 f'{esc(L.get("late_text") or "")} late</span>')
+                ex = c.get("exported")
+                if ex:
+                    tot = "pending" if ex.get("total") is None else num(ex["total"])
+                    tip = (f'exported {ex.get("exported", "")[:10]}; raw '
+                           f'{num(ex.get("raw"))}'
+                           + (f'; −{num(ex.get("penalty_pts"))} late'
+                              if ex.get("penalty_pts") else ""))
+                    cells.append(
+                        f'<td class="final{cls}" title="{esc(tip)}">'
+                        f'<a href="{link}"><b>{tot}</b>'
+                        f'<span class="oo">/{num(ex["out_of"])}</span></a>'
+                        f'{late_bits}</td>')
+                    continue
+                g, n = c["graded"], c["n_parts"]
+                if g == 0:
+                    prog = '<span class="muted">not graded</span>'
+                else:
+                    prov = "pending" if c["hold"] else num(c["provisional"])
+                    prog = (f'<span class="prog">{g}/{n} graded</span> '
+                            f'<span class="prov" title="provisional total under '
+                            f'the late policy">{prov}<span class="oo">/'
+                            f'{num(c["out_of"])}</span></span>')
+                cells.append(f'<td class="live{cls}"><a href="{link}">{prog}</a>'
+                             f'{late_bits}</td>')
+            fl = st["free_late"]
+            if fl["used"]:
+                free = f'<span class="used">used on {esc(fl["used"])}</span>'
+            elif fl["provisional"]:
+                free = (f'<span class="prov">{esc(fl["provisional"])} '
+                        '(when exported)</span>')
+            else:
+                free = '<span class="ok">available</span>'
+            trs.append(
+                f'<tr><td class="nm" title="{esc(st["email"])}">'
+                f'{esc(st["name"] or st["moodle_id"])}</td>'
+                + "".join(cells) + f'<td class="free">{free}</td></tr>')
+        body += (f'<table class="gb"><thead><tr><th>Student</th>{head}'
+                 '<th>Free late</th></tr></thead><tbody>'
+                 + "".join(trs) + "</tbody></table>")
+        body += ('<p class="src">Bold totals are final (exported). Other '
+                 'cells show grading progress with a provisional total '
+                 'under the late policy; shaded cells were late — hover '
+                 'for details, click to open the assignment. '
+                 f'Records: <code>{esc(d["book"])}</code>'
+                 + (" (with a CSV twin)." if d["has_book"] else
+                    " — written at the first export.") + "</p>")
     return (GRADEBOOK_PAGE.replace("__NAV__", nav_header("grading"))
                           .replace("__LAMP__", LAMP_SVG)
                           .replace("__CSS__", BASE_CSS)
-                          .replace("__FOLDER__", esc(str(app.folder)))
+                          .replace("__COURSE__", esc(d["name"]))
                           .replace("__BODY__", body))
 
 
@@ -1169,24 +1297,39 @@ GRADEBOOK_PAGE = r"""<!doctype html>
 <title>hwGenie — Gradebook</title>
 <style>
 __CSS__
-main { max-width: 70rem; margin: 1.5rem auto; padding: 0 1rem; }
-table.gb { border-collapse: collapse; font-size: .9rem; }
-table.gb th, table.gb td { padding: .35rem .6rem; text-align: right;
-  border-bottom: 1px solid var(--line, #ddd); white-space: nowrap; }
+html, body { height: auto; min-height: 100%; }
+body { overflow: auto; display: block; }
+main { max-width: 74rem; margin: 1.5rem auto; padding: 0 1rem; }
+h1 { margin: 0 0 .2rem; }
+table.gb { border-collapse: collapse; font-size: .88rem; }
+table.gb th, table.gb td { padding: .4rem .6rem; text-align: right;
+  border-bottom: 1px solid var(--border, #ddd); white-space: nowrap;
+  vertical-align: baseline; }
+table.gb th { font-size: .75rem; letter-spacing: .04em;
+  text-transform: uppercase; color: var(--muted); }
 table.gb th:first-child, table.gb td.nm { text-align: left; }
-table.gb td .oo { color: var(--muted); font-size: .8em; margin-left: .15em; }
-table.gb td.late { background: color-mix(in srgb, var(--alert, #c60) 18%,
+table.gb td a { color: inherit; text-decoration: none; }
+table.gb td a:hover { text-decoration: underline; }
+table.gb td .oo { color: var(--muted); font-size: .8em; margin-left: .1em; }
+table.gb td .prog { color: var(--muted); font-size: .8em; }
+table.gb td .prov { margin-left: .35em; }
+table.gb td .lt { display: block; font-size: .7rem; color: var(--alert);
+  letter-spacing: .03em; text-transform: uppercase; }
+table.gb td.late { background: color-mix(in srgb, var(--alert, #c60) 16%,
   transparent); }
-table.gb td.late.free, table.gb td.late.waive { background:
-  color-mix(in srgb, var(--accent, #08c) 14%, transparent); }
-table.gb td.free { text-align: left; color: var(--muted); }
-p.src { color: var(--muted); font-size: .85rem; }
+table.gb td.late.free, table.gb td.late.waive, table.gb td.late.extension {
+  background: color-mix(in srgb, var(--accent, #08c) 14%, transparent); }
+table.gb td.free { text-align: left; font-size: .85rem; }
+table.gb td.free .used { color: var(--alert); }
+table.gb td.free .ok { color: var(--sol-accent, var(--accent)); }
+table.gb td.free .prov { color: var(--muted); }
+.none, p.src { color: var(--muted); font-size: .85rem; }
+p.err { color: var(--alert); }
 </style></head><body>
 __NAV__
 <main>
-<h1>Course gradebook</h1>
-<p class="src">Opened from <code>__FOLDER__</code>.
-<a href="/grading?folder=__FOLDER__">← back to grading</a></p>
+<h1>Gradebook — __COURSE__</h1>
+<p class="src"><a href="/grading?pick=1">← Grading</a></p>
 __BODY__
 </main></body></html>"""
 
@@ -3101,23 +3244,69 @@ __BASE__
   #clog { white-space: pre-wrap; font-family: ui-monospace, monospace;
           font-size: .72rem; margin-top: .6rem; }
   .row .recollect { margin-left: .5rem; padding: 0 .4rem; font-size: .9rem; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fill,
+           minmax(15rem, 1fr)); gap: .9rem; margin-top: .5rem; }
+  .card { background: var(--card-bg); padding: 1rem 1.1rem 1rem;
+          border-top: 3px solid var(--accent); }
+  .card .cardlink { display: block; font-weight: 700; font-size: 1.05rem;
+          color: var(--accent); text-decoration: none; margin-bottom: .3rem; }
+  .card a.cardlink:hover { text-decoration: underline; }
+  .card p { margin: 0 0 .5rem; color: var(--muted); font-size: .85rem; }
+  .card .mini a { display: block; font-size: .85rem; color: var(--fg);
+          text-decoration: none; padding: .15rem 0; overflow: hidden;
+          text-overflow: ellipsis; white-space: nowrap; }
+  .card .mini a:hover { color: var(--accent); }
+  .card .mini.muted { font-size: .8rem; color: var(--muted); }
+  #back a { color: var(--accent); text-decoration: none; }
 </style>
 </head>
 <body>
 __NAV__
 <main>
-  <p class="sub">Pick the assignment to grade.
-    <a id="howto" href="/grading/howto" style="display:none">How-to:
-    the Moodle round trip &rarr;</a></p>
-  <h2 class="sechead" id="head-local" style="display:none">Local
-    Grading</h2>
+  <div id="hub" hidden>
+    <p class="sub">Grading &mdash; pick a task.</p>
+    <div class="cards">
+      <div class="card">
+        <a class="cardlink" href="/grading?pick=1&view=grade">Grade &rarr;</a>
+        <p>Open a collected assignment in hwGrader.</p>
+        <div id="hubrecent" class="mini"></div>
+      </div>
+      <div class="card">
+        <a class="cardlink" href="/grading?pick=1&view=collect">Collect from
+          Moodle &rarr;</a>
+        <p>Turn a Moodle download into a grading folder, or pull in late
+          work with &#x21bb; on an assignment.</p>
+      </div>
+      <div class="card">
+        <span class="cardlink">Gradebook</span>
+        <p>Every student &times; every assignment: progress, totals after
+          the late policy, free lates used.</p>
+        <div id="hubcourses" class="mini"></div>
+      </div>
+      <div class="card">
+        <a class="cardlink" href="/grading?pick=1&view=remote">External
+          grading &rarr;</a>
+        <p>Push assignments to the graders&rsquo; server and pull their
+          grades back.</p>
+        <div id="hubremote" class="mini muted"></div>
+      </div>
+      <div class="card">
+        <a class="cardlink" href="/grading/howto">How-to &rarr;</a>
+        <p>The Moodle round trip, rubrics, extra credit, late work.</p>
+      </div>
+    </div>
+  </div>
+  <p class="sub" id="back" hidden><a href="/grading?pick=1">&larr; Grading</a>
+    <span id="viewtitle"></span></p>
+  <div data-view="grade">
   <div id="sec-recents">
     <h2>Recent</h2>
     <div id="recents"><span class="none">nothing yet</span></div>
   </div>
   <h2>Found in <span id="root"></span></h2>
   <div id="found"><span class="none">scanning…</span></div>
-  <div id="sec-manual">
+  </div>
+  <div id="sec-manual" data-view="grade">
     <h2>Somewhere else</h2>
     <div class="manual">
       <input id="path" spellcheck="false"
@@ -3128,7 +3317,7 @@ __NAV__
     collect</code>) or a Moodle &ldquo;Download all submissions&rdquo; .zip
     &mdash; a zip is collected into a folder next to it first.</p>
   </div>
-  <div id="sec-collect">
+  <div id="sec-collect" data-view="collect">
     <h2 class="sechead">Collect from Moodle</h2>
     <div class="manual">
       <input id="czip" spellcheck="false"
@@ -3147,7 +3336,7 @@ __NAV__
     <pre id="clog" class="hint" style="display:none"></pre>
   </div>
   <div id="err"></div>
-  <div id="sec-remote" style="display:none">
+  <div id="sec-remote" data-view="remote" style="display:none">
     <h2 class="sechead">External Grading</h2>
     <div class="remhead">
       <span id="remstat" class="none">checking the grading server…</span>
@@ -3201,11 +3390,25 @@ async function openPath(p) {
   }
 }
 
+// "…/grading-lab/math221/ps01/grading" -> "math221 / ps01"
+function label(p) {
+  const parts = p.split("/").filter(Boolean);
+  const i = parts[parts.length - 1] === "grading" ? parts.length - 2
+                                                   : parts.length - 1;
+  return (i > 0 ? parts[i - 1] + " / " : "") + (parts[i] || p);
+}
+// the course folder above an assignment ("…/grading-lab/math221")
+function courseOf(p) {
+  const parts = p.split("/").filter(Boolean);
+  const i = parts[parts.length - 1] === "grading" ? parts.length - 2
+                                                   : parts.length - 1;
+  return i > 0 ? "/" + parts.slice(0, i).join("/") : null;
+}
+
 function rows(el, items, rootPrefix) {
   if (!items.length) return;
   el.innerHTML = items.map(f => {
-    const rel = rootPrefix && f.path.startsWith(rootPrefix)
-      ? f.path.slice(rootPrefix.length).replace(/^\//, "") : f.path;
+    const rel = label(f.path);
     const meta = [f.units !== null && f.units !== undefined ?
                   f.units + " submissions" : "", f.created]
                  .filter(Boolean).join(" · ");
@@ -3213,7 +3416,7 @@ function rows(el, items, rootPrefix) {
       ? `<button class="ghost recollect" title="Collect again from the newest
 zip in this assignment's moodle-raw/ — adds late students and re-uploads,
 never touches graded work">&#x21bb;</button>` : "";
-    return `<div class="row" data-p="${esc(f.path)}">
+    return `<div class="row" data-p="${esc(f.path)}" title="${esc(f.path)}">
       <span class="path">${esc(rel || f.path)}</span>
       <span class="meta">${esc(meta)}</span>${rc}</div>`;
   }).join("");
@@ -3262,7 +3465,25 @@ async function runCollect(body) {
   }
 }
 
+const VIEW_TITLES = {grade: "Grade", collect: "Collect from Moodle",
+                     remote: "External grading"};
+
+function showView(view) {
+  // grader-only servers: just the list; instructors: hub or one view
+  const v = CFG.grader ? "grade" : (VIEW_TITLES[view] ? view : null);
+  document.querySelectorAll("[data-view]").forEach(el => {
+    el.hidden = (v !== el.dataset.view);
+    if (el.id === "sec-remote") el.style.display = v === "remote" ? "" : "none";
+  });
+  $("#hub").hidden = !!v || CFG.grader;
+  $("#back").hidden = !v || CFG.grader;
+  $("#viewtitle").textContent = v ? "· " + VIEW_TITLES[v] : "";
+  document.title = "hwGenie — " + (v ? VIEW_TITLES[v] : "Grading");
+}
+
 (async function init() {
+  const params = new URLSearchParams(location.search);
+  showView(params.get("view"));
   if (CFG.grader) {
     $("#sec-manual").style.display = "none";
     $("#sec-collect").style.display = "none";
@@ -3276,7 +3497,7 @@ async function runCollect(body) {
   $("#czip").addEventListener("keydown", e => {
     if (e.key === "Enter") $("#collect").click();
   });
-  const err = new URLSearchParams(location.search).get("err");
+  const err = params.get("err");
   if (err) {
     $("#err").textContent = err;
     $("#err").style.display = "block";
@@ -3291,9 +3512,19 @@ async function runCollect(body) {
   if (!CFG.grader) {
     rows($("#recents"), s.recents.map(p => ({path: p})), null);
     SCAN = s;
-    $("#howto").style.display = "";
-    $("#head-local").style.display = "";
-    $("#sec-remote").style.display = "";
+    // hub: the most recent assignments, and one gradebook per course
+    const recent = (s.recents.length ? s.recents : s.folders.map(f => f.path))
+      .slice(0, 5);
+    $("#hubrecent").innerHTML = recent.map(p =>
+      `<a href="/grading?folder=${encodeURIComponent(p)}" title="${esc(p)}">
+        ${esc(label(p))}</a>`).join("") ||
+      '<span class="none">nothing collected yet</span>';
+    const courses = [...new Set(s.folders.map(f => courseOf(f.path))
+      .filter(Boolean))].sort();
+    $("#hubcourses").innerHTML = courses.map(c =>
+      `<a href="/gradebook?course=${encodeURIComponent(c)}" title="${esc(c)}">
+        ${esc(c.split("/").pop())} &rarr;</a>`).join("") ||
+      '<span class="none">no courses found under ' + esc(s.root) + '</span>';
     fillPushSel();
     loadRemote(true);
   }
@@ -3322,6 +3553,11 @@ function fillPushSel() {
 }
 
 function renderRemote(st) {
+  setTimeout(() => {
+    const h = $("#hubremote"), r = $("#remstat"), u = $("#remurl");
+    if (h && r) h.innerHTML = esc(r.textContent) + (u && u.href && u.style.display !== "none"
+      ? ` · <a href="${esc(u.href)}" target="_blank">open grading site ↗</a>` : "");
+  }, 0);
   const stat = $("#remstat");
   $("#remurl").style.display = st.url ? "" : "none";
   if (st.url) $("#remurl").href = st.url;

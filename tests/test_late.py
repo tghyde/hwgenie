@@ -528,11 +528,12 @@ def test_api_state_and_late_decision(course):
                     expect=400)
         client.post("/api/late", {"slug": "Nobody", "action": "waive"},
                     expect=400)
-        page = client.get("/gradebook")
-        assert b"No gradebook yet" in page
+        page = client.get("/gradebook")            # falls back to the
+        assert b"written at the first export" in page   # open assignment
+        assert b"Rick Roe" in page and b"3/3 graded" in page
         build_feedback(course, pdf=False)
         page = client.get("/gradebook")
-        assert b"Rick Roe" in page and b"ps02" in page
+        assert b"with a CSV twin" in page and b"<b>10</b>" in page
     finally:
         server.shutdown()
 
@@ -804,3 +805,66 @@ def test_course_preamble_runtime_fallback(tmp_path):
     assert GradingApp(folder).course_preamble().count("\\RR") == 1
     assert GradingApp(make_grading_folder(tmp_path / "lab2" / "zz" / "ps01")) \
         .course_preamble() == ""
+
+
+# ----------------------------------------------------- live gradebook ----
+
+def test_course_assignments_layouts(tmp_path):
+    from hwgenie.grade_gui import course_assignments
+    c = tmp_path / "math221"
+    (c / "ps01" / "grading").mkdir(parents=True)
+    (c / "ps01" / "grading" / "manifest.json").write_text("{}")
+    (c / "ps02-grading").mkdir()
+    (c / "ps02-grading" / "manifest.json").write_text("{}")
+    (c / "notes").mkdir()
+    assert course_assignments(c) == [c / "ps01" / "grading", c / "ps02-grading"]
+    assert course_assignments(tmp_path / "nope") == []
+
+
+def test_gradebook_data_live_and_exported(course):
+    from hwgenie.grade_gui import gradebook_data, render_gradebook
+    course_dir = late.course_dir(course)                # <tmp>/math221
+    # a second, ungraded assignment with only Jane in it
+    ps03 = make_grading_folder(course_dir / "ps03")
+    late.write_setting(ps03, "due", "2026-09-11 23:59")
+    # ps02 was exported for Rick only (say), with his free late spent
+    book = late.Gradebook.for_folder(course)
+    book.record("222", "ps02", {"total": 8.85, "raw": 10, "out_of": 11.5,
+                                "hours_late": 30, "action": "free",
+                                "penalty_pts": 0, "exported": "2026-09-07T00:00"},
+                name="Rick Roe")
+    book.save()
+    d = gradebook_data(course_dir)
+    assert d["keys"] == ["ps02", "ps03"] and d["has_book"]
+    by = {st["moodle_id"]: st for st in d["students"]}
+    jane = by["111"]["cells"]["ps02"]
+    assert jane["graded"] == 3 and jane["raw"] == 10 and jane["exported"] is None
+    assert jane["provisional"] == 10                  # free late → no penalty
+    assert jane["late"]["is_late"] and jane["late"]["action"] == "free"
+    assert by["111"]["free_late"] == {"used": None, "provisional": "ps02"}
+    rick = by["222"]
+    assert rick["cells"]["ps02"]["exported"]["total"] == 8.85
+    assert rick["free_late"]["used"] == "ps02"
+    assert by["111"]["cells"]["ps03"]["graded"] == 0
+    assert "ps03" not in by["333"]["cells"] or by["333"]["cells"]["ps03"]["graded"] == 0
+    page = render_gradebook(course_dir)
+    assert "Gradebook — math221" in page
+    assert "<b>8.85</b>" in page and "3/3 graded" in page
+    assert "used on ps02" in page and "ps02 \n" not in page
+    assert "/grading?folder=" in page
+
+
+def test_gradebook_route_accepts_course_or_folder(course):
+    server, client = _server(course)
+    try:
+        cdir = str(late.course_dir(course))
+        page = client.get("/gradebook?course=" + cdir)
+        assert b"Gradebook" in page and b"Jane Doe" in page
+        page2 = client.get("/gradebook?folder=" + str(course))
+        assert b"Jane Doe" in page2
+        empty = client.get("/gradebook?course=" + str(course.parent.parent / "nope"))
+        assert b"No grading folders" in empty
+        hub = client.get("/grading?pick=1")
+        assert b'id="hub"' in hub and b"data-view" in hub
+    finally:
+        server.shutdown()
