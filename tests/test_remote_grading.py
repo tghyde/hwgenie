@@ -275,3 +275,33 @@ def test_push_bundles_template_from_relative_or_build(grading_folder, cfg,
     rg.push(grading_folder, cfg)
     assert staged["manifest"]["template"]["path"] == "template.tex"
     assert staged["template"] == "TEMPLATE FROM BUILD"
+
+
+def test_server_version_and_upgrade(monkeypatch):
+    cfg = rg.load_config.__wrapped__() if hasattr(rg.load_config, "__wrapped__") else {
+        "host": "testhost", "python": "/opt/hwgenie/bin/python",
+        "service": "hwgrader", "port": 8461}
+    calls = []
+
+    def fake_run(cmd, log, input_text=None, timeout=600):
+        calls.append(cmd)
+        if "importlib.metadata" in cmd[-1]:
+            return "0.44.0\nactive\n"
+        return ""
+
+    monkeypatch.setattr(rg, "_run", fake_run)
+    assert rg.server_version(cfg) == {"version": "0.44.0", "active": "active",
+                                      "error": None}
+    info = rg.upgrade_server(cfg, "0.44.0")
+    assert info["version"] == "0.44.0"
+    pip = next(c for c in calls if "pip install" in c[-1])
+    assert "refs/tags/v0.44.0.tar.gz" in pip[-1] and cfg["python"] in pip[-1]
+    restart = next(c for c in calls if "systemctl restart" in c[-1])
+    assert "hwgrader" in restart[-1] and ":8461/grading" in restart[-1]
+
+    def dead_run(cmd, log, input_text=None, timeout=600):
+        raise GradeError("ssh: connect to host timed out")
+
+    monkeypatch.setattr(rg, "_run", dead_run)
+    info = rg.server_version(cfg)
+    assert info["version"] is None and "timed out" in info["error"]

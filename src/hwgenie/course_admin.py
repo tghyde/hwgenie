@@ -201,6 +201,18 @@ def scan(roots: list[Path], log=lambda s: None) -> dict:
     else:
         errors.append("could not read the template sync manifest")
 
+    log("Checking the grading server…")
+    server = None
+    try:
+        from .remote_grading import load_config, server_version
+        cfg = load_config()
+        if cfg:
+            server = {"host": cfg["host"], "url": cfg.get("url", ""),
+                      **server_version(cfg)}
+    except Exception as e:  # noqa: BLE001 — never sink the scan
+        server = {"host": "?", "url": "", "version": None, "active": None,
+                  "error": str(e)}
+
     log("Checking course repos…")
 
     def probe(name: str) -> dict | None:
@@ -243,7 +255,7 @@ def scan(roots: list[Path], log=lambda s: None) -> dict:
 
     return {"scanned_at": time.time(), "latest": latest,
             "template_pin": template_pin, "courses": courses,
-            "errors": errors}
+            "server": server, "errors": errors}
 
 
 # ------------------------------------------------------ server state --
@@ -520,6 +532,43 @@ def _do_bump_template() -> None:
                 "until you Update All")
 
 
+def _do_upgrade_server() -> None:
+    """Bring the external grading server's hwgenie to the latest tag."""
+    from .remote_grading import load_config, upgrade_server
+    latest = (COURSES.data or {}).get("latest")
+    if not latest:
+        COURSES.log("latest hwgenie version unknown — refresh first")
+        return
+    cfg = load_config()
+    if not cfg:
+        COURSES.log("no grading server configured (External Grading on "
+                    "the Grading tab)")
+        return
+    try:
+        info = upgrade_server(cfg, latest, COURSES.log)
+    except Exception as e:  # noqa: BLE001
+        COURSES.log(f"server upgrade failed: {e}")
+        return
+    if info.get("version") != latest:
+        COURSES.log(f"⚠ server reports v{info.get('version') or '?'} after "
+                    f"the upgrade, expected v{latest}")
+
+
+def _do_bump_all() -> None:
+    """The whole release roll-out: template pin → every cloned course →
+    the grading server."""
+    _do_bump_template()
+    clones = _known_clones()
+    if clones:
+        COURSES.log(f"── syncing {len(clones)} course(s) to the new pin")
+        _do_sync(sorted(clones))
+    else:
+        COURSES.log("no local course clones — nothing to sync")
+    _do_upgrade_server()
+    COURSES.log("Done — restart your local hwGenie app to run the new "
+                "version yourself.")
+
+
 def start_sync(repos: list[str], roots: list[Path]) -> dict:
     if not repos:
         return {"ok": False, "error": "nothing to sync"}
@@ -550,6 +599,10 @@ def api_post(path: str, data: dict, roots: list[Path]):
         return _start_job(lambda: fn(repo), roots), 200
     if path == "/courses/api/bump-template":
         return _start_job(_do_bump_template, roots), 200
+    if path == "/courses/api/bump-all":
+        return _start_job(_do_bump_all, roots), 200
+    if path == "/courses/api/upgrade-server":
+        return _start_job(_do_upgrade_server, roots), 200
     return None
 
 
@@ -630,6 +683,13 @@ __NAV__
     <span class="sp"></span>
     <span class="stamp" id="stamp"></span>
     <button id="refresh" class="ghost">↻ Refresh</button>
+  </div>
+  <div class="topbar" id="srvbar" hidden>
+    <span><span class="muted">grading server</span> <b id="srvhost"></b>
+      <span class="muted">runs</span> <b id="srvver">…</b>
+      <span id="srvstate" class="muted"></span></span>
+    <span class="sp"></span>
+    <button id="upgrade" class="ghost" hidden>Upgrade server</button>
   </div>
   <div id="pinwarn" class="warn" hidden></div>
   <div class="actions">
@@ -736,11 +796,38 @@ function render() {
       " but the latest hwGenie is v" + esc(d.latest) + " — syncing " +
       "brings courses to the template's pin, so bump the template " +
       "first, then Update All. " +
-      `<button id="bump" ${busy ? "disabled" : ""}>Bump template to v` +
-      esc(d.latest) + "</button>";
+      `<button id="bumpall" ${busy ? "disabled" : ""}
+        title="Bump the template pin, sync every cloned course, and
+upgrade the grading server — the whole roll-out">Update everything to v` +
+      esc(d.latest) + "</button>" +
+      `<button id="bump" ${busy ? "disabled" : ""}
+        title="Only re-pin course-template">template only</button>`;
     $("#bump").addEventListener("click", () =>
       start("/courses/api/bump-template"));
+    $("#bumpall").addEventListener("click", () =>
+      start("/courses/api/bump-all"));
   } else warn.hidden = true;
+
+  const sv = d.server;
+  $("#srvbar").hidden = !sv;
+  if (sv) {
+    $("#srvhost").textContent = sv.host;
+    const v = sv.version;
+    const behind = !!(v && d.latest && v !== d.latest);
+    $("#srvver").innerHTML = sv.error
+      ? `<span class="bad">unreachable</span>`
+      : `<span class="${behind ? "bad" : "ok"}">v${esc(v || "?")}</span>` +
+        (behind ? ` <span class="muted">→ v${esc(d.latest)}</span>` : "");
+    $("#srvstate").textContent = sv.error ? "— " + sv.error
+      : sv.active === "active" ? "· service running"
+      : "· service " + (sv.active || "state unknown");
+    const up = $("#upgrade");
+    up.hidden = !!sv.error || !d.latest;
+    up.disabled = busy;
+    up.textContent = behind ? `Upgrade server to v${d.latest}`
+                            : "Reinstall + restart server";
+    up.onclick = () => start("/courses/api/upgrade-server");
+  }
 
   const errs = (d.errors || []);
   $("#err").hidden = !errs.length;

@@ -79,7 +79,53 @@ def load_config() -> dict | None:
     cfg.setdefault("url", "")
     cfg.setdefault("owner", "hwgrader:hwgrader")
     cfg.setdefault("python", "/opt/hwgenie/bin/python")
+    cfg.setdefault("service", "hwgrader")
+    cfg.setdefault("port", 8461)
     return cfg
+
+
+# ------------------------------------------------------ server version --
+
+RELEASE_TARBALL = "https://github.com/tghyde/hwgenie/archive/refs/tags/v{v}.tar.gz"
+
+
+def _version_cmd(cfg: dict) -> str:
+    return (f"{cfg['python']} -c \"import importlib.metadata as m; "
+            f"print(m.version('hwgenie'))\" 2>/dev/null || echo unknown; "
+            f"systemctl is-active {cfg['service']} 2>/dev/null || echo unknown")
+
+
+def server_version(cfg: dict, log=lambda s: None) -> dict:
+    """{"version", "active", "error"} for the hwgenie install on the
+    grading server (one ssh round trip)."""
+    try:
+        out = _run(["ssh", *SSH_OPTS, cfg["host"], _version_cmd(cfg)], log,
+                   timeout=30)
+    except GradeError as e:
+        return {"version": None, "active": None, "error": str(e)}
+    lines = [ln.strip() for ln in out.splitlines() if ln.strip()]
+    version = lines[0] if lines and lines[0] != "unknown" else None
+    active = lines[1] if len(lines) > 1 else "unknown"
+    return {"version": version, "active": active, "error": None}
+
+
+def upgrade_server(cfg: dict, version: str, log=lambda s: None) -> dict:
+    """pip-install the tagged release into the server's venv and restart
+    the service — the whole server-upgrade procedure — then re-read the
+    version so the caller can confirm."""
+    url = RELEASE_TARBALL.format(v=version)
+    log(f"── grading server: upgrade hwgenie to v{version}")
+    _run(["ssh", *SSH_OPTS, cfg["host"],
+          f"{cfg['python']} -m pip install -q --upgrade '{url}'"], log,
+         timeout=300)
+    _run(["ssh", *SSH_OPTS, cfg["host"],
+          f"systemctl restart {cfg['service']} && sleep 2 && "
+          f"curl -s -o /dev/null -w 'grading page: %{{http_code}}\\n' "
+          f"http://127.0.0.1:{cfg['port']}/grading"], log, timeout=120)
+    info = server_version(cfg, log)
+    log(f"server now runs hwgenie v{info.get('version') or '?'} "
+        f"({info.get('active') or '?'})")
+    return info
 
 
 def server_name(folder: Path) -> str:

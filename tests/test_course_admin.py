@@ -302,3 +302,66 @@ def test_api_resolve_routes(monkeypatch):
     assert code == 400 and obj["ok"] is False
     obj, code = ca.api_post("/courses/api/resolve", {"repo": "tghyde/x"}, [])
     assert code == 200 and obj["ok"] is True and len(jobs) == 1
+
+
+def test_api_bump_all_and_upgrade_server(monkeypatch):
+    monkeypatch.setattr(ca, "COURSES", ca._State())
+    jobs = []
+    monkeypatch.setattr(ca, "_start_job",
+                        lambda fn, roots: (jobs.append(fn), {"ok": True})[1])
+    for ep in ("bump-all", "upgrade-server"):
+        obj, code = ca.api_post(f"/courses/api/{ep}", {}, [])
+        assert code == 200 and obj["ok"] is True
+    assert jobs == [ca._do_bump_all, ca._do_upgrade_server]
+
+
+def test_do_bump_all_runs_template_then_courses_then_server(monkeypatch):
+    state = ca._State()
+    state.data = {"latest": "0.44.0", "courses": [
+        {"repo": "tghyde/math221", "local": {"path": "/c/math221"}},
+        {"repo": "tghyde/math301", "local": None},
+    ]}
+    monkeypatch.setattr(ca, "COURSES", state)
+    order = []
+    monkeypatch.setattr(ca, "_do_bump_template", lambda: order.append("bump"))
+    monkeypatch.setattr(ca, "_do_sync", lambda repos: order.append(("sync", repos)))
+    monkeypatch.setattr(ca, "_do_upgrade_server", lambda: order.append("server"))
+    ca._do_bump_all()
+    assert order == ["bump", ("sync", ["tghyde/math221"]), "server"]
+    assert any("restart your local" in ln for ln in state.lines)
+
+
+def test_do_upgrade_server(monkeypatch):
+    import hwgenie.remote_grading as rg
+    state = ca._State()
+    state.data = {"latest": "0.44.0"}
+    monkeypatch.setattr(ca, "COURSES", state)
+    monkeypatch.setattr(rg, "load_config", lambda: None)
+    ca._do_upgrade_server()
+    assert any("no grading server configured" in ln for ln in state.lines)
+    monkeypatch.setattr(rg, "load_config", lambda: {"host": "h"})
+    monkeypatch.setattr(rg, "upgrade_server",
+                        lambda cfg, v, log: {"version": "0.43.0"})
+    ca._do_upgrade_server()
+    assert any("expected v0.44.0" in ln for ln in state.lines)
+    state.data = {}
+    ca._do_upgrade_server()
+    assert any("refresh first" in ln for ln in state.lines)
+
+
+def test_scan_reports_server_version(monkeypatch):
+    import hwgenie.remote_grading as rg
+    monkeypatch.setattr(ca, "_gh_json", lambda args: [] if "list" in args
+                        else ["v0.44.0"])
+    monkeypatch.setattr(ca, "_gh_raw", lambda repo, path: None)
+    monkeypatch.setattr(rg, "load_config", lambda: {
+        "host": "hwgrader", "url": "https://x", "python": "/opt/p",
+        "service": "hwgrader"})
+    monkeypatch.setattr(rg, "server_version", lambda cfg, log=None: {
+        "version": "0.43.0", "active": "active", "error": None})
+    data = ca.scan([], lambda s: None)
+    assert data["server"] == {"host": "hwgrader", "url": "https://x",
+                              "version": "0.43.0", "active": "active",
+                              "error": None}
+    monkeypatch.setattr(rg, "load_config", lambda: None)
+    assert ca.scan([], lambda s: None)["server"] is None
