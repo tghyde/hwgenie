@@ -872,6 +872,21 @@ def make_handler(holder: AppHolder):
                                    + urllib.parse.quote("no course given"))
                     return
                 self._send(render_gradebook(Path(course)).encode("utf-8"))
+            elif url.path == "/overview" and not grader_only:
+                if not folder:
+                    self._redirect("/grading?pick=1&err="
+                                   + urllib.parse.quote("no assignment given"))
+                    return
+                try:
+                    app = holder.get_app(folder)
+                except (GradeError, OSError) as e:
+                    self._redirect("/grading?pick=1&err="
+                                   + urllib.parse.quote(str(e)))
+                    return
+                from .overview import render_overview
+                with app.lock:
+                    page = render_overview(app)
+                self._send(page.encode("utf-8"))
             elif url.path == "/api/state":
                 if (app := self._app(folder)):
                     self._json(app.state_payload())
@@ -1259,9 +1274,11 @@ def gradebook_data(course: Path) -> dict:
         students[mid] = {"moodle_id": mid, "name": rec.get("name", ""),
                          "email": rec.get("email", ""), "cells": {}}
     keys: list[str] = []
+    folders: list[str] = []
     for folder in course_assignments(course):
         key = late_mod.assignment_key(folder)
         keys.append(key)
+        folders.append(str(folder))
         try:
             app = GradingApp(folder)
         except Exception as e:  # noqa: BLE001 — one bad folder, not the page
@@ -1315,6 +1332,7 @@ def gradebook_data(course: Path) -> dict:
                 st["moodle_id"])
     rows = sorted(students.values(), key=by_last)
     return {"course": str(course), "name": course.name, "keys": keys,
+            "folders": folders,
             "students": rows, "errors": errors, "book": str(book.path),
             "has_book": book.path.is_file()}
 
@@ -1335,7 +1353,10 @@ def render_gradebook(course: Path) -> str:
         body += ('<p class="none">No grading folders under this course '
                  'folder yet — collect an assignment first.</p>')
     else:
-        head = "".join(f"<th>{esc(k)}</th>" for k in d["keys"])
+        head = "".join(
+            f'<th><a href="/overview?folder={urllib.parse.quote(f)}" '
+            f'title="assignment overview">{esc(k)}</a></th>'
+            for k, f in zip(d["keys"], d["folders"]))
         trs = []
         for st in d["students"]:
             cells = []
@@ -1421,8 +1442,8 @@ table.gb th, table.gb td { padding: .4rem .6rem; text-align: right;
 table.gb th { font-size: .75rem; letter-spacing: .04em;
   text-transform: uppercase; color: var(--muted); }
 table.gb th:first-child, table.gb td.nm { text-align: left; }
-table.gb td a { color: inherit; text-decoration: none; }
-table.gb td a:hover { text-decoration: underline; }
+table.gb td a, table.gb th a { color: inherit; text-decoration: none; }
+table.gb td a:hover, table.gb th a:hover { text-decoration: underline; }
 table.gb td .oo { color: var(--muted); font-size: .8em; margin-left: .1em; }
 table.gb td .prog { color: var(--muted); font-size: .8em; }
 table.gb td .prov { margin-left: .35em; }
@@ -1879,6 +1900,9 @@ __BASE__
   <span class="sp"></span>
   <button class="ghost" id="whoami" style="display:none"
           title="Your name — recorded on the grades you enter (click to change)"></button>
+  <button class="ghost" id="overview"
+          title="How the assignment went: averages per part, distribution, highlights">
+    Overview</button>
   <button class="ghost" id="gradebook"
           title="Course gradebook: totals, late work, free lates used">
     Gradebook</button>
@@ -2648,8 +2672,15 @@ function orderComments(slug, n) {
   return true;
 }
 
-// comment boxes grow to fit their text (also when AI feedback lands)
-function autosize(t) {
+// comment boxes grow to fit their text (also when AI feedback lands).
+// Part panels are built before they are attached to the page, where a
+// textarea has no scrollHeight — measure once it is in the document, or
+// a multi-line comment comes back one line tall on every revisit.
+function autosize(t, retried) {
+  if (!t.isConnected) {
+    if (!retried) requestAnimationFrame(() => autosize(t, true));
+    return;
+  }
   t.style.height = "auto";
   t.style.height = (t.scrollHeight + 2) + "px";
 }
@@ -3233,9 +3264,13 @@ $("#export").addEventListener("click", async () => {
   $("#gradebook").addEventListener("click", () => {
     location.href = "/gradebook?folder=" + encodeURIComponent(CFG.folder);
   });
+  $("#overview").addEventListener("click", () => {
+    location.href = "/overview?folder=" + encodeURIComponent(CFG.folder);
+  });
   if (CFG.grader) {
     $("#export").style.display = "none";
     $("#gradebook").style.display = "none";
+    $("#overview").style.display = "none";
     $("#home").style.display = "none";
     updateWhoami();
     promptName(false);
@@ -3248,6 +3283,9 @@ $("#export").addEventListener("click", async () => {
   if (S.late && S.late.error) notice("Late policy: " + S.late.error);
   document.title = `hwGenie — ${S.folder.split("/").pop()}`;
   updateSaveStat();
+  // ?student=<slug> deep-links to one submission (overview highlights)
+  const want = new URLSearchParams(location.search).get("student");
+  if (want && S.units.some(u => u.slug === want)) curSlug = want;
   setView("student");
   await ensureStmtPane();
   if (stmtData.problems.length) {
@@ -3846,10 +3884,31 @@ function renderRemote(st) {
         done ? "done" : ""}">${a.graded}/${a.total} graded</span>${
         a.created ? " · " + esc(a.created) : ""}</span>
       <button class="ghost rpull" data-name="${esc(a.name)}">Pull
-        grades</button></div>`;
+        grades</button>
+      <button class="ghost rview" data-name="${esc(a.name)}"
+        title="How the assignment went (from the grades pulled so far)">
+        Overview</button></div>`;
   }).join("");
   rows.querySelectorAll(".rpull").forEach(b =>
     b.addEventListener("click", () => pullRemote(b.dataset.name)));
+  rows.querySelectorAll(".rview").forEach(b =>
+    b.addEventListener("click", () => {
+      const match = localMatch(b.dataset.name);
+      if (match)
+        location.href = "/overview?folder=" + encodeURIComponent(match.path);
+    }));
+}
+
+// the local grading folder a server assignment name corresponds to
+function localMatch(name) {
+  const folders = (SCAN && SCAN.folders) || [];
+  const match = folders.find(f => srvName(f.path) === name);
+  if (!match) {
+    $("#err").textContent = `No local grading folder matches "${name}" ` +
+      "— collect the assignment locally first.";
+    $("#err").style.display = "block";
+  }
+  return match || null;
 }
 
 async function loadRemote(kick) {
@@ -3887,14 +3946,8 @@ async function remotePost(path, body) {
 }
 
 function pullRemote(name) {
-  const folders = (SCAN && SCAN.folders) || [];
-  const match = folders.find(f => srvName(f.path) === name);
-  if (!match) {
-    $("#err").textContent = `No local grading folder matches "${name}" ` +
-      "— collect the assignment locally first.";
-    $("#err").style.display = "block";
-    return;
-  }
+  const match = localMatch(name);
+  if (!match) return;
   if (!confirm(`Pull the graders' grades for "${name}" into\n` +
       `${match.path}?\n\nServer grade files overwrite local ones with ` +
       "the same name (nothing local is deleted)."))

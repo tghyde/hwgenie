@@ -152,6 +152,11 @@ __NAV__
       is labeled with their name.</li>
     <li>When grading is done, click <b class="ui">Pull grades</b> to copy
       their work into your local folder.</li>
+    <li><b class="ui">Overview</b> (next to Pull, and in the
+      grader&rsquo;s header) shows how the assignment went: average per
+      part with the feedback pages&rsquo; score pies, the distribution of
+      totals, who did particularly well or struggled, and whether the
+      totals have been recorded in the course gradebook yet.</li>
   </ol>
   <div class="note warn">While an assignment is on the server, the server
   copy is the source of truth: don&rsquo;t also grade it locally, and
