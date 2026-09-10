@@ -5,12 +5,13 @@ servers 404 it)."""
 
 from __future__ import annotations
 
-from .webstyle import BASE_CSS, nav_header
+from .webstyle import BASE_CSS, KEEPALIVE_JS, nav_header
 
 
 def render_howto() -> str:
     from .appicon import LAMP_SVG
     return (HOWTO_PAGE.replace("__NAV__", nav_header("grading"))
+                      .replace("__KEEPALIVE__", KEEPALIVE_JS)
                       .replace("__LAMP__", LAMP_SVG))
 
 
@@ -273,6 +274,7 @@ __NAV__
       the drafts alongside each part.</li>
   </ul>
 </main>
+__KEEPALIVE__
 </body>
 </html>
 """.replace("__BASE__", BASE_CSS)

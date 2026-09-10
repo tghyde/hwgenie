@@ -93,3 +93,17 @@ def nav_header(active: str) -> str:
     return ('<div class="appnav">'
             '<a class="brand" href="/">hwGenie __LAMP__</a>'
             f"<nav>{links}</nav></div>")
+
+
+# Liveness for --auto-exit servers (the Dock-launched app): a heartbeat
+# plus a goodbye beacon, so closing the last tab shuts the server down.
+# EVERY served page must carry this — leaving one page for another sends
+# /bye, and the server exits within ten seconds unless the new page pings.
+KEEPALIVE_JS = r"""<script>
+setInterval(() => {
+  fetch("/ping", {method: "POST", body: "{}"}).catch(() => {});
+}, 2000);
+addEventListener("pagehide", () => {
+  try { navigator.sendBeacon("/bye", "{}"); } catch (e) {}
+});
+</script>"""

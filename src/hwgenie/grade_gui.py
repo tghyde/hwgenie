@@ -1342,7 +1342,7 @@ def render_gradebook(course: Path) -> str:
     exported totals + who has spent their free late)."""
     from . import late as late_mod
     from .appicon import LAMP_SVG
-    from .webstyle import BASE_CSS, nav_header
+    from .webstyle import BASE_CSS, KEEPALIVE_JS, nav_header
     d = gradebook_data(course)
     esc = html.escape
     num = late_mod._num
@@ -1420,6 +1420,7 @@ def render_gradebook(course: Path) -> str:
                  + (" (with a CSV twin)." if d["has_book"] else
                     " — written at the first export.") + "</p>")
     return (GRADEBOOK_PAGE.replace("__NAV__", nav_header("grading"))
+                          .replace("__KEEPALIVE__", KEEPALIVE_JS)
                           .replace("__LAMP__", LAMP_SVG)
                           .replace("__CSS__", BASE_CSS)
                           .replace("__COURSE__", esc(d["name"]))
@@ -1465,7 +1466,9 @@ __NAV__
 <h1>Gradebook — __COURSE__</h1>
 <p class="src"><a href="/grading?pick=1">← Grading</a></p>
 __BODY__
-</main></body></html>"""
+</main>
+__KEEPALIVE__
+</body></html>"""
 
 
 def render_picker(grader_only: bool = False) -> str:

@@ -338,7 +338,7 @@ def _all_scores_table(d: dict) -> str:
 
 def render_overview(app) -> str:
     from .appicon import LAMP_SVG
-    from .webstyle import BASE_CSS, nav_header
+    from .webstyle import BASE_CSS, KEEPALIVE_JS, nav_header
     d = overview_data(app)
     esc = html.escape
     st = d["stats"]
@@ -409,6 +409,7 @@ def render_overview(app) -> str:
         + '<details class="all"><summary>All scores</summary>'
         + _all_scores_table(d) + "</details>")
     return (OVERVIEW_PAGE.replace("__NAV__", nav_header("grading"))
+            .replace("__KEEPALIVE__", KEEPALIVE_JS)
             .replace("__LAMP__", LAMP_SVG)
             .replace("__CSS__", BASE_CSS)
             .replace("__TITLE__", esc(d["title"]))
@@ -510,4 +511,6 @@ __NAV__
   <a href="/gradebook?folder=__FOLDER__">Course gradebook</a>
   <a href="/grading?pick=1&view=remote">External grading</a></p>
 __BODY__
-</main></body></html>"""
+</main>
+__KEEPALIVE__
+</body></html>"""

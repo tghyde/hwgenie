@@ -98,3 +98,23 @@ def test_overview_nothing_graded(tmp_path):
     page = render_overview(GradingApp(f))
     assert "No student is fully graded yet" in page
     assert "nobody yet" in page
+
+
+def test_every_page_keeps_the_server_alive(tmp_path):
+    """The Dock-launched app exits ten seconds after a page says /bye
+    unless the next page pings — so every served page must carry the
+    heartbeat (the gradebook, how-to and overview pages once didn't)."""
+    f = _graded(tmp_path)
+    holder = AppHolder(tmp_path)
+    holder.current = holder.get_app(f)
+    server, client = _start_server(holder)
+    try:
+        for path in ("/grading?pick=1", "/grading?folder=" + str(f),
+                     "/gradebook?folder=" + str(f),
+                     "/overview?folder=" + str(f), "/grading/howto",
+                     "/", "/problem-sets", "/quotes"):
+            page = client.get(path)
+            assert b'fetch("/ping"' in page, path
+            assert b'sendBeacon("/bye"' in page, path
+    finally:
+        server.shutdown()
