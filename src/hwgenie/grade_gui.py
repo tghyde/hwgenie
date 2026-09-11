@@ -2084,7 +2084,7 @@ function queueSave(slug, n, fields) {
       pdata(slug, n).by = r.parts[String(n)].by;
       setProgress(...r.progress);
       refreshPartChrome(slug, n);
-      refreshSidebarRow(slug);
+      refreshSidebarCounts(slug, n);
       saveError = null;
     } catch (e) {
       saveError = "save failed: " + e.message;
@@ -2169,7 +2169,7 @@ function updatePanelBtns() {
 // Scroll a pane so el is visible — only that pane. (scrollIntoView also
 // scrolls ancestors, including the overflow:hidden body, which is exactly
 // the "page lurches down and sticks" bug.)
-function scrollPaneTo(container, el, mode) {
+function scrollPaneTo(container, el, mode, instant) {
   const c = container.getBoundingClientRect();
   const r = el.getBoundingClientRect();
   let top = container.scrollTop;
@@ -2190,7 +2190,27 @@ function scrollPaneTo(container, el, mode) {
     if (r.top >= c.top && r.bottom <= c.bottom) return;
     top += (r.top - c.top) - (c.height - r.height) / 2;
   }
-  container.scrollTo({top: Math.max(0, top), behavior: "smooth"});
+  container.scrollTo({top: Math.max(0, top),
+                      behavior: instant ? "auto" : "smooth"});
+}
+
+// A freshly built pane: jump to el now (null = the top), then again once
+// every card's content has arrived — the "loading…" placeholders above
+// the target are shorter than the real answers, so the first landing is
+// only approximate.  The correction is skipped if the grader has already
+// scrolled away in the meantime.
+function scrollWhenReady(container, el, mode) {
+  const go = () => {
+    if (!el || !el.isConnected) container.scrollTop = 0;
+    else scrollPaneTo(container, el, mode, true);
+    return container.scrollTop;
+  };
+  const landed = go();
+  const cards = [...container.querySelectorAll(".part")];
+  Promise.all(cards.map(c => c._ready)).then(() =>
+    requestAnimationFrame(() => {
+      if (container.scrollTop === landed) go();
+    }));
 }
 
 // belt and braces: the page itself must never scroll
@@ -2358,7 +2378,12 @@ let trackTick = false;
 function trackActivePart() {
   if (view !== "student") return;
   const main = $("#main");
-  const topEdge = main.getBoundingClientRect().top + 80;
+  // a card counts as current once its top is near the visible edge — the
+  // part below the sticky nav when that is showing (a jump lands the card
+  // 12px under it, so the slack must cover that)
+  const nav = document.getElementById("stunav");
+  const navH = nav && nav.classList.contains("show") ? nav.offsetHeight : 0;
+  const topEdge = main.getBoundingClientRect().top + navH + 60;
   let cur = null;
   for (const p of main.querySelectorAll(".part")) {
     if (p.getBoundingClientRect().top <= topEdge) cur = p;
@@ -2430,13 +2455,13 @@ function partPanel(slug, n, opts) {
     const pd = pdata(slug, n);
     pd.score = val;
     pd.status = val === null ? "ungraded" : "graded";
+    refreshSidebarCounts(slug, n);
     queueSave(slug, n, {score: val});
   });
   scoreEl.addEventListener("keydown", ev => {
     if (ev.key === "Enter") {
       ev.preventDefault();
-      const all = [...document.querySelectorAll("input.score")];
-      const next = all[all.indexOf(scoreEl) + 1];
+      const next = nextScoreInput(scoreEl);
       if (next) {
         next.focus(); next.select();
         scrollPaneTo($("#main"), next.closest(".part"), "center");
@@ -2444,10 +2469,26 @@ function partPanel(slug, n, opts) {
     }
   });
 
-  fillContent(el, slug, n);
+  el._ready = fillContent(el, slug, n);
   renderComments(el, slug, n);
   renderDraft(el, slug, n);
   return el;
+}
+
+// Enter in a score box: by-student, the next part down; by-part, the next
+// answer still to grade (wrapping round to any skipped above), so a partly
+// graded list finishes without hunting.  Falls back to the next box when
+// everything is graded.
+function nextScoreInput(cur) {
+  const all = [...document.querySelectorAll("input.score")];
+  const i = all.indexOf(cur);
+  if (view !== "part") return all[i + 1];
+  const open = s => {
+    const p = s.closest(".part");
+    return pdata(p.dataset.slug, Number(p.dataset.part)).status !== "graded";
+  };
+  return all.slice(i + 1).find(open) || all.slice(0, i).find(open) ||
+         all[i + 1];
 }
 
 async function fillContent(el, slug, n) {
@@ -2830,6 +2871,7 @@ function renderDraft(el, slug, n) {
     const pd = pdata(slug, n);
     pd.score = Number(d.suggested_score);
     pd.status = "graded";
+    refreshSidebarCounts(slug, n);
     queueSave(slug, n, {score: pd.score});
   });
   const uf = box.querySelector(".use-fb");
@@ -2853,6 +2895,14 @@ function refreshPartChrome(slug, n) {
     });
 }
 
+// Sidebar tallies — the student row (by-student) or the part row
+// (by-part), whichever is showing.  Runs as soon as a score is typed and
+// again when the server confirms the status.
+function refreshSidebarCounts(slug, n) {
+  refreshSidebarRow(slug);
+  refreshSidebarPart(n);
+}
+
 function refreshSidebarRow(slug) {
   const row = document.querySelector(
     `#sidebar .stu[data-slug="${CSS.escape(slug)}"] .ct`);
@@ -2860,6 +2910,18 @@ function refreshSidebarRow(slug) {
   const done = gradedCount(unit(slug));
   row.textContent = `${done}/${S.n_parts}`;
   row.classList.toggle("done", done === S.n_parts);
+}
+
+function partGradedCount(n) {
+  return S.units.filter(u => u.parts[String(n)].status === "graded").length;
+}
+
+function refreshSidebarPart(n) {
+  const row = document.querySelector(`#sidebar .stu[data-n="${n}"] .ct`);
+  if (!row) return;
+  const done = partGradedCount(n);
+  row.textContent = `${done}/${S.units.length}`;
+  row.classList.toggle("done", done === S.units.length);
 }
 
 // ------------------------------------------------------------ badges/head --
@@ -3016,7 +3078,10 @@ function showStudent(slug) {
                 pane.querySelector(".part"), false);
   updatePanelBtns();
   if ($("#pdfpanel").classList.contains("open")) openPdfPanel(slug);
-  main.scrollTop = 0;
+  // keep the grader's place: land on the part they were just grading
+  // (part 1 = the top, so the student's header stays in view)
+  scrollWhenReady(main, activePart > 1
+    ? pane.querySelector(`.part[data-part="${activePart}"]`) : null, "start");
 }
 
 // the sticky per-student nav appears once the header has scrolled away;
@@ -3077,8 +3142,7 @@ function renderSidebarParts() {
   const sb = $("#sidebar");
   sb.innerHTML = S.rubric.map((rp, i) => {
     const n = i + 1;
-    const done = S.units.filter(
-      u => u.parts[String(n)].status === "graded").length;
+    const done = partGradedCount(n);
     return `<div class="stu${n === curPart ? " active" : ""}" data-n="${n}">
       <span class="nm">${esc(rp.label)}${rp.ec ? " (EC)" : ""}</span>
       <span class="ct${done === S.units.length ? " done" : ""}">${done}/${S.units.length}</span>
@@ -3103,7 +3167,7 @@ function showPart(n) {
       <button class="ghost" id="pnext"
         ${n >= S.n_parts ? "disabled" : ""}>→</button>
       <span class="ptext">${mx === null ? "" : "out of " + mx + " points"}
-        — Enter moves down the list</span>
+        — Enter moves to the next ungraded</span>
       <span class="sp"></span>
     </div>
     <div id="pcards"></div>`;
@@ -3115,9 +3179,13 @@ function showPart(n) {
     cards.appendChild(partPanel(u.slug, n, {who: true}));
   setActivePart(n);
   activeCard = null;
-  setActiveCard(cards.querySelector(".part"), false);
+  // land on the first answer still to grade (the top if that's the first)
+  const open = [...cards.querySelectorAll(".part")].find(p =>
+    pdata(p.dataset.slug, n).status !== "graded");
+  setActiveCard(open || cards.querySelector(".part"), false);
   updatePanelBtns();
-  main.scrollTop = 0;
+  scrollWhenReady(main, open && open !== cards.firstElementChild ? open : null,
+                  "start");
 }
 
 // ------------------------------------------------------------------ tabs --
