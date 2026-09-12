@@ -96,6 +96,8 @@ def main(argv=None) -> int:
     add_sync_parser(sub)
     from .collect import add_parser as add_collect_parser
     add_collect_parser(sub)
+    from .collect import add_install_parser
+    add_install_parser(sub)
     from .grade import add_parser as add_grade_parser
     add_grade_parser(sub)
     from .feedback import add_parser as add_return_parser
@@ -116,6 +118,9 @@ def main(argv=None) -> int:
     if args.command == "collect":
         from .collect import run_collect
         return run_collect(args)
+    if args.command == "install-tex":
+        from .collect import run_install_tex
+        return run_install_tex(args)
     if args.command == "grade":
         from .grade import run_grade
         return run_grade(args)

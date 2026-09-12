@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from hwgenie.cli import main
-from hwgenie.collect import CollectError, collect
+from hwgenie.collect import CollectError, collect, install_tex
 
 TEMPLATE = "\n".join([
     r"\documentclass[11pt]{article}",
@@ -172,3 +172,50 @@ def test_collect_records_absolute_template_path(moodle_dir, template_file,
     m = json.loads((dest / "manifest.json").read_text())
     assert Path(m["template"]["path"]).is_absolute()
     assert Path(m["template"]["path"]).is_file()
+
+
+def test_install_tex(moodle_dir, template_file, tmp_path):
+    dest = tmp_path / "grading"
+    collect(moodle_dir, dest, template=template_file)
+    recon = tmp_path / "reconstructed" / "Pitt Roe-Rick" / "submission.tex"
+    recon.parent.mkdir(parents=True)
+    recon.write_text(STUDENT_TEX)
+
+    # Rick submitted no tex at all: adopted, flagged as from the PDF.
+    rick = install_tex(dest, "Pitt Roe-Rick", recon)
+    assert rick.tex_source == "reconstructed"
+    assert rick.tex == "submission.tex"
+    assert rick.parts_found == 2
+    assert rick.collaborators == "Alice B., course notes"
+    assert not any("no tex" in a for a in rick.anomalies)
+    assert any("PDF" in a for a in rick.anomalies)
+    sub = dest / "submissions" / "Pitt Roe-Rick"
+    assert (sub / "submission.tex").read_text() == STUDENT_TEX
+    assert not (sub / "original.tex").exists()
+
+    # Jane had her own tex: it is kept as original.tex.
+    jane = install_tex(dest, "Doe-Jane", recon)
+    sub = dest / "submissions" / "Doe-Jane"
+    assert (sub / "original.tex").read_text() == STUDENT_TEX
+    assert any("original.tex kept" in a for a in jane.anomalies)
+
+    m = json.loads((dest / "manifest.json").read_text())
+    by = {u["slug"]: u for u in m["units"]}
+    assert by["Doe-Jane"]["tex_source"] == "reconstructed"
+    assert by["Pitt Roe-Rick"]["sha256"]["tex"]
+    assert m["updated"]
+
+    # A box-count mismatch against the template is still flagged.
+    bad = tmp_path / "bad.tex"
+    bad.write_text(STUDENT_TEX.replace(
+        r"\begin{solution}Another.\end{solution}", ""))
+    u = install_tex(dest, "Doe-Jane", bad)
+    assert u.parts_found == 1
+    assert any("template has 2" in a for a in u.anomalies)
+    assert sum("reconstructed from" in a for a in u.anomalies) == 1
+
+    with pytest.raises(CollectError):
+        install_tex(dest, "Nobody", recon)
+
+    assert main(["install-tex", str(dest), "Doe-Jane", str(recon)]) == 0
+    assert main(["install-tex", str(dest), "Nobody", str(recon)]) == 1

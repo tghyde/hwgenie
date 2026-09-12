@@ -64,6 +64,9 @@ __NAV__
     <li><a href="#export">4. Exporting</a></li>
     <li><a href="#moodle">5. Returning everything to Moodle</a></li>
     <li><a href="#ec">6. Extra credit in the Moodle gradebook</a></li>
+    <li><a href="#late">7. Late work and the course gradebook</a></li>
+    <li><a href="#recon">8. Students who didn&rsquo;t use the
+      template</a></li>
     <li><a href="#trouble">Troubleshooting</a></li>
   </ul></div>
 
@@ -100,7 +103,9 @@ __NAV__
       solution-box count check; the report flags students who submitted
       no tex, didn&rsquo;t use the template, or uploaded several PDFs
       (pick the right one by copying it to
-      <code>submissions/&lt;slug&gt;/submission.pdf</code>).
+      <code>submissions/&lt;slug&gt;/submission.pdf</code>). The
+      &ldquo;no tex&rdquo; and &ldquo;0 solution boxes&rdquo; flags are
+      fixable &mdash; see <a href="#recon">section 8</a>.
       Add <code>--due "2026-09-04 23:59"</code> (course time) so late
       work is flagged &mdash; see <a href="#late">Late work</a>.
       <em>Or skip Terminal:</em> paste the zip&rsquo;s path (and the due
@@ -254,6 +259,93 @@ __NAV__
   shows it as a table. Exporting again after changing a decision
   updates the record (and releases the free late if you switched a
   student off it).</p>
+
+  <h2 id="recon">8. Students who didn&rsquo;t use the template</h2>
+  <p>hwGrader splits each student&rsquo;s tex into gradable parts by the
+  template&rsquo;s solution boxes, so a student who skipped the template
+  has no parts. The <code>collect</code> report flags the two cases:
+  <b>no tex submitted</b> (they uploaded only a PDF) and <b>tex has 0
+  solution boxes; template has N</b> (they wrote their own file). The fix
+  is the same for both: get their answers into a <em>box file</em>,
+  splice that into the blank template, install the result. The two
+  helper scripts live in <code>.claude/skills/reconstruct-tex/</code>
+  inside the HWGenie folder; run everything below from that folder.</p>
+  <ol>
+    <li><b>Get the blank submission template</b> &mdash; the
+      &ldquo;submission&rdquo; .tex link on the problem set&rsquo;s page of
+      the course site (e.g.
+      <code>PS2-submission-Math301-Fall2026.tex</code>) &mdash; into the
+      assignment&rsquo;s <code>build/</code> folder. It has to be the file
+      the students got, with <code>%Write your solution here</code> in
+      every box; your source file with the solutions in it won&rsquo;t
+      work here.</li>
+    <li><b>Make the box file</b>,
+      <code>&lt;assignment&gt;/reconstructed/&lt;slug&gt;/boxes.tex</code>,
+      one block per solution box in template order:
+      <pre>%%% BOX 1
+&lt;their answer to the first box&gt;
+%%% BOX 2
+&lt;their answer to the second box&gt;
+...</pre>
+      Boxes are numbered straight through the template (Problem 1a is
+      box 1, 1b is box 2, Problem 2 is box 3, &hellip;), so match on the
+      problem numbers, not on the order the student wrote things in. A
+      part they skipped is a block holding only
+      <code>% [no solution present]</code>. Three ways to fill it, by
+      what the student gave you:
+      <ul>
+        <li><em>Their own .tex, organised as
+          <code>\section{Problem 2}</code> with one <code>\item</code> per
+          part</em> &mdash; the splitter does the whole job, this step and
+          the next: <code>hwgenie/.venv/bin/python
+          .claude/skills/reconstruct-tex/split_tex.py --student
+          "&lt;their .tex&gt;" --template "&lt;template&gt;" --name "First
+          Last" --source-pdf "&lt;their pdf&rsquo;s filename&gt;" --out
+          "&lt;assignment&gt;/reconstructed/&lt;slug&gt;/submission.tex"</code>.
+          If its item counts don&rsquo;t match the template&rsquo;s boxes
+          it says so and writes nothing &mdash; use the next option.</li>
+        <li><em>Their own .tex in any other shape</em> (problems as
+          <code>\textbf{Problem 2.1}</code>, blockquotes, whatever) &mdash;
+          open it beside the template and copy each answer into its
+          block. Copy exactly: their wording, typos and mistakes stay, and
+          only their headers and restated problem statements are left
+          out. If they used a macro the template doesn&rsquo;t define, the
+          compile in the next step tells you; write out what it expands
+          to.</li>
+        <li><em>PDF only</em> &mdash; in Claude Code, in the HWGenie
+          folder, ask for the <code>reconstruct-tex</code> skill on the
+          student&rsquo;s Moodle folder and the template. It transcribes
+          the PDF into a box file, marking anything it can&rsquo;t read
+          <code>\red{[not transcribed&hellip;]}</code>, and runs the next
+          step. Transcribing by hand works too.</li>
+      </ul></li>
+    <li><b>Splice and compile:</b> <code>hwgenie/.venv/bin/python
+      .claude/skills/reconstruct-tex/splice.py --template
+      "&lt;template&gt;" --solutions
+      "&lt;assignment&gt;/reconstructed/&lt;slug&gt;/boxes.tex" --name
+      "First Last" --source-pdf "&lt;their pdf&rsquo;s filename&gt;" --out
+      "&lt;assignment&gt;/reconstructed/&lt;slug&gt;/submission.tex"</code>
+      (add <code>--collaborators "&hellip;"</code> if they listed any).
+      It fills the template, stamps a RECONSTRUCTED header and their
+      name, and compiles. On errors fix the LaTeX in the box file &mdash;
+      never the maths &mdash; and run it again; then skim the PDF next to
+      theirs.</li>
+    <li><b>Install it:</b> <code>hwgenie/.venv/bin/hwgenie install-tex
+      "&lt;assignment&gt;/grading" &lt;slug&gt;
+      "&lt;assignment&gt;/reconstructed/&lt;slug&gt;/submission.tex"</code>.
+      That drops it in as <code>submission.tex</code> (a file of their own
+      is kept beside it as <code>original.tex</code>), tags the student
+      <b class="ui">reconstructed tex</b> in hwGrader, recounts the boxes
+      and clears the flag. If the assignment is already on the server,
+      pull, then push again (section 3).</li>
+  </ol>
+  <div class="note">A reconstruction is a transcription, not the
+  student&rsquo;s source &mdash; graders see the badge, and the PDF the
+  student uploaded is still what they submitted. When a PDF-only
+  student&rsquo;s reconstruction exists <em>before</em> you first
+  collect, <code>collect --tex-fallback
+  "&lt;assignment&gt;/reconstructed"</code> installs it in the same
+  step.</div>
 
   <h2 id="trouble">Troubleshooting</h2>
   <ul>

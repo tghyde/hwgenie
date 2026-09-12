@@ -710,3 +710,101 @@ def run_collect(args: argparse.Namespace) -> int:
               "due: line in rubric.yml) to flag late work")
     print("  (tex* = reconstructed from PDF, not the student's original)")
     return 0
+
+
+# ---------------------------------------------------------- install-tex ----
+
+RECON_NOTE_OWN = ("tex reconstructed from the student's own non-template "
+                  ".tex (original.tex kept)")
+RECON_NOTE_PDF = ("tex reconstructed from the student's PDF "
+                  "(reconstruct-tex skill)")
+_STALE_ANOMALY = re.compile(
+    r"^(no tex submitted|tex has \d+ solution boxes; template has \d+|"
+    r"tex reconstructed from )")
+
+
+def install_tex(dest: Path, slug: str, tex: Path,
+                note: str | None = None) -> Unit:
+    """Adopt a reconstructed ``submission.tex`` for one collected student.
+
+    Copies ``tex`` in as ``submissions/<slug>/submission.tex`` (a tex of the
+    student's own is kept alongside as ``original.tex``), marks the unit
+    ``tex_source = "reconstructed"``, recounts its solution boxes and
+    collaborators line, swaps the stale no-tex / box-count anomalies for a
+    note saying where the tex came from, and rewrites the manifest.
+    Grades are never touched.
+    """
+    mf = dest / MANIFEST_NAME
+    if not mf.is_file():
+        raise CollectError(f"no {MANIFEST_NAME} in {dest}")
+    if not tex.is_file():
+        raise CollectError(f"reconstructed tex not found: {tex}")
+    manifest = json.loads(mf.read_text())
+    units = manifest.get("units") or []
+    idx = next((i for i, u in enumerate(units) if u.get("slug") == slug),
+               None)
+    if idx is None:
+        known = ", ".join(u.get("slug", "?") for u in units)
+        raise CollectError(f"no student '{slug}' in the manifest "
+                           f"(have: {known})")
+    unit = Unit.from_dict(units[idx])
+    out_dir = dest / "submissions" / slug
+    out_dir.mkdir(parents=True, exist_ok=True)
+    target = out_dir / "submission.tex"
+    original = out_dir / "original.tex"
+    if target.exists() and tex.resolve() == target.resolve():
+        raise CollectError(f"{tex} is already the installed submission.tex")
+    if target.is_file() and unit.tex_source == "original":
+        target.replace(original)          # keep what the student sent
+    had_own = original.is_file()
+    shutil.copy2(tex, target)
+
+    unit.tex, unit.tex_source = "submission.tex", "reconstructed"
+    unit.sha256["tex"] = _sha256(target)
+    text = target.read_text(errors="replace")
+    m = COLLAB_RE.search(text)
+    if m:
+        unit.collaborators = m.group("val").strip()
+    unit.parts_found = _count_parts(target)
+    unit.anomalies = [a for a in unit.anomalies if not _STALE_ANOMALY.match(a)]
+    unit.anomalies.append(note or (RECON_NOTE_OWN if had_own
+                                   else RECON_NOTE_PDF))
+    tp = (manifest.get("template") or {}).get("parts")
+    if tp is not None and unit.parts_found != tp:
+        unit.anomalies.append(f"tex has {unit.parts_found} solution boxes; "
+                              f"template has {tp}")
+    units[idx] = unit.to_json()
+    manifest["units"] = units
+    manifest["updated"] = _now()
+    mf.write_text(json.dumps(manifest, indent=2) + "\n")
+    return unit
+
+
+def add_install_parser(sub) -> None:
+    p = sub.add_parser(
+        "install-tex",
+        help="Adopt a reconstructed submission.tex for one student of a "
+             "collected assignment (see the grading how-to, section 8).",
+    )
+    p.add_argument("dest", help="Grading folder (holds manifest.json).")
+    p.add_argument("slug", help="Student folder under submissions/, "
+                                "e.g. Doe-Jane.")
+    p.add_argument("tex", help="The reconstructed .tex, e.g. "
+                               "reconstructed/Doe-Jane/submission.tex.")
+    p.add_argument("--note",
+                   help="Manifest note on where the tex came from (default: "
+                        "says PDF or the student's own non-template tex).")
+
+
+def run_install_tex(args: argparse.Namespace) -> int:
+    try:
+        u = install_tex(Path(args.dest), args.slug, Path(args.tex),
+                        note=args.note)
+    except (CollectError, OSError, json.JSONDecodeError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    parts = "" if u.parts_found is None else f" [{u.parts_found} parts]"
+    print(f"{u.slug}: reconstructed tex installed{parts}")
+    for a in u.anomalies:
+        print(f"  note: {a}")
+    return 0
