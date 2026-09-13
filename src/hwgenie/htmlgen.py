@@ -1068,7 +1068,9 @@ def _extract_math_footnotes(raw: str):
 # amsmath matrix environments with a column spec, \begin{bmatrix}[rr|r] ...
 # (course preambles patch \env@matrix for this; stock amsmath accepts a
 # single alignment letter).  KaTeX has no such option and typesets the "[r]"
-# as the first entry, so rewrite to the equivalent delimited array.
+# as the first entry.  A uniform alignment becomes KaTeX's starred form,
+# \begin{bmatrix*}[r], which keeps native matrix spacing; anything else
+# (dividers, mixed alignments) becomes the equivalent delimited array.
 MATRIX_DELIMS = {
     "matrix": ("", ""),
     "pmatrix": ("(", ")"),
@@ -1080,34 +1082,6 @@ MATRIX_DELIMS = {
 MATRIX_OPT_RE = re.compile(
     r"\\begin\{(" + "|".join(MATRIX_DELIMS) + r")\}\s*\[([^\[\]{}]*)\]"
 )
-
-
-def _matrix_column_count(body: str) -> int:
-    """Columns in a matrix body: max over rows of top-level '&' count + 1."""
-    cols, depth, env_depth, count = 1, 0, 0, 0
-    i = 0
-    while i < len(body):
-        c = body[i]
-        if c == "\\":
-            if body.startswith("\\begin", i):
-                env_depth += 1
-            elif body.startswith("\\end", i):
-                env_depth -= 1
-            elif body.startswith("\\\\", i) and depth == 0 and env_depth == 0:
-                cols = max(cols, count + 1)
-                count = 0
-                i += 2
-                continue
-            i += 2
-            continue
-        if c == "{":
-            depth += 1
-        elif c == "}":
-            depth -= 1
-        elif c == "&" and depth == 0 and env_depth == 0:
-            count += 1
-        i += 1
-    return max(cols, count + 1)
 
 
 def _matrix_colspec_to_array(tex: str) -> str:
@@ -1133,12 +1107,13 @@ def _matrix_colspec_to_array(tex: str) -> str:
         else:
             continue  # unbalanced; leave for KaTeX to complain about
         body = tex[m.end() : j]
-        if len(spec) == 1 and spec in "lcr":
-            spec = spec * _matrix_column_count(body)
-        left, right = MATRIX_DELIMS[name]
-        inner = f"\\begin{{array}}{{{spec}}}{body}\\end{{array}}"
-        if left:
-            inner = f"\\left{left}{inner}\\right{right}"
+        if spec and spec[0] in "lcr" and spec == spec[0] * len(spec):
+            inner = f"\\begin{{{name}*}}[{spec[0]}]{body}\\end{{{name}*}}"
+        else:
+            left, right = MATRIX_DELIMS[name]
+            inner = f"\\begin{{array}}{{{spec}}}{body}\\end{{array}}"
+            if left:
+                inner = f"\\left{left}{inner}\\right{right}"
         tex = tex[: m.start()] + inner + tex[j + len(end_tok) :]
     return tex
 

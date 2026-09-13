@@ -230,26 +230,33 @@ def test_scrollbar_contents_toggle():
     assert with_toc.index("sb-label") < with_toc.index("sb-toc") < with_toc.index("sb-top")
 
 
-def test_matrix_colspec_rewritten_as_array():
+def test_matrix_colspec_rewritten_for_katex():
     from hwgenie.htmlgen import _matrix_colspec_to_array as fix
 
+    # Dividers or mixed alignments: delimited array.
     assert fix("\\begin{bmatrix}[rr|r] 1 & 2 & 3 \\\\ 4 & 5 & 6 \\end{bmatrix}") == (
         "\\left[\\begin{array}{rr|r} 1 & 2 & 3 \\\\ 4 & 5 & 6 \\end{array}\\right]"
     )
-    # A single alignment letter applies to every column (stock amsmath).
+    assert fix("\\begin{pmatrix}[rc] 1 & 2 \\end{pmatrix}") == (
+        "\\left(\\begin{array}{rc} 1 & 2 \\end{array}\\right)"
+    )
+    # Uniform alignment: KaTeX's starred matrix keeps native spacing.
     assert fix("\\begin{pmatrix}[r] 1 & -2 \\\\ 3 & 4 \\end{pmatrix}") == (
-        "\\left(\\begin{array}{rr} 1 & -2 \\\\ 3 & 4 \\end{array}\\right)"
+        "\\begin{pmatrix*}[r] 1 & -2 \\\\ 3 & 4 \\end{pmatrix*}"
+    )
+    assert fix("\\begin{bmatrix}[rrr] 1 & 2 & 3 \\end{bmatrix}") == (
+        "\\begin{bmatrix*}[r] 1 & 2 & 3 \\end{bmatrix*}"
     )
     # Column vectors, several in one expression.
     out = fix("v_1 = \\begin{bmatrix}[r] 1 \\\\ -1 \\end{bmatrix}, v_2 = \\begin{bmatrix}[r] 2 \\\\ -3 \\end{bmatrix}")
-    assert out.count("\\begin{array}{r}") == 2 and "bmatrix" not in out
+    assert out.count("\\begin{bmatrix*}[r]") == 2 and "[r] 1" in out and "[r] 2" in out
     # Nested same-named environments and braces do not confuse the scan.
-    out = fix("\\begin{bmatrix}[c] \\begin{bmatrix} 1 \\\\ 2 \\end{bmatrix} & {a & b} \\end{bmatrix}")
-    assert out.startswith("\\left[\\begin{array}{cc}") and out.endswith("\\end{array}\\right]")
+    out = fix("\\begin{bmatrix}[c|c] \\begin{bmatrix} 1 \\\\ 2 \\end{bmatrix} & {a & b} \\end{bmatrix}")
+    assert out.startswith("\\left[\\begin{array}{c|c}") and out.endswith("\\end{array}\\right]")
     assert "\\begin{bmatrix} 1 \\\\ 2 \\end{bmatrix}" in out
-    # Plain matrices and \\left[...\\right] inputs pass through untouched.
-    plain = "\\begin{bmatrix} 1 & 2 \\end{bmatrix} \\begin{matrix}[r] x \\end{matrix}"
-    assert fix(plain) == "\\begin{bmatrix} 1 & 2 \\end{bmatrix} \\begin{array}{r} x \\end{array}"
+    # Plain matrices pass through untouched.
+    plain = "\\begin{bmatrix} 1 & 2 \\end{bmatrix} \\begin{matrix}[l] x \\end{matrix}"
+    assert fix(plain) == "\\begin{bmatrix} 1 & 2 \\end{bmatrix} \\begin{matrix*}[l] x \\end{matrix*}"
 
 
 def test_matrix_colspec_applied_in_inline_and_display_math():
@@ -257,8 +264,8 @@ def test_matrix_colspec_applied_in_inline_and_display_math():
         "Let $v = \\begin{bmatrix}[r] 1 \\\\ -2 \\end{bmatrix}$ and\n"
         "\\begin{align*} A &= \\begin{bmatrix}[rr|r] 1 & 0 & 2 \\\\ 0 & 1 & 3 \\end{bmatrix} \\end{align*}"
     )
-    assert "[r]" not in html and "[rr|r]" not in html
-    assert "\\left[\\begin{array}{r} 1" in html
+    assert "[rr|r]" not in html and "\\begin{bmatrix}[r]" not in html
+    assert "\\begin{bmatrix*}[r] 1" in html
     assert "\\left[\\begin{array}{rr|r} 1" in html
 
 
