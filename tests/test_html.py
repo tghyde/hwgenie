@@ -241,3 +241,16 @@ def test_matrix_colspec_applied_in_inline_and_display_math():
     assert "[r]" not in html and "[rr|r]" not in html
     assert "\\left[\\begin{array}{r} 1" in html
     assert "\\left[\\begin{array}{rr|r} 1" in html
+
+
+def test_body_renewcommand_and_font_size_dropped():
+    # Row Reducer export prefix: nothing from it may leak into the prose.
+    conv, html = convert(
+        "Row reducing gives\n"
+        "{\\small\\setlength{\\arraycolsep}{9pt}\\renewcommand{\\arraystretch}{1.15}\n"
+        "\\[ A \\]}\nand then \\renewcommand*{\\foo}[1]{bar #1} done."
+    )
+    assert "1.15" not in html and "9pt" not in html
+    assert "arraystretch" not in html and "bar" not in html
+    assert "Row reducing gives" in html and "done." in html
+    assert not any("Unknown macro" in w for w in conv.warnings)

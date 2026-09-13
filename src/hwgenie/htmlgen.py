@@ -65,6 +65,12 @@ SKIP_MACROS = {
     "pagestyle": 1, "thispagestyle": 1,
     "setcounter": 2, "addtocounter": 2, "numberwithin": 2,
     "setlength": 2, "addtolength": 2,
+    # Body-level (re)definitions, e.g. the Row Reducer export's
+    # \renewcommand{\arraystretch}{1.15}: drop name and body, not just the name.
+    "newcommand": 2, "renewcommand": 2, "providecommand": 2,
+    # Font-size switches have no HTML counterpart.
+    "tiny": 0, "scriptsize": 0, "footnotesize": 0, "small": 0, "normalsize": 0,
+    "large": 0, "Large": 0, "LARGE": 0, "huge": 0, "Huge": 0,
     "qed": 0, "pushQED": 1, "popQED": 0,
     "theoremstyle": 1,
     "hwnumber": 1, "hwtitle": 1, "hwsolutions": 1, "hwrelease": 1, "hwtype": 1,
