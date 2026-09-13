@@ -51,7 +51,7 @@ from .grade import (
     split_preamble,
 )
 from .htmlgen import HtmlConverter
-from .htmltemplate import KATEX_VERSION
+from .htmltemplate import FOLD_JS, KATEX_VERSION
 from .katexmacros import extract_macros
 from .webstyle import BASE_CSS
 
@@ -1976,6 +1976,10 @@ function pdata(slug, n) { return unit(slug).parts[String(n)]; }
 function rlabel(n) { return S.rubric[n - 1].label; }
 function rmax(n) { return S.rubric[n - 1].max; }
 
+// KaTeX for one region: the $...$ / \[...\] delimiters via auto-render,
+// then the foldeq displays — the converter emits those as empty
+// <div class="foldeq" data-tex="..."> for the fold script (shared with the
+// course site) to render at the widest fold that fits the pane.
 function typeset(el, macros) {
   if (!window.renderMathInElement) return;
   try {
@@ -1988,7 +1992,9 @@ function typeset(el, macros) {
         {left: "\\(", right: "\\)", display: false},
       ]});
   } catch (e) {}
+  try { fitFolds(el, macros || {}); } catch (e) {}
 }
+__FOLDJS__
 
 // ------------------------------------------------------------- progress --
 
@@ -2344,6 +2350,8 @@ function updateStmtPane() {
     d.style.display =
       prob && Number(d.dataset.num) === prob.num ? "" : "none";
   });
+  // the problems were typeset while hidden; fit the shown one's folds
+  try { fitFolds($("#stmtbody")); } catch (e) {}
   if (prob) highlightStmt($("#stmtbody"), activePart);
 }
 
@@ -3368,6 +3376,19 @@ $("#export").addEventListener("click", async () => {
 
 // the statement card is position-computed; keep it right after reflows
 addEventListener("resize", () => updateStmtPane());
+// foldeq displays fold to the pane width; refit when panes resize (the
+// statement panel opening or closing changes both columns' widths)
+let foldTimer = null;
+function refitFolds() {
+  clearTimeout(foldTimer);
+  foldTimer = setTimeout(() => { try { fitFolds(); } catch (e) {} }, 150);
+}
+addEventListener("resize", refitFolds);
+if (window.ResizeObserver) {
+  const ro = new ResizeObserver(refitFolds);
+  ro.observe($("#main"));
+  ro.observe($("#stmtbody"));
+}
 
 // liveness for --auto-exit servers: heartbeat plus a goodbye beacon so
 // closing the tab shuts hwGrader down (a reload's next ping cancels it)
@@ -3380,7 +3401,7 @@ addEventListener("pagehide", () => {
 </script>
 </body>
 </html>
-""".replace("__BASE__", BASE_CSS)
+""".replace("__BASE__", BASE_CSS).replace("__FOLDJS__", FOLD_JS)
 
 
 PICKER_PAGE = r"""<!doctype html>
@@ -4055,4 +4076,4 @@ addEventListener("pagehide", () => {
 </script>
 </body>
 </html>
-""".replace("__BASE__", BASE_CSS)
+""".replace("__BASE__", BASE_CSS).replace("__FOLDJS__", FOLD_JS)

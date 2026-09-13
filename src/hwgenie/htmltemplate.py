@@ -435,6 +435,14 @@ def view_box(href: str, label: str) -> str:
 # activate from the END of the line; folded rows align under the last
 # relation still on row 1 (an author & in the lead segment anchors the fully
 # folded form).  Past max fold: shrink font to 70%, then scroll.
+#
+# Shared by the course site and the grading pages (hwGrader, the student
+# feedback page): fitFolds(root, macros) fits every foldeq under root with
+# the given KaTeX macros, remembered per element so refits (a resize, a
+# <details> opening) need none; the site's pages set a global katexMacros
+# and call fitFolds() bare.  A display that is hidden when first fitted
+# (inside a closed <details>, a display:none pane) is rendered unfolded
+# rather than left blank, and refitted once it can be measured.
 FOLD_JS = r"""
 function foldParse(tex) {
   var parts = [], rels = [], depth = 0, start = 0;
@@ -494,7 +502,7 @@ function foldBuild(parts, rels, level) {
   return "\\begin{aligned}" + body + "\\end{aligned}";
 }
 var foldMeasurer = null;
-function foldWidth(tex) {
+function foldWidth(tex, macros) {
   if (!foldMeasurer) {
     foldMeasurer = document.createElement("div");
     foldMeasurer.style.cssText =
@@ -502,21 +510,44 @@ function foldWidth(tex) {
     document.body.appendChild(foldMeasurer);
   }
   katex.render(tex, foldMeasurer,
-               { displayMode: true, throwOnError: false, macros: katexMacros });
+               { displayMode: true, throwOnError: false, macros: macros });
   var k = foldMeasurer.querySelector(".katex");
   return k ? k.scrollWidth : foldMeasurer.scrollWidth;
 }
-function fitFolds() {
+// The macros for one display: the ones passed now (remembered on the
+// element), else the ones remembered earlier, else the page's global set.
+function foldMacros(el, macros) {
+  if (macros) el._foldMacros = macros;
+  if (el._foldMacros) return el._foldMacros;
+  return typeof katexMacros !== "undefined" ? katexMacros : {};
+}
+function fitFolds(root, macros) {
   if (typeof katex === "undefined") return;
-  document.querySelectorAll(".foldeq").forEach(function(el) {
+  var scope = root && root.querySelectorAll ? root : document;
+  var els = Array.prototype.slice.call(scope.querySelectorAll(".foldeq"));
+  if (scope !== document && scope.classList &&
+      scope.classList.contains("foldeq")) els.unshift(scope);
+  els.forEach(function(el) {
     var src = el.getAttribute("data-tex");
     if (!src) return;
+    var m = foldMacros(el, macros);
     var parsed = foldParse(src);
     var tag = el.getAttribute("data-tag") || "";
+    if (el.clientWidth === 0) {
+      // not measurable (hidden): show the unfolded line rather than
+      // nothing; a later fit (resize, details toggle) folds it to size
+      if (el._foldLevel === undefined) {
+        el._foldLevel = 0;
+        katex.render(foldBuild(parsed.parts, parsed.rels, 0) + tag, el,
+                     { displayMode: true, throwOnError: false, macros: m });
+      }
+      return;
+    }
     var target = el.clientWidth - 2;
     var level = parsed.rels.length; // nothing fits: max fold, then shrink
     for (var j = 0; j <= parsed.rels.length; j++) {
-      if (foldWidth(foldBuild(parsed.parts, parsed.rels, j) + tag) <= target) {
+      if (foldWidth(foldBuild(parsed.parts, parsed.rels, j) + tag, m)
+          <= target) {
         level = j;
         break;
       }
@@ -524,8 +555,7 @@ function fitFolds() {
     if (el._foldLevel !== level) {
       el._foldLevel = level;
       katex.render(foldBuild(parsed.parts, parsed.rels, level) + tag, el,
-                   { displayMode: true, throwOnError: false,
-                     macros: katexMacros });
+                   { displayMode: true, throwOnError: false, macros: m });
     }
     el.style.fontSize = "";
     if (el.scrollWidth > el.clientWidth + 1) {
@@ -535,6 +565,12 @@ function fitFolds() {
     }
   });
 }
+// a <details> opening reveals displays that were fitted while hidden
+// (toggle does not bubble; capture on the document catches it)
+document.addEventListener("toggle", function(e) {
+  var d = e.target;
+  if (d && d.tagName === "DETAILS" && d.open) fitFolds(d);
+}, true);
 """
 
 

@@ -37,7 +37,7 @@ from pathlib import Path
 
 from .grade import GradeError, split_preamble
 from .htmlgen import HtmlConverter
-from .htmltemplate import KATEX_VERSION
+from .htmltemplate import FOLD_JS, KATEX_VERSION
 from .katexmacros import extract_macros
 from . import late as late_mod
 from datetime import datetime, timezone
@@ -365,6 +365,7 @@ def _feedback_html(app, unit: dict, data: dict, title: str,
         for n, rp in enumerate(app.rubric, start=1))
     return FEEDBACK_PAGE \
         .replace("__KATEX__", KATEX_VERSION) \
+        .replace("__FOLDJS__", FOLD_JS) \
         .replace("__TITLE__", html_mod.escape(title)) \
         .replace("__NAME__", html_mod.escape(display_name(slug))) \
         .replace("__TOTAL__", total_text
@@ -1078,6 +1079,8 @@ the list under each part.</footer>
 "use strict";
 const CDATA = JSON.parse(document.getElementById("cdata").textContent);
 
+// KaTeX for one region: auto-render for the delimiters, then the foldeq
+// displays (empty <div class="foldeq" data-tex>) via the shared fold script
 function typeset(el, macros) {
   if (!window.renderMathInElement) return;
   try {
@@ -1090,7 +1093,14 @@ function typeset(el, macros) {
         {left: "\\(", right: "\\)", display: false},
       ]});
   } catch (e) {}
+  try { fitFolds(el, macros || {}); } catch (e) {}
 }
+__FOLDJS__
+let foldTimer = null;
+window.addEventListener("resize", () => {
+  clearTimeout(foldTimer);
+  foldTimer = setTimeout(() => { try { fitFolds(); } catch (e) {} }, 150);
+});
 
 function mathSpans(t) {
   const spans = [];
@@ -1183,6 +1193,7 @@ document.querySelectorAll("section.part").forEach(sec => {
   if (st && ps) st.addEventListener("click", () => {
     ps.hidden = !ps.hidden;
     st.textContent = (ps.hidden ? "▸" : "▾") + " Problem";
+    if (!ps.hidden) try { fitFolds(ps); } catch (e) {}
   });
   const paint = () => {
     typeset(box, d.macros);

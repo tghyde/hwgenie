@@ -126,6 +126,25 @@ def test_foldeq_star_emits_data_tex():
     assert "data-tag" not in html
 
 
+def test_fold_script_serves_grader_and_feedback_pages():
+    """foldeq displays are empty <div data-tex> until the fold script
+    renders them; the grading pages must carry it (v0.51.1: instructor
+    solutions with foldeq showed a blank line in hwGrader)."""
+    from hwgenie.feedback import FEEDBACK_PAGE
+    from hwgenie.grade_gui import render_grader
+    from hwgenie.htmltemplate import FOLD_JS
+
+    grader = render_grader("/nowhere")
+    assert "function fitFolds(root, macros)" in FOLD_JS
+    assert "function fitFolds(root, macros)" in grader
+    assert "fitFolds(el, macros || {})" in grader     # typeset() hook
+    assert "__FOLDJS__" not in grader
+    assert "__FOLDJS__" in FEEDBACK_PAGE               # filled at render
+    assert "fitFolds(el, macros || {})" in FEEDBACK_PAGE
+    # hidden displays render unfolded instead of staying blank
+    assert "el.clientWidth === 0" in FOLD_JS
+
+
 def test_foldeq_numbered_tag_and_label():
     conv, html = convert(
         "\\begin{foldeq}\n\\label{eq fold}\nx &= y \\fold{=} z\n\\end{foldeq}\n"
