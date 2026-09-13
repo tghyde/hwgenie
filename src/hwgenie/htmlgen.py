@@ -1056,7 +1056,85 @@ FOOTNOTE_RE = re.compile(r"\\footnote\{((?:[^{}]|\{[^{}]*\})*)\}")
 def _extract_math_footnotes(raw: str):
     """KaTeX cannot render \footnote inside math; pull the notes out."""
     notes = [m.group(1) for m in FOOTNOTE_RE.finditer(raw)]
-    return FOOTNOTE_RE.sub("", raw), notes
+    return _matrix_colspec_to_array(FOOTNOTE_RE.sub("", raw)), notes
+
+
+# amsmath matrix environments with a column spec, \begin{bmatrix}[rr|r] ...
+# (course preambles patch \env@matrix for this; stock amsmath accepts a
+# single alignment letter).  KaTeX has no such option and typesets the "[r]"
+# as the first entry, so rewrite to the equivalent delimited array.
+MATRIX_DELIMS = {
+    "matrix": ("", ""),
+    "pmatrix": ("(", ")"),
+    "bmatrix": ("[", "]"),
+    "Bmatrix": ("\\{", "\\}"),
+    "vmatrix": ("|", "|"),
+    "Vmatrix": ("\\|", "\\|"),
+}
+MATRIX_OPT_RE = re.compile(
+    r"\\begin\{(" + "|".join(MATRIX_DELIMS) + r")\}\s*\[([^\[\]{}]*)\]"
+)
+
+
+def _matrix_column_count(body: str) -> int:
+    """Columns in a matrix body: max over rows of top-level '&' count + 1."""
+    cols, depth, env_depth, count = 1, 0, 0, 0
+    i = 0
+    while i < len(body):
+        c = body[i]
+        if c == "\\":
+            if body.startswith("\\begin", i):
+                env_depth += 1
+            elif body.startswith("\\end", i):
+                env_depth -= 1
+            elif body.startswith("\\\\", i) and depth == 0 and env_depth == 0:
+                cols = max(cols, count + 1)
+                count = 0
+                i += 2
+                continue
+            i += 2
+            continue
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+        elif c == "&" and depth == 0 and env_depth == 0:
+            count += 1
+        i += 1
+    return max(cols, count + 1)
+
+
+def _matrix_colspec_to_array(tex: str) -> str:
+    """Rewrite \\begin{Xmatrix}[spec]...\\end{Xmatrix} as a delimited array."""
+    matches = list(MATRIX_OPT_RE.finditer(tex))
+    # Last match first: its body holds no further optioned matrix, and
+    # earlier bodies see the already-rewritten text.
+    for m in reversed(matches):
+        name, spec = m.group(1), m.group(2).strip()
+        begin_tok, end_tok = f"\\begin{{{name}}}", f"\\end{{{name}}}"
+        depth, j = 1, m.end()
+        while j < len(tex):
+            if tex.startswith(begin_tok, j):
+                depth += 1
+                j += len(begin_tok)
+            elif tex.startswith(end_tok, j):
+                depth -= 1
+                if depth == 0:
+                    break
+                j += len(end_tok)
+            else:
+                j += 1
+        else:
+            continue  # unbalanced; leave for KaTeX to complain about
+        body = tex[m.end() : j]
+        if len(spec) == 1 and spec in "lcr":
+            spec = spec * _matrix_column_count(body)
+        left, right = MATRIX_DELIMS[name]
+        inner = f"\\begin{{array}}{{{spec}}}{body}\\end{{array}}"
+        if left:
+            inner = f"\\left{left}{inner}\\right{right}"
+        tex = tex[: m.start()] + inner + tex[j + len(end_tok) :]
+    return tex
 
 
 # ------------------------------------------------------------------- helpers
