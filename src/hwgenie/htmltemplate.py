@@ -243,12 +243,22 @@ figure.fig figcaption {
 }
 
 /* Inline TikZ diagrams (pre-rendered SVG).  Black strokes/fills were
-   rewritten to currentColor, so the diagram follows the theme. */
+   rewritten to currentColor, so the diagram follows the theme.  White is
+   the paper color: white fills/strokes (label boxes masking a line behind
+   them) take the surrounding background, so they stay invisible in dark
+   mode instead of becoming white boxes with light text. */
 .tikz-figure {
   text-align: center;
   margin: 1.4rem 0;
   color: var(--fg);
+  --tikz-paper: var(--bg);
 }
+details.problem .tikz-figure, .htmlcard .tikz-figure, .thmblock .tikz-figure {
+  --tikz-paper: var(--card-bg);
+}
+details.solution .tikz-figure { --tikz-paper: var(--sol-bg); }
+.tikz-figure [fill='#fff'], .tikz-figure [fill='#ffffff'] { fill: var(--tikz-paper); }
+.tikz-figure [stroke='#fff'], .tikz-figure [stroke='#ffffff'] { stroke: var(--tikz-paper); }
 
 pre.code {
   background: var(--code-bg);

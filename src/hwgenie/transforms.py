@@ -108,16 +108,35 @@ def solution_edits(text: str, nodes, mode: str) -> List[Edit]:
 
 # ------------------------------------------------------------------ figures
 
+TIKZ_ENVS = ("tikzpicture", "tikzcd")
+
+
 def figure_edits(text: str, nodes) -> List[Edit]:
-    """Remove figure/figure* environments AND center environments that contain
-    an \\includegraphics (bare centered images, as used in practice)."""
+    """Remove figure/figure* environments, tikz diagrams, AND center
+    environments that contain an \\includegraphics or a tikz diagram (bare
+    centered figures, as used in practice).  A tikz diagram inside a removed
+    center/figure is dropped by apply_edits as a nested edit."""
     edits: List[Edit] = []
     for env in texscan.iter_envs(nodes, ("figure", "figure*")):
         edits.append((env.pos, env.pos + env.len, ""))
     for env in texscan.iter_envs(nodes, ("center",)):
-        if texscan.contains_macro(env, "includegraphics"):
+        if texscan.contains_macro(env, "includegraphics") or any(
+            True for _ in texscan.iter_envs(env.nodelist or [], TIKZ_ENVS)
+        ):
             edits.append((env.pos, env.pos + env.len, ""))
+    for env in texscan.iter_envs(nodes, TIKZ_ENVS):
+        edits.append((env.pos, env.pos + env.len, ""))
     return edits
+
+
+USETIKZLIBRARY_RE = re.compile(r"^[ \t]*\\usetikzlibrary\{[^{}]*\}[ \t]*\n?", re.M)
+
+
+def tikz_preamble_edits(masked_text: str) -> List[Edit]:
+    """Remove \\usetikzlibrary lines.  The submission keeps no tikz diagrams
+    and the student preamble does not load tikz, so the command would be
+    undefined there."""
+    return [(m.start(), m.end(), "") for m in USETIKZLIBRARY_RE.finditer(masked_text)]
 
 
 USEPACKAGE_HWGENIE_RE = re.compile(r"\\usepackage\{hwgenie\}")

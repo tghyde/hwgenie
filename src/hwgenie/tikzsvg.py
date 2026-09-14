@@ -34,16 +34,22 @@ from . import texscan
 
 TIKZ_ENVS = ("tikzpicture", "tikzcd")
 
-_BEGIN_RE = re.compile(r"\\begin\{(?:tikzpicture|tikzcd)\}")
 _DOCCLASS_RE = re.compile(r"\\documentclass(?:\[[^\]]*\])?\{[^{}]*\}")
 _BEGIN_DOC_RE = re.compile(r"\\begin\{document\}")
 
+# Only the author's own (outermost) tikz environments are previewed: each
+# is wrapped in an hwgpreview environment that preview ships out.  Hooking
+# tikzpicture itself would also ship out every tikzpicture drawn internally
+# by tcolorbox (problem/solution boxes in hwgenie.sty), and tikzcd's inner
+# tikzpicture, throwing off the page count.
+_WRAP_ENV = "hwgpreview"
 _PREVIEW_SETUP = (
     "\\usepackage[active,tightpage]{preview}\n"
     "\\setlength\\PreviewBorder{2pt}\n"
-    "\\PreviewEnvironment{tikzpicture}\n"
-    "\\PreviewEnvironment{tikzcd}\n"
+    f"\\newenvironment{{{_WRAP_ENV}}}{{}}{{}}\n"
+    f"\\PreviewEnvironment{{{_WRAP_ENV}}}\n"
 )
+_ENV_TOKEN_RE = re.compile(r"\\(begin|end)\{(tikzpicture|tikzcd)\}")
 _DRIVER_DEF = "\\def\\pgfsysdriver{pgfsys-dvisvgm.def}\n"
 
 # 1pt (TeX big point in SVG output) = 4/3 CSS px.
@@ -58,23 +64,55 @@ def available() -> bool:
     )
 
 
-def tikz_positions(text: str) -> List[int]:
-    """Offsets of every \\begin{tikzpicture|tikzcd} outside verbatim, in
-    document order — the same order preview ships them out."""
+def tikz_spans(text: str) -> List[Tuple[int, int]]:
+    """(start, end) of every outermost tikzpicture/tikzcd environment in the
+    document body, outside verbatim, in document order — the order preview
+    ships them out.  A tikz environment nested in another (a tikzcd node
+    inside a tikzpicture) is part of its parent's picture, not a diagram of
+    its own; one inside a preamble macro definition is not a diagram either
+    (it is drawn wherever the macro is used, which the HTML cannot see)."""
     masked = texscan.mask_verbatim(text)
-    return [m.start() for m in _BEGIN_RE.finditer(masked)]
+    bd = _BEGIN_DOC_RE.search(masked)
+    spans: List[Tuple[int, int]] = []
+    depth = 0
+    start = 0
+    for m in _ENV_TOKEN_RE.finditer(masked, bd.end() if bd else 0):
+        if m.group(1) == "begin":
+            if depth == 0:
+                start = m.start()
+            depth += 1
+        elif depth > 0:
+            depth -= 1
+            if depth == 0:
+                spans.append((start, m.end()))
+    return spans
+
+
+def tikz_positions(text: str) -> List[int]:
+    """Offsets of every outermost \\begin{tikzpicture|tikzcd} outside
+    verbatim, in document order."""
+    return [start for start, _ in tikz_spans(text)]
 
 
 def _inject_preview(text: str) -> Optional[str]:
-    """Insert the dvisvgm driver + preview setup into a variant's preamble."""
+    """Insert the dvisvgm driver + preview setup into a variant's preamble and
+    wrap each outermost tikz environment in the previewed hwgpreview env."""
     dc = _DOCCLASS_RE.search(text)
     bd = _BEGIN_DOC_RE.search(text)
     if not dc or not bd:
         return None
+    body = text[bd.start():]
+    offset = bd.start()
+    for start, end in reversed(tikz_spans(text)):
+        body = (
+            body[: start - offset] + f"\\begin{{{_WRAP_ENV}}}"
+            + body[start - offset: end - offset] + f"\\end{{{_WRAP_ENV}}}"
+            + body[end - offset:]
+        )
     return (
         text[: dc.end()] + "\n" + _DRIVER_DEF
         + text[dc.end(): bd.start()] + _PREVIEW_SETUP
-        + text[bd.start():]
+        + body
     )
 
 

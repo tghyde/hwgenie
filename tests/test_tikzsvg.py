@@ -48,9 +48,54 @@ def test_inject_preview_places_driver_and_preview():
         "\\usepackage{tikz}"
     )
     assert injected.index("{preview}") < injected.index("\\begin{document}")
-    assert injected.index("\\PreviewEnvironment{tikzpicture}") < injected.index(
+    assert injected.index("\\PreviewEnvironment{hwgpreview}") < injected.index(
         "\\begin{document}"
     )
+    # Only the author's tikzpicture is wrapped in the previewed env; the
+    # tikzpicture environment itself is NOT hooked (tcolorbox draws its
+    # boxes with internal tikzpictures that must not ship out as pages).
+    assert "\\PreviewEnvironment{tikzpicture}" not in injected
+    assert (
+        "\\begin{hwgpreview}\\begin{tikzpicture}\n\\draw[->] (0,0) -- (1,0);\n"
+        "\\end{tikzpicture}\\end{hwgpreview}"
+    ) in injected
+
+
+def test_tikz_spans_outermost_only_in_body():
+    text = ("\\newcommand{\\pic}{\\begin{tikzpicture}\\end{tikzpicture}}"
+            "\\begin{document}"
+            "\\begin{tikzpicture}\\node{\\begin{tikzcd}A\\end{tikzcd}};"
+            "\\end{tikzpicture} mid \\begin{tikzcd}B\\end{tikzcd}\\end{document}")
+    spans = tikzsvg.tikz_spans(text)
+    assert len(spans) == 2
+    assert text[spans[0][0]:spans[0][1]].startswith("\\begin{tikzpicture}")
+    assert text[spans[0][0]:spans[0][1]].endswith("\\end{tikzpicture}")
+    assert text[spans[1][0]:spans[1][1]] == "\\begin{tikzcd}B\\end{tikzcd}"
+    assert tikzsvg.tikz_positions(text) == [s for s, _ in spans]
+
+
+BOXED_DOC = """\\documentclass[11pt]{article}
+\\usepackage{tikz}
+% An environment that draws with tikz internally, like tcolorbox does.
+\\newenvironment{fancybox}{\\begin{tikzpicture}\\draw (0,0) rectangle (3,1);
+\\end{tikzpicture}\\par}{}
+\\begin{document}
+\\begin{fancybox}Boxed text.\\end{fancybox}
+\\begin{center}
+\\begin{tikzpicture}
+\\draw[->] (0,0) -- (1,0);
+\\end{tikzpicture}
+\\end{center}
+\\begin{fancybox}More.\\end{fancybox}
+\\end{document}
+"""
+
+
+def test_render_document_ignores_internal_tikzpictures(tmp_path):
+    svgs, warning = tikzsvg.render_document(BOXED_DOC, workdir=tmp_path)
+    assert warning is None
+    assert list(svgs) == tikzsvg.tikz_positions(BOXED_DOC)
+    assert len(svgs) == 1
 
 
 def test_inject_preview_requires_document_markers():

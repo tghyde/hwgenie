@@ -157,6 +157,40 @@ def test_figure_inside_removed_solution_no_conflict():
     assert "%Write your solution here" in v["submission"]
 
 
+def test_center_tikzpicture_removed_from_submission():
+    v = variants_of(
+        "\\begin{problem}\nLook at the hexagon:\n"
+        "\\begin{center}\n\\begin{tikzpicture}[scale=1.5]\n"
+        "\\draw (0,0) -- (1,0);\n\\end{tikzpicture}\n\\end{center}\n"
+        "\\begin{tikzcd}A \\arrow[r] & B\\end{tikzcd}\n"
+        "Still here.\n\\end{problem}\n"
+    )
+    sub = v["submission"]
+    assert "tikzpicture" not in sub
+    assert "tikzcd" not in sub
+    # Only the SUBMISSION banner's center block remains.
+    assert sub.count("\\begin{center}") == 1
+    assert "Look at the hexagon:" in sub
+    assert "Still here." in sub
+    assert "tikzpicture" in v["handout"]
+    assert "tikzcd" in v["handout"]
+
+
+def test_usetikzlibrary_removed_from_submission_only():
+    src = (
+        "\\documentclass{article}\n\\usepackage{hwgenie}\n"
+        "\\usetikzlibrary{arrows.meta}\n"
+        "%===hwgenie===\n% number = 1\n% course = Math 261\n"
+        "% semester = Fall 2025\n%=============\n"
+        "\\begin{document}\n\\begin{problem}\nP.\n\\end{problem}\n"
+        "\\end{document}\n"
+    )
+    v = make_variants(src)
+    assert "usetikzlibrary" not in v["submission"]
+    assert "usetikzlibrary" in v["handout"]
+    assert "usetikzlibrary" in v["solutions"]
+
+
 # -------------------------------------------------------------------- tables
 
 CLEAR_TABLE = (

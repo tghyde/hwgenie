@@ -152,12 +152,14 @@ def make_variants(text: str, search_dirs=None) -> Dict[str, str]:
     if not has_marker and uses_sty:
         solutions = transforms.inject_variant(solutions, "Solutions")
 
-    # Submission: SUBMISSION banner, metadata removed, figures removed,
-    # solutions blanked, cleared tables.
+    # Submission: SUBMISSION banner, metadata removed, figures and tikz
+    # diagrams removed (with their \usetikzlibrary lines), solutions blanked,
+    # cleared tables.
     submission_edits = (
         transforms.header_edits(masked, transforms.banner("SUBMISSION"), remove=False)
         + [(meta.span[0], meta.span[1], "")]
         + transforms.figure_edits(text, nodes)
+        + transforms.tikz_preamble_edits(masked)
         + transforms.solution_edits(text, nodes, mode="blank")
         + transforms.clear_table_edits(text, nodes)
         + transforms.env_removal_edits(text, nodes, ("htmlonly",))
