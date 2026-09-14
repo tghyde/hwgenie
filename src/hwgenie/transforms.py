@@ -110,22 +110,38 @@ def solution_edits(text: str, nodes, mode: str) -> List[Edit]:
 
 TIKZ_ENVS = ("tikzpicture", "tikzcd")
 
+def loads_tikz(masked_text: str) -> bool:
+    """True when the source preamble itself \\usepackage's tikz or tikz-cd
+    (possibly in a comma list).  The submission keeps that line, so tikz
+    diagrams can stay in the student template and still compile."""
+    body = masked_text.find("\\begin{document}")
+    preamble = masked_text if body < 0 else masked_text[:body]
+    return any(
+        re.search(r"(?:^|,)\s*tikz(?:-cd)?\s*(?:,|$)", m.group(1))
+        for m in re.finditer(
+            r"\\usepackage(?:\[[^\]]*\])?\{([^{}]*)\}", preamble
+        )
+    )
 
-def figure_edits(text: str, nodes) -> List[Edit]:
-    """Remove figure/figure* environments, tikz diagrams, AND center
-    environments that contain an \\includegraphics or a tikz diagram (bare
-    centered figures, as used in practice).  A tikz diagram inside a removed
+
+def figure_edits(text: str, nodes, tikz: bool = True) -> List[Edit]:
+    """Remove figure/figure* environments AND center environments that
+    contain an \\includegraphics (bare centered images, as used in practice).
+    With tikz=True (the source does not load tikz itself, so the student
+    template could not compile a diagram) also remove tikz diagrams and
+    center environments containing one; a tikz diagram inside a removed
     center/figure is dropped by apply_edits as a nested edit."""
     edits: List[Edit] = []
     for env in texscan.iter_envs(nodes, ("figure", "figure*")):
         edits.append((env.pos, env.pos + env.len, ""))
     for env in texscan.iter_envs(nodes, ("center",)):
-        if texscan.contains_macro(env, "includegraphics") or any(
+        if texscan.contains_macro(env, "includegraphics") or (tikz and any(
             True for _ in texscan.iter_envs(env.nodelist or [], TIKZ_ENVS)
-        ):
+        )):
             edits.append((env.pos, env.pos + env.len, ""))
-    for env in texscan.iter_envs(nodes, TIKZ_ENVS):
-        edits.append((env.pos, env.pos + env.len, ""))
+    if tikz:
+        for env in texscan.iter_envs(nodes, TIKZ_ENVS):
+            edits.append((env.pos, env.pos + env.len, ""))
     return edits
 
 
@@ -133,9 +149,9 @@ USETIKZLIBRARY_RE = re.compile(r"^[ \t]*\\usetikzlibrary\{[^{}]*\}[ \t]*\n?", re
 
 
 def tikz_preamble_edits(masked_text: str) -> List[Edit]:
-    """Remove \\usetikzlibrary lines.  The submission keeps no tikz diagrams
-    and the student preamble does not load tikz, so the command would be
-    undefined there."""
+    """Remove \\usetikzlibrary lines (used when the source does not load
+    tikz itself: the student preamble does not either, so the command would
+    be undefined in the submission)."""
     return [(m.start(), m.end(), "") for m in USETIKZLIBRARY_RE.finditer(masked_text)]
 
 

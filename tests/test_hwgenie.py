@@ -191,6 +191,38 @@ def test_usetikzlibrary_removed_from_submission_only():
     assert "usetikzlibrary" in v["solutions"]
 
 
+def test_source_loading_tikz_keeps_diagrams_in_submission():
+    src = (
+        "\\documentclass{article}\n\\usepackage{hwgenie}\n"
+        "\\usepackage{tikz}  % kept in the student file\n"
+        "\\usetikzlibrary{arrows.meta}\n"
+        "%===hwgenie===\n% number = 3\n% course = Math 221\n"
+        "% semester = Fall 2026\n%=============\n"
+        "\\begin{document}\n\\begin{problem}\nSee:\n"
+        "\\begin{center}\n\\begin{tikzpicture}\n\\draw (0,0) -- (1,0);\n"
+        "\\end{tikzpicture}\n\\end{center}\n"
+        "\\begin{center}\\includegraphics{a.png}\\end{center}\n"
+        "\\end{problem}\n\\end{document}\n"
+    )
+    v = make_variants(src)
+    sub = v["submission"]
+    assert "\\begin{tikzpicture}" in sub
+    assert "\\usetikzlibrary{arrows.meta}" in sub
+    assert "\\usepackage{tikz}" in sub
+    # ordinary image figures are still stripped
+    assert "includegraphics" not in sub
+
+
+def test_loads_tikz_detection():
+    assert transforms.loads_tikz("\\usepackage{tikz}\n\\begin{document}")
+    assert transforms.loads_tikz("\\usepackage{amsmath, tikz-cd}\n\\begin{document}")
+    assert transforms.loads_tikz("\\usepackage[x]{tikz}\n\\begin{document}")
+    assert not transforms.loads_tikz("\\usepackage{tikzfoo}\n\\begin{document}")
+    assert not transforms.loads_tikz("\\usepackage{hwgenie}\n\\begin{document}")
+    # only the preamble counts
+    assert not transforms.loads_tikz("\\begin{document}\\usepackage{tikz}")
+
+
 # -------------------------------------------------------------------- tables
 
 CLEAR_TABLE = (
