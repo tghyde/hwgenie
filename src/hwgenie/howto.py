@@ -132,8 +132,14 @@ __NAV__
 
   <h2 id="rubric">2. Setting up the rubric (and extra credit)</h2>
   <p>The grading folder gets a <code>rubric.yml</code> with one line per
-  solution box. Edit the labels&rsquo; point values to taste; the app
-  picks changes up on restart (or re-push):</p>
+  solution box, labeled from the template&rsquo;s problems
+  (<code>2.3</code> = problem 2, third box) and worth 5 points each.
+  The easiest way to edit it is in the app: <b class="ui">Grading &rarr;
+  Collect from Moodle &rarr; Rubric &amp; deadline</b> &mdash; pick the
+  assignment, set the deadline, labels, points and extra credit, and
+  <b class="ui">Save rubric</b>. The grader and the AI review pick the
+  change up at once (reload an open grader tab; re-push an assignment the
+  graders&rsquo; server already has). The file itself reads:</p>
   <ul>
     <li><code>- 2.3: 4</code> &mdash; part 2.3, out of 4 points.</li>
     <li><code>- 2.5: 3 ec</code> &mdash; an <b>extra credit</b> part: a
@@ -224,10 +230,12 @@ __NAV__
   <p>Moodle stamps every submission (&ldquo;Last modified
   (submission)&rdquo; in the worksheet, and the zip&rsquo;s file dates);
   <code>collect</code> records it per student. Give the assignment a
-  deadline &mdash; <code>collect --due "2026-09-04 23:59"</code>, or a
+  deadline &mdash; the <b class="ui">Due</b> field in <b class="ui">Rubric
+  &amp; deadline</b> (<a href="#rubric">section 2</a>),
+  <code>collect --due "2026-09-04 23:59"</code>, or a
   <code>due: 2026-09-04 23:59</code> line in <code>rubric.yml</code>
-  (add <code>timezone: America/New_York</code> if the machine isn&rsquo;t
-  in course time) &mdash; and hwGrader shows a red <b class="ui">late</b>
+  (add a <b class="ui">Time zone</b> such as <code>America/New_York</code>
+  if the machine isn&rsquo;t in course time) &mdash; and hwGrader shows a red <b class="ui">late</b>
   badge with the delay on every late student, in the sidebar and in both
   views. Graders see the badge; the decision is yours.</p>
   <p><b>The policy</b> (edit <code>policy</code> in the course

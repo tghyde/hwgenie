@@ -718,6 +718,33 @@ class AppHolder:
         return {"ok": True, "saved": str(dest), "kind": sub, "name": fname,
                 "size": len(body), "files": self.assignment_files(asg)}
 
+    def resolve_folder(self, path: str) -> Path:
+        """A grading folder for the rubric editor: the given path, or the
+        server's default assignment when none is given."""
+        if not path:
+            if self.current is None:
+                raise GradeError("no assignment given")
+            return self.current.folder
+        p = Path(path).expanduser().resolve()
+        if not (p / MANIFEST_NAME).is_file():
+            raise GradeError(f"{p} is not a grading folder (no "
+                             f"{MANIFEST_NAME})")
+        return p
+
+    def save_rubric(self, path: str, data: dict) -> dict:
+        """Write an edited rubric.yml and drop the folder's cached app so
+        the next request sees the new labels, points and deadline."""
+        from . import rubric as rubric_mod
+        if self.grader_only:
+            raise GradeError("the rubric is edited by the instructor")
+        p = self.resolve_folder(path)
+        res = rubric_mod.save(p, data)
+        with self.apps_lock:
+            self.apps.pop(str(p), None)
+        if self.current is not None and self.current.folder.resolve() == p:
+            self.current = self.get_app(p)
+        return res
+
     def run_collect(self, zip_path=None, folder=None, due=None,
                     timezone_name=None) -> dict:
         """Collect (or re-collect) from the assignment-folder layout; the
@@ -844,6 +871,17 @@ def make_handler(holder: AppHolder):
             elif url.path == "/api/lab" and not grader_only:
                 self._json({"root": str(holder.root),
                             "courses": holder.lab_courses()})
+            elif url.path == "/api/rubric":
+                if grader_only:
+                    self._json({"ok": False, "error": "the rubric is edited "
+                                "by the instructor"}, 403)
+                    return
+                from . import rubric as rubric_mod
+                try:
+                    self._json(rubric_mod.payload(holder.resolve_folder(
+                        folder or "")))
+                except (GradeError, OSError) as e:
+                    self._json({"ok": False, "error": str(e)}, 400)
             elif url.path == "/api/scan":
                 self._json({"root": str(holder.root),
                             "folders": holder.scan(),
@@ -1047,6 +1085,16 @@ def make_handler(holder: AppHolder):
                         due=data.get("due"), timezone_name=data.get("timezone"))
                     self._json(res)
                 except (GradeError, CollectError, OSError) as e:
+                    self._json({"ok": False, "error": str(e)}, 400)
+            elif self.path == "/api/rubric":
+                if grader_only:
+                    self._json({"ok": False, "error": "the rubric is edited "
+                                "by the instructor"}, 403)
+                    return
+                try:
+                    self._json(holder.save_rubric(
+                        folder or data.get("folder") or "", data))
+                except (GradeError, OSError) as e:
                     self._json({"ok": False, "error": str(e)}, 400)
             elif self.path == "/api/late":
                 if grader_only:
@@ -1903,6 +1951,9 @@ __BASE__
   <span class="sp"></span>
   <button class="ghost" id="whoami" style="display:none"
           title="Your name — recorded on the grades you enter (click to change)"></button>
+  <button class="ghost" id="rubricbtn"
+          title="Edit this assignment's rubric and deadline (labels, points, extra credit)">
+    Rubric</button>
   <button class="ghost" id="overview"
           title="How the assignment went: averages per part, distribution, highlights">
     Overview</button>
@@ -3346,7 +3397,12 @@ $("#export").addEventListener("click", async () => {
   $("#overview").addEventListener("click", () => {
     location.href = "/overview?folder=" + encodeURIComponent(CFG.folder);
   });
+  $("#rubricbtn").addEventListener("click", () => {
+    location.href = "/grading?pick=1&view=collect&rubric=" +
+      encodeURIComponent(CFG.folder);
+  });
   if (CFG.grader) {
+    $("#rubricbtn").style.display = "none";
     $("#export").style.display = "none";
     $("#gradebook").style.display = "none";
     $("#overview").style.display = "none";
@@ -3487,6 +3543,28 @@ __BASE__
   #clog { white-space: pre-wrap; font-family: ui-monospace, monospace;
           font-size: .72rem; margin-top: .6rem; }
   .row .recollect { margin-left: .5rem; padding: 0 .4rem; font-size: .9rem; }
+  #rsel { flex: 1; font: inherit; padding: .45rem .6rem; color: var(--fg);
+          background: var(--card-bg); border: 1px solid var(--border); }
+  .rset label { flex: 1; display: flex; align-items: baseline; gap: .5rem;
+                font-size: .85rem; color: var(--muted); }
+  .rset label input { flex: 1; }
+  #rparts { width: 100%; border-collapse: collapse; margin-top: .8rem;
+            font-size: .9rem; }
+  #rparts th { text-align: left; font-weight: 600; font-size: .75rem;
+               color: var(--muted); letter-spacing: .04em;
+               text-transform: uppercase; padding: .2rem .4rem; }
+  #rparts td { padding: .15rem .4rem; border-top: 1px solid var(--border); }
+  #rparts td.n, #rparts td.prob { color: var(--muted); white-space: nowrap;
+                                  width: 1%; }
+  #rparts input[type=text], #rparts input[type=number] {
+    width: 100%; box-sizing: border-box; font: inherit; padding: .3rem .5rem;
+    color: var(--fg); background: var(--card-bg);
+    border: 1px solid var(--border); }
+  #rparts input:focus { outline: 2px solid var(--accent);
+                        border-color: transparent; }
+  #rparts td.max { width: 6rem; } #rparts td.ec { width: 1%; text-align: center; }
+  .manual .grow { flex: 1; }
+  #rstat.ok { color: var(--sol-accent); } #rstat.bad { color: var(--alert); }
   .cards { display: grid; grid-template-columns: repeat(auto-fill,
            minmax(15rem, 1fr)); gap: .9rem; margin-top: .5rem; }
   .card { background: var(--card-bg); padding: 1rem 1.1rem 1rem;
@@ -3523,8 +3601,9 @@ __NAV__
       <div class="card">
         <a class="cardlink" href="/grading?pick=1&view=collect">Collect from
           Moodle &rarr;</a>
-        <p>Turn a Moodle download into a grading folder, or pull in late
-          work with &#x21bb; on an assignment.</p>
+        <p>Turn a Moodle download into a grading folder, pull in late
+          work with &#x21bb; on an assignment, and set each
+          assignment&rsquo;s rubric and deadline.</p>
       </div>
       <div class="card">
         <span class="cardlink">Gradebook</span>
@@ -3614,6 +3693,41 @@ __NAV__
     Re-collecting an existing folder (or the &#x21bb; on a row above)
     adds late students and re-uploads without touching graded work.</p>
     <pre id="clog" class="hint" style="display:none"></pre>
+  </div>
+  <div id="sec-rubric" data-view="collect">
+    <h2 class="sechead">Rubric &amp; deadline</h2>
+    <div class="manual">
+      <select id="rsel" title="A collected assignment"></select>
+      <button class="ghost" id="rreload" title="Re-read rubric.yml">Reload</button>
+    </div>
+    <div id="rform" hidden>
+      <p class="hint" id="rpath"></p>
+      <div class="manual rset">
+        <label>Due <input id="rdue" spellcheck="false"
+          placeholder="2026-09-11 23:59"
+          title="Deadline in course time (YYYY-MM-DD HH:MM); blank = nothing is flagged late"></label>
+        <label>Time zone <input id="rtz" spellcheck="false"
+          placeholder="America/New_York"
+          title="IANA zone the deadline and Moodle's timestamps are in; blank = this machine's"></label>
+      </div>
+      <table id="rparts">
+        <thead><tr><th>#</th><th>Problem</th><th>Label</th><th>Max</th>
+          <th title="Extra credit: points count but the max does not">EC</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div class="manual">
+        <button id="rsave">Save rubric</button>
+        <button class="ghost" id="rlabels"
+          title="Number the parts from the template: problem.box">Template labels</button>
+        <span class="grow"></span>
+        <span id="rtotal" class="hint"></span>
+      </div>
+      <p class="hint" id="rstat"></p>
+    </div>
+    <p class="hint">Saved to <code>rubric.yml</code> in the grading folder;
+    hwGrader and the AI review read it from there (reload an open grader
+    tab). Push the assignment again if the graders&rsquo; server already
+    has it.</p>
   </div>
   <div id="err"></div>
   <div id="sec-remote" data-view="remote" style="display:none">
@@ -3737,6 +3851,7 @@ async function runCollect(body) {
     log.appendChild(a);
     const s = await (await fetch("/api/scan")).json();
     rows($("#found"), s.folders, s.root);
+    if (!CFG.grader) { rubricOptions(s.folders, d.folder); loadRubric(d.folder); }
     if (NEW) { const r = await (await fetch("/api/assignment/new",
       {method: "POST", body: JSON.stringify({course: NEW.course, name: NEW.name})})).json();
       if (r.ok) renderNewFiles(r.files); }
@@ -3746,6 +3861,108 @@ async function runCollect(body) {
     $("#err").textContent = e.message;
     $("#err").style.display = "block";
   }
+}
+
+// ------------------------------------------------------ rubric editor --
+
+let RUB = null;   // the payload being edited
+
+function rubricOptions(folders, pick) {
+  const sel = $("#rsel");
+  sel.innerHTML = '<option value="">choose an assignment…</option>' +
+    folders.map(f => `<option value="${esc(f.path)}">${esc(label(f.path))}` +
+      `</option>`).join("");
+  if (pick && folders.some(f => f.path === pick)) sel.value = pick;
+}
+
+async function loadRubric(folder) {
+  const stat = $("#rstat");
+  stat.textContent = ""; stat.className = "hint";
+  if (!folder) { $("#rform").hidden = true; RUB = null; return; }
+  try {
+    const r = await fetch("/api/rubric?folder=" + encodeURIComponent(folder));
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error || "could not read the rubric");
+    RUB = d;
+    renderRubric();
+  } catch (e) {
+    $("#rform").hidden = true; RUB = null;
+    stat.textContent = e.message; stat.className = "hint bad";
+  }
+}
+
+function renderRubric() {
+  const d = RUB;
+  $("#rform").hidden = false;
+  $("#rpath").innerHTML = (d.exists ? "" : "<b>No rubric.yml yet</b> — " +
+    "defaults shown; saving creates ") + `<code>${esc(d.path)}</code>`;
+  $("#rdue").value = d.due || "";
+  $("#rtz").value = d.timezone || "";
+  const prob = {};
+  d.problems.forEach(p => p.boxes.forEach((b, i) =>
+    { prob[b] = `${p.num} (box ${i + 1})`; }));
+  $("#rparts tbody").innerHTML = d.parts.map((p, i) => `<tr>
+    <td class="n">${i + 1}</td>
+    <td class="prob">${esc(prob[i + 1] || "")}</td>
+    <td><input type="text" class="rlabel" value="${esc(p.label)}" spellcheck="false"></td>
+    <td class="max"><input type="number" class="rmax" min="0" step="any" value="${p.max}"></td>
+    <td class="ec"><input type="checkbox" class="rec"${p.ec ? " checked" : ""}></td>
+  </tr>`).join("");
+  rubricTotal();
+}
+
+function readRubricForm() {
+  return {
+    due: $("#rdue").value.trim(), timezone: $("#rtz").value.trim(),
+    parts: [...$("#rparts tbody").querySelectorAll("tr")].map(tr => ({
+      label: tr.querySelector(".rlabel").value.trim(),
+      max: tr.querySelector(".rmax").value.trim(),
+      ec: tr.querySelector(".rec").checked}))};
+}
+
+function rubricTotal() {
+  const f = readRubricForm();
+  let base = 0, ec = 0;
+  f.parts.forEach(p => { const m = parseFloat(p.max) || 0;
+                         if (p.ec) ec += m; else base += m; });
+  $("#rtotal").textContent = `total ${+base.toFixed(2)}` +
+    (ec ? ` + ${+ec.toFixed(2)} extra credit` : "") +
+    ` · ${f.parts.length} parts`;
+}
+
+async function saveRubric() {
+  if (!RUB) return;
+  const stat = $("#rstat");
+  stat.textContent = "Saving…"; stat.className = "hint";
+  try {
+    const body = Object.assign({folder: RUB.folder}, readRubricForm());
+    const r = await fetch("/api/rubric", {method: "POST",
+                                          body: JSON.stringify(body)});
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error || "save failed");
+    RUB = d;
+    renderRubric();
+    stat.textContent = "Saved " + d.path +
+      (d.due ? ` — due ${d.due}` : " — no deadline, nothing is flagged late");
+    stat.className = "hint ok";
+  } catch (e) {
+    stat.textContent = e.message; stat.className = "hint bad";
+  }
+}
+
+function wireRubric() {
+  $("#rsel").addEventListener("change", () => loadRubric($("#rsel").value));
+  $("#rreload").addEventListener("click", () => loadRubric($("#rsel").value));
+  $("#rsave").addEventListener("click", saveRubric);
+  $("#rparts").addEventListener("input", rubricTotal);
+  $("#rlabels").addEventListener("click", () => {
+    if (!RUB) return;
+    $("#rparts tbody").querySelectorAll(".rlabel").forEach((inp, i) => {
+      inp.value = RUB.default_labels[i] || String(i + 1); });
+  });
+  [$("#rdue"), $("#rtz")].forEach(el => el.addEventListener("keydown", e => {
+    if (e.key === "Enter") saveRubric();
+  }));
 }
 
 const VIEW_TITLES = {grade: "Grade", collect: "Collect from Moodle",
@@ -3870,7 +4087,7 @@ function showView(view) {
   $("#czip").addEventListener("keydown", e => {
     if (e.key === "Enter") $("#collect").click();
   });
-  if (!CFG.grader) { wireNew(); loadLab(); }
+  if (!CFG.grader) { wireNew(); loadLab(); wireRubric(); }
   const err = params.get("err");
   if (err) {
     $("#err").textContent = err;
@@ -3886,6 +4103,10 @@ function showView(view) {
   if (!CFG.grader) {
     rows($("#recents"), s.recents.map(p => ({path: p})), null);
     SCAN = s;
+    // Rubric & deadline: ?rubric=<folder> preselects (a link from hwGrader)
+    const want = params.get("rubric") || "";
+    rubricOptions(s.folders, want);
+    if (want) loadRubric(want);
     // hub: the most recent assignments, and one gradebook per course
     const recent = (s.recents.length ? s.recents : s.folders.map(f => f.path))
       .slice(0, 5);

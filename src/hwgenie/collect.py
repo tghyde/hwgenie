@@ -459,6 +459,11 @@ def collect(src: Path, dest: Path, template: Path | None = None,
         late_mod.write_setting(dest, "due", due)
     if timezone_name:
         late_mod.write_setting(dest, "timezone", timezone_name)
+    if template is not None and template_parts:
+        # labels from the template's problem/box structure ("2.3"), max 5:
+        # the instructor tunes points in the app's Rubric & deadline panel
+        from . import rubric as rubric_mod
+        rubric_mod.seed_parts(dest, template, template_parts)
     if ws is not None and ws.parent.resolve() != dest.resolve():
         # the worksheet also drives the return trip; keep the freshest
         # copy next to the manifest (Moodle reuses the filename, so a
