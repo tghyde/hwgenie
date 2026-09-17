@@ -745,7 +745,10 @@ def render_index(
         due = dropped_due.get(stem.lower())
         return f'<span class="card-due">Due {e(due)}</span>' if due else ""
 
+    # Problem sets list newest-first on the home page (highest number at
+    # the top); lessons and handouts keep ascending order.
     problemsets = [a for a in assignments if a.meta.doc_type == "problemset"]
+    problemsets.reverse()
     lessons = [a for a in assignments if a.meta.doc_type == "lesson"]
     syllabi = [a for a in assignments if a.meta.doc_type == "syllabus"]
     handouts = [a for a in assignments if a.meta.doc_type == "handout"]

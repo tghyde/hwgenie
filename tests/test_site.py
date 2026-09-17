@@ -73,6 +73,10 @@ def test_build_site_structure_and_gating(repo):
     assert "Math 261: Number Theory" in index
     assert "Fall 2025 · Prof. Hyde" in index
     assert "Problem Set 1: Induction" in index
+    # Problem-set cards run newest-first: 3, 2, 1 down the page.
+    assert index.index('href="ps/3/">Problem Set 3') < \
+        index.index('href="ps/2/">Problem Set 2') < \
+        index.index('href="ps/1/">Problem Set 1')
 
     # ps1 released, ps2 date in future, ps3 manual
     assert (site / "ps/1/solutions.html").exists()
