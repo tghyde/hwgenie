@@ -136,6 +136,7 @@ def make_variants(text: str, search_dirs=None) -> Dict[str, str]:
         transforms.header_edits(masked, "", remove=True)
         + transforms.solution_edits(text, nodes, mode="remove")
         + transforms.clear_table_edits(text, nodes)
+        + transforms.handoutonly_edits(text, nodes, mode="unwrap")
         + transforms.hwpreview_edits(masked)
     )
     handout = transforms.apply_edits(text, handout_edits)
@@ -146,6 +147,7 @@ def make_variants(text: str, search_dirs=None) -> Dict[str, str]:
     # Solutions: SOLUTIONS banner, everything else untouched.
     solutions_edits = (
         transforms.header_edits(masked, transforms.banner("SOLUTIONS"), remove=False)
+        + transforms.handoutonly_edits(text, nodes, mode="remove")
         + transforms.hwpreview_edits(masked)
     )
     solutions = transforms.apply_edits(text, solutions_edits)
@@ -167,6 +169,7 @@ def make_variants(text: str, search_dirs=None) -> Dict[str, str]:
         + transforms.foldeq_edits(text, nodes)
         + transforms.metadata_command_edits(masked)
         + transforms.variant_newpage_edits(masked)
+        + transforms.handoutonly_edits(text, nodes, mode="remove")
         + transforms.hwpreview_edits(masked)
     )
     submission = transforms.apply_edits(text, submission_edits)
@@ -177,12 +180,18 @@ def make_variants(text: str, search_dirs=None) -> Dict[str, str]:
         submission = transforms.inline_sty(submission, search_dirs)
 
     # Solutions-for-web: like solutions but no banner (the HTML template has
-    # its own badge) and no %HEADER line.
+    # its own badge) and no %HEADER line.  The variant tag still goes in:
+    # the HTML converter ignores \hwvariant, but the tikz→svg pass compiles
+    # this text with the real style file, so \handoutonly must resolve the
+    # same way it does in the solutions PDF.
     solutions_web = transforms.apply_edits(
         text,
         transforms.header_edits(masked, "", remove=True)
+        + transforms.handoutonly_edits(text, nodes, mode="remove")
         + transforms.hwpreview_edits(masked),
     )
+    if not has_marker and uses_sty:
+        solutions_web = transforms.inject_variant(solutions_web, "Solutions")
 
     return {
         "handout": handout,
@@ -258,7 +267,7 @@ def build_html(
 
     title = f"{re.sub('<[^>]+>', '', heading)} — {re.sub('<[^>]+>', '', course_line)}"
     title = re.sub(r"\$", "", title)  # <title> is plain text; drop math delimiters
-    solutions_page = include_solutions and meta.doc_type == "problemset"
+    solutions_page = include_solutions and meta.doc_type in ("problemset", "handout")
     if solutions_page:
         title += " (Solutions)"
 
@@ -273,7 +282,7 @@ def build_html(
         kind = {"lesson": "Lesson", "syllabus": "Syllabus",
                 "handout": "Handout"}.get(meta.doc_type, "PS")
         label = f"{kind} {meta.number}".strip()
-        if include_solutions and meta.doc_type == "problemset":
+        if include_solutions and meta.doc_type in ("problemset", "handout"):
             label += " · Solutions"
         scrollbar = scrollbar_html(
             sb_home[0], sb_home[1], label, conv.problem_anchors,

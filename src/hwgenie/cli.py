@@ -33,8 +33,8 @@ def run_build_site(args) -> int:
 
     print(f"Site built in: {result.out_dir}")
     for a in result.assignments:
-        kind = {"lesson": "Lesson", "syllabus": "Syllabus"}.get(
-            a.meta.doc_type, "Problem Set")
+        kind = {"lesson": "Lesson", "syllabus": "Syllabus",
+                "handout": "Handout"}.get(a.meta.doc_type, "Problem Set")
         label = f"{kind} {a.meta.number}".strip()
         status = "released" if a.released else "solutions hidden"
         print(f"  {label} ({status}) -> {a.rel_url}")

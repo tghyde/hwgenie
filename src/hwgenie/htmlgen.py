@@ -428,6 +428,13 @@ class HtmlConverter:
         if name == "separate":
             # Problem cards make the old horizontal-rule spacers redundant.
             return i + 1
+        if name == "handoutonly":
+            # \handoutonly{...}: student-facing content only (a blank grid
+            # the solution redraws with the answer); dropped from solutions.
+            args, j = self._macro_args(nodes, i, 1)
+            if args and not self.include_solutions:
+                self.walk(args[0].nodelist, flow)
+            return j
         if name == "href":
             args, j = self._macro_args(nodes, i, 2)
             if len(args) == 2:

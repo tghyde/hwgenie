@@ -368,3 +368,84 @@ def test_toc_on_lessons_and_handouts_not_problem_sets(repo):
     ps1 = (site / "ps/1/index.html").read_text()
     assert 'id="toc"' not in ps1
     assert 'class="sb-toc"' not in ps1
+
+
+HANDOUT_SOL_DOC = """\\documentclass{{article}}
+\\usepackage{{hwgenie}}
+\\hwtype{{handout}}
+\\hwtitle{{Midterm Study Guide}}
+\\hwsolutions{{{solutions}}}
+\\begin{{document}}
+\\hwmaketitle
+\\begin{{problem}}
+Draw $v+w$.
+\\handoutonly{{BLANK GRID}}
+\\begin{{solution}}
+FILLED GRID answer.
+\\end{{solution}}
+\\end{{problem}}
+\\end{{document}}
+"""
+
+
+def _write_study_guide(repo, solutions):
+    handouts = repo / "source" / "handouts"
+    handouts.mkdir(parents=True)
+    (handouts / "guide.tex").write_text(
+        HANDOUT_SOL_DOC.format(solutions=solutions))
+
+
+def test_handout_solutions_hidden_until_released(repo):
+    _write_study_guide(repo, "no")
+    result = build_site(repo, compile_pdfs=False, today=date(2025, 10, 15))
+    assert result.ok, result.errors
+    site = result.out_dir
+    page = (site / "handouts/midterm-study-guide/index.html").read_text()
+    assert "BLANK GRID" in page
+    assert "FILLED GRID" not in page
+    assert "solutions.html" not in page
+    assert "MidtermStudyGuide-Math261-Fall2025.pdf" in page
+    assert "(Solutions)" not in page
+    assert not (site / "handouts/midterm-study-guide/solutions.html").exists()
+    index = (site / "index.html").read_text()
+    assert "handouts/midterm-study-guide/MidtermStudyGuide-Math261-Fall2025.pdf" in index
+    assert "handouts/midterm-study-guide/solutions.html" not in index
+    assert "MidtermStudyGuide-solutions-" not in index
+    ab = [a for a in result.assignments if a.meta.doc_type == "handout"][0]
+    assert ab.has_solutions and not ab.released
+
+
+def test_handout_solutions_released(repo):
+    _write_study_guide(repo, "yes")
+    result = build_site(repo, compile_pdfs=False, today=date(2025, 10, 15))
+    assert result.ok, result.errors
+    site = result.out_dir
+    page = (site / "handouts/midterm-study-guide/index.html").read_text()
+    assert "BLANK GRID" in page
+    assert "FILLED GRID" not in page
+    assert 'href="solutions.html"' in page
+    assert "MidtermStudyGuide-solutions-Math261-Fall2025.pdf" in page
+    sol = (site / "handouts/midterm-study-guide/solutions.html").read_text()
+    assert "FILLED GRID" in sol
+    assert "BLANK GRID" not in sol
+    assert "<title>Midterm Study Guide — Math 261, Fall 2025 (Solutions)</title>" in sol
+    assert 'class="badge"' in sol
+    assert 'href="./"' in sol  # back to the handout page
+    index = (site / "index.html").read_text()
+    assert "handouts/midterm-study-guide/solutions.html" in index
+    assert "handouts/midterm-study-guide/MidtermStudyGuide-solutions-Math261-Fall2025.pdf" in index
+    ab = [a for a in result.assignments if a.meta.doc_type == "handout"][0]
+    assert ab.has_solutions and ab.released
+
+
+def test_handout_without_solutions_unchanged(repo):
+    handouts = repo / "source" / "handouts"
+    handouts.mkdir(parents=True)
+    (handouts / "review.tex").write_text(TOC_DOC.format(doc_type="handout"))
+    result = build_site(repo, compile_pdfs=False, today=date(2025, 10, 15))
+    assert result.ok, result.errors
+    page = (result.out_dir / "handouts/1/index.html").read_text()
+    assert "(Solutions)" not in page
+    assert "solutions.html" not in page
+    ab = [a for a in result.assignments if a.meta.doc_type == "handout"][0]
+    assert not ab.has_solutions and ab.released

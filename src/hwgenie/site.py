@@ -15,6 +15,9 @@ Output (default ``site/``)::
     ps/3/problem-set-3-submission.tex
     ps/3/solutions.html             ┐ only when the assignment's
     ps/3/problem-set-3-solutions.pdf┘ solutions are released
+    handouts/<slug>/index.html      built handout (HTML) + PDF; a handout
+    handouts/<slug>/solutions.html  with solution environments also gets a
+                                    solutions page + PDF once released
 
 Release control comes from the ``solutions`` metadata key: an ISO date
 (released once today >= date), ``released``, or ``manual`` (default: not
@@ -91,6 +94,7 @@ class AssignmentBuild:
     source_path: Path
     rel_url: str                 # e.g. "ps/3/"
     released: bool
+    has_solutions: bool = False  # solution environments present (handouts)
     files: Dict[str, Path] = field(default_factory=dict)
 
 
@@ -151,16 +155,22 @@ def _tag(meta: Metadata) -> str:
         r"\s+", "", f"{meta.semester}")
 
 
-def _page_pdf_name(meta: Metadata, n: str) -> str:
+def _page_pdf_name(meta: Metadata, n: str, solutions: bool = False) -> str:
     if meta.doc_type == "lesson":
         return f"Lesson{n}-{_tag(meta)}.pdf"
     if meta.doc_type == "handout":
         if meta.number:
-            return f"Handout{_slug(meta.number)}-{_tag(meta)}.pdf"
-        stem = re.sub(r"[^A-Za-z0-9]+", "",
-                      latex_plain(meta.title or "").title()) or "Handout"
+            stem = f"Handout{_slug(meta.number)}"
+        else:
+            stem = re.sub(r"[^A-Za-z0-9]+", "",
+                          latex_plain(meta.title or "").title()) or "Handout"
+        if solutions:
+            stem += "-solutions"
         return f"{stem}-{_tag(meta)}.pdf"
     return f"Syllabus-{_tag(meta)}.pdf"
+
+
+SOLUTION_ENV_RE = re.compile(r"\\begin\{solution\*?\}")
 
 
 def _file_names(meta: Metadata, n: str) -> Dict[str, str]:
@@ -348,6 +358,7 @@ def _build_assignment(
         _build_page_doc(
             src, cfg, out, compile_pdfs, result, meta, text,
             extra_preamble, theme, repo_root, custom_css_on, favicon, banner,
+            today,
         )
         return
 
@@ -458,9 +469,14 @@ def _build_page_doc(
     custom_css_on: bool,
     favicon: str = "",
     banner: str = "",
+    today: Optional[date] = None,
 ) -> None:
-    """Lessons, handouts, and the syllabus: one PDF + one HTML page, no
-    variants."""
+    """Lessons, handouts, and the syllabus: one PDF + one HTML page.
+
+    A handout may also contain solution environments (a study guide with
+    practice problems, say).  Those are stripped from the student page and
+    PDF, and -- once \\hwsolutions{yes} -- published as a separate
+    solutions page + PDF, exactly like a problem set."""
     from . import transforms
 
     search_dirs = [src.parent] + ([repo_root] if repo_root else [])
@@ -486,19 +502,49 @@ def _build_page_doc(
         depth = 1
     page_dir.mkdir(parents=True, exist_ok=True)
     pdf_name = _page_pdf_name(meta, n)
+    sol_pdf_name = _page_pdf_name(meta, n, solutions=True)
+
+    # Lessons and the syllabus have nothing to hide: the page is the source.
+    # Handouts are built from the same handout/solutions variants as problem
+    # sets, so \handoutonly, %CLEAR tables and solution environments behave
+    # identically in both.
+    page_text = text
+    include_solutions = True
+    has_solutions = False
+    released = True
+    variants: Dict[str, str] = {}
+    if meta.doc_type == "handout":
+        variants = make_variants(text)
+        page_text = variants["handout"]
+        include_solutions = False
+        has_solutions = bool(SOLUTION_ENV_RE.search(texscan.mask_verbatim(text)))
+        if has_solutions:
+            released = is_released(meta.solutions_release, today)
+            if released is None:
+                result.warnings.append(
+                    f"{src.name}: could not parse solutions = "
+                    f"{meta.solutions_release!r} (expected 'yes' or 'no'); "
+                    "treating as NOT released."
+                )
+                released = False
+    solutions_on = has_solutions and released
 
     ab = AssignmentBuild(meta=meta, source_path=src, rel_url=rel_url,
-                         released=True)
+                         released=released, has_solutions=has_solutions)
     br = BuildResult(meta=meta, out_dir=page_dir)
     course_name = cfg.get("course", "Course home")
     # Back links land on the matching section of the course home page.
     section = "#lessons" if meta.doc_type == "lesson" else "#handouts"
     home_href = "../" * depth + section
     home = view_box(home_href, f"← {html_mod.escape(course_name)}")
-    nav = " ".join([home, file_box(pdf_name, "PDF")])
-    build_html(
-        text, meta, True, page_dir / "index.html", src.parent, br,
-        nav=nav, sb_home=(home_href, course_name),
+    boxes = [file_box(pdf_name, "PDF")]
+    if solutions_on:
+        boxes.append(file_box(sol_pdf_name, "Solutions PDF"))
+    page_nav = [home]
+    if solutions_on:
+        page_nav.append(view_box("solutions.html", "Solutions"))
+    page_nav += boxes
+    html_kwargs = dict(
         extra_preamble=extra_preamble, theme=theme,
         image_search=[repo_root] if repo_root else None,
         tikz_inputs=repo_root,
@@ -506,17 +552,41 @@ def _build_page_doc(
         favicon=("../" * depth + favicon) if favicon else "",
         banner=("../" * depth + banner) if banner else "",
     )
+    build_html(
+        page_text, meta, include_solutions, page_dir / "index.html",
+        src.parent, br, nav=" ".join(page_nav),
+        sb_home=(home_href, course_name), **html_kwargs,
+    )
     ab.files["html"] = page_dir / "index.html"
+
+    if solutions_on:
+        sol_nav = [home, view_box("./", "Handout")] + boxes
+        build_html(
+            variants["solutions_web"], meta, True, page_dir / "solutions.html",
+            src.parent, br, nav=" ".join(sol_nav),
+            sb_home=(home_href, course_name), **html_kwargs,
+        )
+        ab.files["solutions_html"] = page_dir / "solutions.html"
 
     if compile_pdfs:
         pdf_path, error = compile_variant_pdf(
-            text, page_dir, src.parent, pdf_name, "_hwg_page",
+            page_text, page_dir, src.parent, pdf_name, "_hwg_page",
             extra_inputs=repo_root if extra_preamble else None,
         )
         if pdf_path:
             ab.files["pdf"] = pdf_path
         if error:
             result.errors.append(f"{src.name}: {error}")
+        if solutions_on:
+            pdf_path, error = compile_variant_pdf(
+                variants["solutions"], page_dir, src.parent, sol_pdf_name,
+                "_hwg_page_solutions",
+                extra_inputs=repo_root if extra_preamble else None,
+            )
+            if pdf_path:
+                ab.files["solutions_pdf"] = pdf_path
+            if error:
+                result.errors.append(f"{src.name}: {error}")
 
     result.warnings.extend(f"{src.name}: {w}" for w in br.warnings)
     result.assignments.append(ab)
@@ -656,13 +726,20 @@ def render_index(
             title = e(latex_plain(a.meta.title))
             label = f"{label}: {title}" if label else title
         label = label or "Handout"
-        pdf = _page_pdf_name(a.meta, _slug(a.meta.number))
+        slug = _slug(a.meta.number)
+        pdf = _page_pdf_name(a.meta, slug)
+        sol_pdf = _page_pdf_name(a.meta, slug, solutions=True)
+        solutions_on = a.has_solutions and a.released
+        links = [view_box(a.rel_url, f"Handout {num}" if num else label)]
+        if solutions_on:
+            links.append(view_box(f"{a.rel_url}solutions.html", "Solutions"))
+        links.append(file_box(f"{a.rel_url}{pdf}", "Handout PDF"))
+        if solutions_on:
+            links.append(file_box(f"{a.rel_url}{sol_pdf}", "Solutions PDF"))
         top_cards.append(
             f'<div class="assignment">\n'
             f'<h2><a href="{a.rel_url}">{label}</a>{due_span(a)}</h2>\n'
-            f'<div class="links">'
-            f'{view_box(a.rel_url, f"Handout {num}" if num else label)} '
-            f'{file_box(f"{a.rel_url}{pdf}", "Handout PDF")}</div>\n</div>'
+            f'<div class="links">{" ".join(links)}</div>\n</div>'
         )
     for stem, files in handout_files or []:
         pretty = _pretty_title(stem)

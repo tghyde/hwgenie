@@ -426,3 +426,27 @@ def test_sample_with_clear_marker(tmp_path):
     assert "& 16" not in sub                    # answer-row values cleared
     assert "$p$ & 3 & 5 & 7" in sub             # header row kept
     assert "%CLEAR" not in sub
+
+
+def test_handoutonly_resolved_per_variant():
+    from hwgenie.build import make_variants
+
+    src = (
+        "\\documentclass{article}\n\\usepackage{hwgenie}\n"
+        "\\hwtype{handout}\n\\hwtitle{Guide}\n\\hwsolutions{no}\n"
+        "\\begin{document}\n\\begin{problem}\nDraw it.\n"
+        "\\handoutonly{%\n\\begin{center}BLANK GRID\\end{center}}\n"
+        "\\begin{solution}\nFILLED GRID\n\\end{solution}\n"
+        "\\end{problem}\n\\end{document}\n"
+    )
+    v = make_variants(src)
+    # handout: wrapper gone, body kept
+    assert "\\handoutonly" not in v["handout"]
+    assert "BLANK GRID" in v["handout"]
+    assert "FILLED GRID" not in v["handout"]
+    # solutions (PDF + web) and submission: macro and body gone
+    for key in ("solutions", "solutions_web", "submission"):
+        assert "\\handoutonly" not in v[key], key
+        assert "BLANK GRID" not in v[key], key
+    assert "FILLED GRID" in v["solutions"]
+    assert "\\hwvariant{Solutions}" in v["solutions_web"]

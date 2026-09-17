@@ -11,6 +11,8 @@ import re
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
+from pylatexenc.latexwalker import LatexGroupNode, LatexMacroNode
+
 from . import texscan
 
 Edit = Tuple[int, int, str]
@@ -200,6 +202,51 @@ def inject_variant(text: str, label: str) -> str:
     if not m:
         return text
     return text[: m.end()] + f"\n\\hwvariant{{{label}}}" + text[m.end():]
+
+
+def handoutonly_edits(text: str, nodes, mode: str) -> List[Edit]:
+    """\\handoutonly{...} marks student-only content (a blank grid the
+    solution redraws filled in).  mode='unwrap' keeps the body and drops the
+    wrapper (handout); mode='remove' drops macro and body (solutions,
+    submission).  Resolving it textually keeps every consumer -- PDF
+    compile, HTML converter, tikz->svg diagram count -- in agreement
+    without relying on the style file's definition."""
+    edits: List[Edit] = []
+
+    def visit(nodelist) -> None:
+        items = [n for n in nodelist if n is not None]
+        for k, n in enumerate(items):
+            if isinstance(n, LatexMacroNode) and n.macroname == "handoutonly":
+                arg = None
+                argd = getattr(n, "nodeargd", None)
+                if argd is not None and getattr(argd, "argnlist", None):
+                    parsed = [a for a in argd.argnlist if a is not None]
+                    if parsed:
+                        arg = parsed[-1]
+                if arg is None and k + 1 < len(items) and isinstance(
+                        items[k + 1], LatexGroupNode):
+                    arg = items[k + 1]
+                if arg is not None:
+                    start, end = n.pos, arg.pos + arg.len
+                    if mode == "remove":
+                        edits.append((start, end, ""))
+                    elif mode == "unwrap":
+                        # Two edits (opening "\handoutonly{" and closing "}")
+                        # so edits inside the body still apply.
+                        edits.append((start, arg.pos + 1, ""))
+                        edits.append((end - 1, end, ""))
+                    else:
+                        raise ValueError(mode)
+            for c in texscan._children(n):
+                nl = getattr(c, "nodelist", None)
+                if nl:
+                    visit(nl)
+            nl = getattr(n, "nodelist", None)
+            if nl:
+                visit(nl)
+
+    visit(nodes)
+    return edits
 
 
 def env_removal_edits(text: str, nodes, names) -> List[Edit]:
