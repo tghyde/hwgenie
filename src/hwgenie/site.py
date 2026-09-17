@@ -647,6 +647,32 @@ details.reading > summary::before {
 details.reading:not([open]) > summary::before { transform: rotate(-90deg); }
 details.reading > .reading-body { margin-top: .55rem; }
 details.reading > .reading-body > :last-child { margin-bottom: 0; }
+/* Older readings: a compact date + links log under the current card. */
+table.reading-log {
+  width: 100%;
+  border-collapse: collapse;
+  margin: .9rem 0 1.1rem;
+  font-size: .92rem;
+}
+table.reading-log th {
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: .72rem;
+  font-weight: 600;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  color: var(--muted);
+  text-align: left;
+  padding: .2rem .6rem .35rem;
+  border-bottom: 1px solid var(--border);
+}
+table.reading-log td {
+  padding: .3rem .6rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: baseline;
+}
+table.reading-log tr:last-child td { border-bottom: none; }
+table.reading-log td:first-child { white-space: nowrap; width: 1%; }
+table.reading-log tr:hover td { background: var(--hover-bg); }
 /* Section headers: centered, flanked by long dashes. */
 h2.index-head {
   display: flex;
@@ -663,6 +689,21 @@ h2.index-head::before, h2.index-head::after {
   opacity: .6;
 }
 """
+
+
+_LINK_RE = re.compile(r"<a\b[^>]*>.*?</a>", re.S)
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def reading_log_cell(body_html: str) -> str:
+    """The compact-table cell for an older reading: just its links (in
+    order, comma-separated), falling back to the description's plain text
+    when it has none."""
+    links = [re.sub(r"\s+", " ", m.group(0)).strip()
+             for m in _LINK_RE.finditer(body_html)]
+    if links:
+        return ", ".join(links)
+    return re.sub(r"\s+", " ", _TAG_RE.sub("", body_html)).strip()
 
 
 def render_index(
@@ -753,15 +794,30 @@ def render_index(
             f'<div class="links">{boxes}</div>\n</div>'
         )
 
-    # Reading assignments fold to just their due-date line; only the first
-    # (newest — the file is kept newest-first) entry is open by default.
+    # Reading assignments: the first (newest — the file is kept
+    # newest-first) entry is a full card, open by default. Older entries
+    # collapse into a compact log table of date + just the links pulled
+    # out of the description.
     reading_cards = []
     for k, (due, body_html) in enumerate(readings or []):
+        if k == 0:
+            reading_cards.append(
+                '<details class="assignment reading" open>\n'
+                f"<summary>{e(latex_plain(due))}</summary>\n"
+                f'<div class="reading-body">\n{body_html}\n</div>\n</details>'
+            )
+            continue
+        if k == 1:
+            reading_cards.append(
+                '<table class="reading-log">\n'
+                "<thead><tr><th>Date</th><th>Reading</th></tr></thead>\n<tbody>"
+            )
         reading_cards.append(
-            f'<details class="assignment reading"{" open" if k == 0 else ""}>\n'
-            f"<summary>{e(latex_plain(due))}</summary>\n"
-            f'<div class="reading-body">\n{body_html}\n</div>\n</details>'
+            f"<tr><td>{e(latex_plain(due))}</td>"
+            f"<td>{reading_log_cell(body_html)}</td></tr>"
         )
+    if len(reading_cards) > 1:
+        reading_cards.append("</tbody>\n</table>")
 
     lesson_cards = []
     for a in lessons:

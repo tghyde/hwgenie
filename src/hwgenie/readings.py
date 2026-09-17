@@ -3,8 +3,9 @@ section on the course home page.
 
 The file holds \\reading{<due date>}{<description>} entries; the description
 is ordinary LaTeX (\\href, \\emph, math). Entries render in file order, so
-the file is kept newest-first — the top entry is the current assignment and
-is the only card unfolded by default on the site.
+the file is kept newest-first — the top entry is the current assignment,
+shown as a full card; older entries become rows of a compact date + links
+table (see site.reading_log_cell).
 """
 from __future__ import annotations
 

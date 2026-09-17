@@ -285,7 +285,10 @@ def test_readings_section(repo):
         "\\reading{Wednesday, September 9}{\n"
         "  Read \\href{https://example.com/ch2}{Chapter 2} about $x^2$.\n"
         "}\n"
-        "\\reading{Friday, September 4}{Read \\emph{Chapter 1}.}\n",
+        "\\reading{Friday, September 4}{Read \\emph{Chapter 1}.}\n"
+        "\\reading{Monday, August 31}{Read the\n"
+        "  \\href{https://example.com/pre}{Preface} and\n"
+        "  \\href{https://example.com/ch1}{Chapter 1}.}\n",
         encoding="utf-8",
     )
     result = build_site(repo, compile_pdfs=False, today=date(2025, 10, 15))
@@ -299,18 +302,29 @@ def test_readings_section(repo):
     assert index.index(head) < index.index('id="problem-sets"')
     assert '<a href="#readings">Readings</a>' in index
 
-    # Newest (first in file) card is open, at the top; the rest fold to
-    # just their due-date summary.
-    first = index.index('<details class="assignment reading" open>')
-    second = index.index('<details class="assignment reading">')
-    assert first < second
-    assert index.count('<details class="assignment reading" open>') == 1
-    assert index.index("<summary>Wednesday, September 9</summary>") < \
-        index.index("<summary>Friday, September 4</summary>")
-    # Descriptions are converted LaTeX: links, emphasis, math for KaTeX.
+    # Newest (first in file) entry is a full open card with its converted
+    # description: links, math for KaTeX.
+    assert index.count('<details class="assignment reading"') == 1
+    card = index.index('<details class="assignment reading" open>')
+    assert "<summary>Wednesday, September 9</summary>" in index
     assert '<a href="https://example.com/ch2">Chapter 2</a>' in index
-    assert "<em>Chapter 1</em>" in index
     assert "$x^2$" in index
+
+    # Older entries collapse into one compact log table after the card:
+    # date + just the links from the description (in order), or the plain
+    # text when there are none.
+    table = index.index('<table class="reading-log">')
+    assert card < table
+    assert index.count("<table class") == 1
+    assert "<tr><th>Date</th><th>Reading</th></tr>" in index
+    assert "<tr><td>Friday, September 4</td><td>Read Chapter 1.</td></tr>" in index
+    assert (
+        "<tr><td>Monday, August 31</td>"
+        '<td><a href="https://example.com/pre">Preface</a>, '
+        '<a href="https://example.com/ch1">Chapter 1</a></td></tr>'
+    ) in index
+    assert index.index("Friday, September 4</td>") < \
+        index.index("Monday, August 31</td>")
 
 
 def test_no_readings_section_without_entries(repo):
