@@ -42,6 +42,28 @@ def test_problem_numbering_and_task_span():
     assert '<span class="task">Prove <span class="nw">$1+1=2$.</span></span>' in html
 
 
+def test_blue_around_block_content_becomes_div():
+    # math301 ps03 3.1.5: \blue{...} wrapping text + an enumerate. An inline
+    # <span> here would nest <p> inside <p> and the browser drops the class.
+    _c, html = convert(
+        "\\begin{problem}\n\\begin{enumerate}\n"
+        "\\item \\blue{Prove that the following are equivalent\n"
+        "\\begin{enumerate}\n\\item $x$,\n\\item $y$.\n\\end{enumerate}\n}\n"
+        "\\end{enumerate}\n\\end{problem}"
+    )
+    assert '<div class="task">\n<p>Prove that the following are equivalent</p>' in html
+    assert "</ol>\n</div>" in html
+    assert '<span class="task"><p>' not in html
+    assert "<p><div" not in html
+    # \textcolor takes the same path; plain inline use is unchanged.
+    _c, html = convert(
+        "\\begin{problem}\n\\textcolor{red}{Note\n\n\\begin{itemize}\\item a\\end{itemize}}"
+        " and \\textcolor{red}{inline}.\n\\end{problem}"
+    )
+    assert '<div class="alert">\n<p>Note</p>\n<ul>' in html
+    assert '<span class="alert">inline</span>' in html
+
+
 def test_solutions_toggle():
     body = "\\begin{problem}\nP\n\\begin{solution}\nSecret.\n\\end{solution}\n\\end{problem}"
     _c, with_sol = convert(body, include_solutions=True)

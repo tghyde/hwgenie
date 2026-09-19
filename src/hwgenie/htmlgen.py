@@ -389,7 +389,7 @@ class HtmlConverter:
             open_, close = WRAP_MACROS[name]
             args, j = self._macro_args(nodes, i, 1)
             inner = self.convert_inline(args[0].nodelist) if args else ""
-            flow.inline(open_ + inner + close)
+            self._emit_wrapped(flow, open_, close, inner)
             return j
         if name == "textcolor":
             args, j = self._macro_args(nodes, i, 2)
@@ -398,9 +398,10 @@ class HtmlConverter:
                 cls = {"blue": "task", "red": "alert"}.get(color)
                 inner = self.convert_inline(args[1].nodelist)
                 if cls:
-                    flow.inline(f'<span class="{cls}">{inner}</span>')
+                    open_ = f'<span class="{cls}">'
                 else:
-                    flow.inline(f'<span style="color:{esc(color)}">{inner}</span>')
+                    open_ = f'<span style="color:{esc(color)}">'
+                self._emit_wrapped(flow, open_, "</span>", inner)
             return j
         if name == "includegraphics":
             args, j = self._macro_args(nodes, i, 2)
@@ -593,6 +594,26 @@ class HtmlConverter:
         flow = Flow()
         self.walk(nodes, flow)
         return _unwrap_single_p(flow.result())
+
+    def _emit_wrapped(self, flow: Flow, open_: str, close: str,
+                      inner: str) -> None:
+        """Emit inner HTML inside an inline wrapper such as \\blue{...}.
+
+        Usually the argument is a run of text and stays inline. When it
+        holds block content (a list, a display environment, several
+        paragraphs), a <span> around it would end up inside the enclosing
+        <p>, and the browser closes both the paragraph and the span at the
+        first nested block, so the wrapper silently stops applying. Such
+        content is emitted as its own block instead, and a <span> wrapper
+        becomes a <div> carrying the same class or style.
+        """
+        if not _BLOCK_HTML_RE.match(inner):
+            flow.inline(open_ + inner + close)
+            return
+        if open_.startswith("<span"):
+            open_ = "<div" + open_[len("<span"):]
+            close = "</div>"
+        flow.block(f"{open_}\n{inner}\n{close}")
 
     def _split_on_newline_macro(self, nodes) -> List[str]:
         segments: List[List] = [[]]
@@ -1136,6 +1157,13 @@ def _group_text(group) -> str:
         elif isinstance(c, LatexMacroNode) and c.macroname in CHAR_MACROS:
             out.append({"&amp;": "&"}.get(CHAR_MACROS[c.macroname], CHAR_MACROS[c.macroname]))
     return "".join(out)
+
+
+# HTML that must not sit inside a <p>: what Flow.block() and the paragraph
+# builder produce, as opposed to inline spans, math and text.
+_BLOCK_HTML_RE = re.compile(
+    r"\s*<(p|ol|ul|div|table|figure|blockquote|details|pre|h[1-6])\b"
+)
 
 
 def _unwrap_single_p(html: str) -> str:
