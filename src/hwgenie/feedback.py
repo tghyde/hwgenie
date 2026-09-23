@@ -651,7 +651,8 @@ def _update_gradebook(app, ctx, statuses: dict, exported: list[str],
             "action": (st.action if st and st.is_late else "none"),
             "penalty_pct": st.penalty_pct if st else 0,
             "penalty_pts": st.penalty_pts if st else 0,
-            "slug": slug, "exported": now,
+            "slug": slug, "moodle_id": str(unit["moodle_id"]),
+            "exported": now,
         }
         if st and st.is_late:
             counts["late"] += 1
@@ -664,7 +665,7 @@ def _update_gradebook(app, ctx, statuses: dict, exported: list[str],
             elif st.penalty_pts:
                 counts["penalized"] += 1
         person = people.get(str(unit["moodle_id"])) or {}
-        book.record(str(unit["moodle_id"]), ctx.key, entry,
+        book.record(late_mod.student_key(unit), ctx.key, entry,
                     name=person.get("name") or display_name(slug),
                     email=person.get("email", ""))
     book.save()

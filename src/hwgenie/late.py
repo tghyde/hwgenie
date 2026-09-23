@@ -255,8 +255,19 @@ def save_decision(folder: Path, slug: str, action: str,
 
 # -------------------------------------------------------------- gradebook --
 
+def student_key(unit: dict) -> str:
+    """The key a student is filed under in the course gradebook.
+
+    Moodle's participant number (``moodle_id``) is minted per assignment,
+    so it cannot tie a student's ps01 to their ps02; the submission slug
+    (``Lastname-Firstname``, from the download folder name) is the same
+    every time."""
+    return str(unit.get("slug") or unit.get("moodle_id") or "")
+
+
 class Gradebook:
-    """The course-level record: ``<course>/gradebook.json`` (+ .csv)."""
+    """The course-level record: ``<course>/gradebook.json`` (+ .csv),
+    one entry per student keyed by :func:`student_key`."""
 
     def __init__(self, path: Path):
         self.path = Path(path)
@@ -271,6 +282,45 @@ class Gradebook:
                 pol.update(loaded.get("policy") or {})
                 self.data = {"policy": pol,
                              "students": loaded.get("students") or {}}
+                if self._migrate():
+                    try:
+                        self.save()
+                    except OSError:
+                        pass
+
+    def _migrate(self) -> bool:
+        """Re-key records filed under per-assignment Moodle participant
+        numbers (hwgenie < 0.56) by student slug, merging the one-per-
+        assignment entries that left behind.  Returns True if anything
+        changed."""
+        students = self.data["students"]
+        legacy = [k for k in students if k.isdigit()]
+        if not legacy:
+            return False
+        merged: dict[str, dict] = {}
+        for key, s in students.items():
+            asg = s.get("assignments") or {}
+            target = key
+            if key.isdigit():
+                slugs = sorted({a.get("slug") for a in asg.values()
+                                if a.get("slug")})
+                if slugs:
+                    target = slugs[0]
+                for a in asg.values():
+                    a.setdefault("moodle_id", key)
+            dst = merged.setdefault(target, {"name": "", "email": "",
+                                             "assignments": {},
+                                             "free_late_used": None})
+            dst["name"] = dst["name"] or s.get("name", "")
+            dst["email"] = dst["email"] or s.get("email", "")
+            for akey, a in asg.items():
+                dst["assignments"].setdefault(akey, a)
+            used = s.get("free_late_used")
+            if used and (not dst["free_late_used"]
+                         or used < dst["free_late_used"]):
+                dst["free_late_used"] = used
+        self.data["students"] = merged
+        return True
 
     @classmethod
     def for_folder(cls, folder: Path) -> "Gradebook":
@@ -280,18 +330,18 @@ class Gradebook:
     def policy(self) -> dict:
         return self.data["policy"]
 
-    def student(self, moodle_id: str) -> dict:
+    def student(self, skey: str) -> dict:
         return self.data["students"].setdefault(
-            str(moodle_id), {"name": "", "email": "", "assignments": {},
-                             "free_late_used": None})
+            str(skey), {"name": "", "email": "", "assignments": {},
+                        "free_late_used": None})
 
-    def free_late_used_on(self, moodle_id: str) -> str | None:
-        s = self.data["students"].get(str(moodle_id))
+    def free_late_used_on(self, skey: str) -> str | None:
+        s = self.data["students"].get(str(skey))
         return s.get("free_late_used") if s else None
 
-    def record(self, moodle_id: str, key: str, entry: dict,
+    def record(self, skey: str, key: str, entry: dict,
                name: str = "", email: str = "") -> None:
-        s = self.student(moodle_id)
+        s = self.student(skey)
         if name:
             s["name"] = name
         if email:
@@ -318,10 +368,10 @@ class Gradebook:
     def _write_csv(self) -> None:
         keys = self.assignment_keys()
         rows = []
-        for mid, s in sorted(self.data["students"].items(),
-                             key=lambda kv: (kv[1].get("name") or "",
-                                             kv[0])):
-            row = [s.get("name", ""), s.get("email", ""), mid]
+        for skey, s in sorted(self.data["students"].items(),
+                              key=lambda kv: (kv[1].get("name") or "",
+                                              kv[0])):
+            row = [s.get("name", ""), s.get("email", ""), skey]
             lates = []
             for k in keys:
                 a = s["assignments"].get(k)
@@ -335,7 +385,7 @@ class Gradebook:
                         f"({a.get('action', 'auto')})")
             row += [s.get("free_late_used") or "", "; ".join(lates)]
             rows.append(row)
-        header = ["student", "email", "moodle_id"]
+        header = ["student", "email", "submission"]
         for k in keys:
             header += [k, f"{k} out of"]
         header += ["free late used on", "late submissions"]
@@ -523,11 +573,10 @@ class LateContext:
         self.policy = self.book.policy if self.book else dict(DEFAULT_POLICY)
 
     def status(self, unit: dict) -> LateStatus:
-        mid = str(unit.get("moodle_id", ""))
         return resolve(
             unit, due=self.due, decision=self.decisions.get(unit["slug"]),
             policy=self.policy, out_of=self.out_of, key=self.key,
-            free_used_on=(self.book.free_late_used_on(mid)
+            free_used_on=(self.book.free_late_used_on(student_key(unit))
                           if self.book else None),
             have_book=self.book is not None, tz=self.tz)
 

@@ -1304,9 +1304,11 @@ def course_assignments(course: Path) -> list[Path]:
 
 def gradebook_data(course: Path) -> dict:
     """The live course gradebook: every assignment folder under the course
-    × every student seen in any of them.  Exported totals come from
-    gradebook.json; everything else is read straight from the grading
-    folders (progress, provisional total under the late policy)."""
+    × every student seen in any of them, one row per student (keyed by
+    submission slug — Moodle's participant numbers change per
+    assignment).  Exported totals come from gradebook.json; everything
+    else is read straight from the grading folders (progress,
+    provisional total under the late policy)."""
     from . import late as late_mod
     from .feedback import (_split_totals, _worksheet_people, display_name,
                            find_worksheet)
@@ -1318,9 +1320,9 @@ def gradebook_data(course: Path) -> dict:
         errors.append(str(e))
         book = late_mod.Gradebook(course / "missing-gradebook.json")
     students: dict[str, dict] = {}
-    for mid, rec in book.data["students"].items():
-        students[mid] = {"moodle_id": mid, "name": rec.get("name", ""),
-                         "email": rec.get("email", ""), "cells": {}}
+    for skey, rec in book.data["students"].items():
+        students[skey] = {"slug": skey, "name": rec.get("name", ""),
+                          "email": rec.get("email", ""), "cells": {}}
     keys: list[str] = []
     folders: list[str] = []
     for folder in course_assignments(course):
@@ -1340,8 +1342,9 @@ def gradebook_data(course: Path) -> dict:
         out_of = sum(rp.max or 0 for rp in app.rubric if not rp.ec)
         for u in app.units:
             mid = str(u["moodle_id"])
-            st = students.setdefault(mid, {"moodle_id": mid, "name": "",
-                                           "email": "", "cells": {}})
+            skey = late_mod.student_key(u)
+            st = students.setdefault(skey, {"slug": skey, "name": "",
+                                            "email": "", "cells": {}})
             person = people.get(mid) or {}
             st["name"] = st["name"] or person.get("name") or \
                 display_name(u["slug"])
@@ -1351,10 +1354,10 @@ def gradebook_data(course: Path) -> dict:
             graded = sum(1 for part in data["parts"].values()
                          if part["status"] == "graded")
             ls = ctx.status(u) if ctx else None
-            exported = ((book.data["students"].get(mid) or {})
+            exported = ((book.data["students"].get(skey) or {})
                         .get("assignments", {}).get(key))
             st["cells"][key] = {
-                "slug": u["slug"], "folder": str(folder),
+                "slug": u["slug"], "moodle_id": mid, "folder": str(folder),
                 "graded": graded, "n_parts": app.n_parts,
                 "raw": raw, "ec": ec, "out_of": out_of,
                 "provisional": (late_mod.apply_penalty(raw, ls) if ls
@@ -1364,7 +1367,7 @@ def gradebook_data(course: Path) -> dict:
                 "exported": exported,
             }
     for st in students.values():
-        used = book.free_late_used_on(st["moodle_id"])
+        used = book.free_late_used_on(st["slug"])
         prov = None
         if not used:
             for key in keys:
@@ -1377,7 +1380,7 @@ def gradebook_data(course: Path) -> dict:
     def by_last(st: dict) -> tuple:
         words = st["name"].split()
         return ((words[-1].lower() if words else ""), st["name"].lower(),
-                st["moodle_id"])
+                st["slug"])
     rows = sorted(students.values(), key=by_last)
     return {"course": str(course), "name": course.name, "keys": keys,
             "folders": folders,
@@ -1455,7 +1458,7 @@ def render_gradebook(course: Path) -> str:
                 free = '<span class="ok">available</span>'
             trs.append(
                 f'<tr><td class="nm" title="{esc(st["email"])}">'
-                f'{esc(st["name"] or st["moodle_id"])}</td>'
+                f'{esc(st["name"] or st["slug"])}</td>'
                 + "".join(cells) + f'<td class="free">{free}</td></tr>')
         body += (f'<table class="gb"><thead><tr><th>Student</th>{head}'
                  '<th>Free late</th></tr></thead><tbody>'

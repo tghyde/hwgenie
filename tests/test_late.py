@@ -179,25 +179,25 @@ def test_save_decision_file(tmp_path):
 
 def test_gradebook_tracks_free_late(tmp_path):
     book = late.Gradebook(tmp_path / "gradebook.json")
-    book.record("111", "ps01", {"total": 38, "out_of": 40, "hours_late": 2,
-                                "action": "free"}, name="Jane Doe",
-                email="jd@x.edu")
-    book.record("111", "ps02", {"total": 30, "out_of": 40, "hours_late": 0,
-                                "action": "none"})
+    book.record("Doe-Jane", "ps01", {"total": 38, "out_of": 40,
+                                     "hours_late": 2, "action": "free"},
+                name="Jane Doe", email="jd@x.edu")
+    book.record("Doe-Jane", "ps02", {"total": 30, "out_of": 40,
+                                     "hours_late": 0, "action": "none"})
     book.save()
     again = late.Gradebook(tmp_path / "gradebook.json")
-    assert again.free_late_used_on("111") == "ps01"
-    assert again.free_late_used_on("222") is None
+    assert again.free_late_used_on("Doe-Jane") == "ps01"
+    assert again.free_late_used_on("Roe-Rick") is None
     assert again.assignment_keys() == ["ps01", "ps02"]
     rows = list(csv.reader((tmp_path / "gradebook.csv").open()))
-    assert rows[0] == ["student", "email", "moodle_id", "ps01", "ps01 out of",
-                       "ps02", "ps02 out of", "free late used on",
-                       "late submissions"]
-    assert rows[1][:5] == ["Jane Doe", "jd@x.edu", "111", "38", "40"]
+    assert rows[0] == ["student", "email", "submission", "ps01",
+                       "ps01 out of", "ps02", "ps02 out of",
+                       "free late used on", "late submissions"]
+    assert rows[1][:5] == ["Jane Doe", "jd@x.edu", "Doe-Jane", "38", "40"]
     assert rows[1][7] == "ps01" and "ps01: 2 h late (free)" in rows[1][8]
     # changing the decision on re-export releases the free late
-    again.record("111", "ps01", {"total": 36, "out_of": 40, "hours_late": 2,
-                                 "action": "apply"})
+    again.record("Doe-Jane", "ps01", {"total": 36, "out_of": 40,
+                                      "hours_late": 2, "action": "apply"})
     assert again.free_late_used_on("111") is None
 
 
@@ -424,8 +424,8 @@ def _ws_grades(result):
 def test_export_applies_policy(course):
     # Rick already spent his free late on ps01
     book = late.Gradebook.for_folder(course)
-    book.record("222", "ps01", {"total": 9, "out_of": 11.5,
-                                "hours_late": 3, "action": "free"})
+    book.record("Roe-Rick", "ps01", {"total": 9, "out_of": 11.5,
+                                     "hours_late": 3, "action": "free"})
     book.save()
 
     result = build_feedback(course, pdf=False)
@@ -455,12 +455,50 @@ def test_export_applies_policy(course):
     assert "latenote" not in html_p.split("</header>")[0].split("<header")[1]
 
     book = late.Gradebook.for_folder(course)
-    assert book.free_late_used_on("111") == "ps02"
-    assert book.free_late_used_on("222") == "ps01"
-    jane_e = book.data["students"]["111"]["assignments"]["ps02"]
+    assert book.free_late_used_on("Doe-Jane") == "ps02"
+    assert book.free_late_used_on("Roe-Rick") == "ps01"
+    jane_e = book.data["students"]["Doe-Jane"]["assignments"]["ps02"]
     assert jane_e["total"] == 10 and jane_e["action"] == "free"
-    assert book.data["students"]["111"]["email"] == "111@x.edu"
+    assert jane_e["moodle_id"] == "111"
+    assert book.data["students"]["Doe-Jane"]["email"] == "111@x.edu"
     assert (late.course_dir(course) / "gradebook.csv").is_file()
+
+
+def test_gradebook_migrates_per_assignment_moodle_ids(tmp_path):
+    """hwgenie < 0.56 keyed the course gradebook by Moodle's participant
+    number, which is minted per assignment — so one student became one
+    record per export.  Loading such a file merges them by slug, keeps
+    the free-late spend, and rewrites the file."""
+    path = tmp_path / "gradebook.json"
+    path.write_text(json.dumps({"students": {
+        "1249800": {"name": "Chloe Ahn", "email": "", "free_late_used": None,
+                    "assignments": {"ps01": {"total": 9, "slug": "Ahn-Chloe"}}},
+        "1252124": {"name": "", "email": "ca@x.edu", "free_late_used": "ps02",
+                    "assignments": {"ps02": {"total": 8, "slug": "Ahn-Chloe",
+                                             "action": "free"}}},
+        "1252279": {"name": "Simon Amonette", "email": "",
+                    "free_late_used": None,
+                    "assignments": {"ps02": {"total": 7,
+                                             "slug": "Amonette-Simon"}}},
+    }}))
+    book = late.Gradebook(path)
+    assert sorted(book.data["students"]) == ["Ahn-Chloe", "Amonette-Simon"]
+    chloe = book.data["students"]["Ahn-Chloe"]
+    assert chloe["name"] == "Chloe Ahn" and chloe["email"] == "ca@x.edu"
+    assert sorted(chloe["assignments"]) == ["ps01", "ps02"]
+    assert chloe["assignments"]["ps01"]["moodle_id"] == "1249800"
+    assert chloe["assignments"]["ps02"]["moodle_id"] == "1252124"
+    assert book.free_late_used_on("Ahn-Chloe") == "ps02"
+    # persisted, so the CSV twin and every later load agree
+    again = late.Gradebook(path)
+    assert sorted(again.data["students"]) == ["Ahn-Chloe", "Amonette-Simon"]
+    rows = list(csv.reader((tmp_path / "gradebook.csv").open()))
+    assert rows[0][:3] == ["student", "email", "submission"]
+    assert len(rows) == 3
+    # the live status now sees the free late spent on an earlier export
+    unit = {"slug": "Ahn-Chloe", "moodle_id": "1253000",
+            "submitted": "2026-09-05T01:00-04:00"}
+    assert late.student_key(unit) == "Ahn-Chloe"
 
 
 def test_export_hold_and_waive(course):
@@ -475,9 +513,9 @@ def test_export_hold_and_waive(course):
     html = (result.out_dir / "feedback/Roe-Rick/feedback.html").read_text()
     assert "Total: pending" in html and "pending a conversation" in html
     book = late.Gradebook.for_folder(course)
-    assert book.data["students"]["222"]["assignments"]["ps02"]["total"] \
+    assert book.data["students"]["Roe-Rick"]["assignments"]["ps02"]["total"] \
         is None
-    assert book.free_late_used_on("111") is None        # waived, not spent
+    assert book.free_late_used_on("Doe-Jane") is None   # waived, not spent
 
 
 def test_export_without_due_date_is_unchanged(tmp_path):
@@ -830,24 +868,26 @@ def test_gradebook_data_live_and_exported(course):
     late.write_setting(ps03, "due", "2026-09-11 23:59")
     # ps02 was exported for Rick only (say), with his free late spent
     book = late.Gradebook.for_folder(course)
-    book.record("222", "ps02", {"total": 8.85, "raw": 10, "out_of": 11.5,
-                                "hours_late": 30, "action": "free",
-                                "penalty_pts": 0, "exported": "2026-09-07T00:00"},
+    book.record("Roe-Rick", "ps02", {"total": 8.85, "raw": 10, "out_of": 11.5,
+                                     "hours_late": 30, "action": "free",
+                                     "penalty_pts": 0,
+                                     "exported": "2026-09-07T00:00"},
                 name="Rick Roe")
     book.save()
     d = gradebook_data(course_dir)
     assert d["keys"] == ["ps02", "ps03"] and d["has_book"]
-    by = {st["moodle_id"]: st for st in d["students"]}
-    jane = by["111"]["cells"]["ps02"]
+    by = {st["slug"]: st for st in d["students"]}
+    assert len(d["students"]) == 3                    # one row per student
+    jane = by["Doe-Jane"]["cells"]["ps02"]
     assert jane["graded"] == 3 and jane["raw"] == 10 and jane["exported"] is None
     assert jane["provisional"] == 10                  # free late → no penalty
     assert jane["late"]["is_late"] and jane["late"]["action"] == "free"
-    assert by["111"]["free_late"] == {"used": None, "provisional": "ps02"}
-    rick = by["222"]
+    assert by["Doe-Jane"]["free_late"] == {"used": None, "provisional": "ps02"}
+    rick = by["Roe-Rick"]
     assert rick["cells"]["ps02"]["exported"]["total"] == 8.85
     assert rick["free_late"]["used"] == "ps02"
-    assert by["111"]["cells"]["ps03"]["graded"] == 0
-    assert "ps03" not in by["333"]["cells"] or by["333"]["cells"]["ps03"]["graded"] == 0
+    assert by["Doe-Jane"]["cells"]["ps03"]["graded"] == 0
+    assert "ps03" not in by["Poe-Pat"]["cells"] or by["Poe-Pat"]["cells"]["ps03"]["graded"] == 0
     page = render_gradebook(course_dir)
     assert "Gradebook — math221" in page
     assert "<b>8.85</b>" in page and "3/3 graded" in page

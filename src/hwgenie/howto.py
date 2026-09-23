@@ -261,9 +261,11 @@ __NAV__
   totals (after the policy), lateness and the action taken in
   <code>gradebook.json</code> one level above the assignment folders
   (e.g. <code>grading-lab/math221/</code>), with a <code>gradebook.csv</code>
-  twin for spreadsheets. It also remembers which assignment consumed
-  the free late, which is how the next export knows the student no
-  longer has one. The <b class="ui">Gradebook</b> button in the header
+  twin for spreadsheets, one entry per student (filed under the
+  submission name, <code>Lastname-Firstname</code>, since Moodle&rsquo;s
+  participant numbers change from one assignment to the next). It also
+  remembers which assignment consumed the free late, which is how the
+  next export knows the student no longer has one. The <b class="ui">Gradebook</b> button in the header
   shows it as a table. Exporting again after changing a decision
   updates the record (and releases the free late if you switched a
   student off it).</p>

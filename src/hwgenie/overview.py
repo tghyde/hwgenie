@@ -84,7 +84,8 @@ def overview_data(app) -> dict:
         person = people.get(mid) or {}
         exported = None
         if book is not None:
-            exported = ((book.data["students"].get(mid) or {})
+            exported = ((book.data["students"]
+                         .get(late_mod.student_key(u)) or {})
                         .get("assignments", {}).get(key))
         units.append({
             "slug": slug, "moodle_id": mid,
