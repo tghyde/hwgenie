@@ -125,6 +125,18 @@ def test_decisions_override():
     assert st.action == "free" and st.notes
 
 
+def test_custom_penalty_overrides_tiers_and_hold():
+    st = _resolve(6 * 24, {"action": "custom", "penalty": 20})
+    assert st.action == "custom" and not st.hold
+    assert st.penalty_pct == 20 and st.penalty_pts == 8.0   # of 40
+    assert st.label == "20% penalty (custom)"
+    assert late.apply_penalty(35, st) == 27
+    st = _resolve(2, {"action": "custom", "penalty": "2.5"})
+    assert st.penalty_pts == 1.0
+    st = _resolve(2, {"action": "custom", "penalty": None})   # hand-edited
+    assert st.penalty_pts == 0 and st.notes
+
+
 def test_extension_moves_the_deadline():
     ext = {"action": "extension",
            "extension": late.iso(datetime(2026, 9, 6, 23, 59, tzinfo=NY))}
@@ -173,6 +185,13 @@ def test_save_decision_file(tmp_path):
     assert "Doe-Jane" not in late.load_decisions(tmp_path)
     with pytest.raises(late.LateError):
         late.save_decision(tmp_path, "Doe-Jane", "banana")
+    for bad in (None, "", "abc", "120", "-5"):
+        with pytest.raises(late.LateError):
+            late.save_decision(tmp_path, "Doe-Jane", "custom", penalty=bad)
+    d = late.save_decision(tmp_path, "Doe-Jane", "custom", penalty="15%",
+                           note="6 days late")
+    assert d["penalty"] == 15 and d["action"] == "custom"
+    assert late.load_decisions(tmp_path)["Doe-Jane"]["penalty"] == 15
 
 
 # ---------------------------------------------------------- gradebook -----
@@ -518,6 +537,20 @@ def test_export_hold_and_waive(course):
     assert book.free_late_used_on("Doe-Jane") is None   # waived, not spent
 
 
+def test_export_custom_penalty(course):
+    late.save_decision(course, "Roe-Rick", "custom", penalty=20,
+                       note="six days late, talked on 9/22")
+    result = build_feedback(course, pdf=False)
+    grades = _ws_grades(result)
+    assert grades["Participant 222"] != ""              # penalized, not held
+    assert result.worksheet["held"] == []
+    html = (result.out_dir / "feedback/Roe-Rick/feedback.html").read_text()
+    assert "a 20% late penalty" in html and "talked on" not in html
+    book = late.Gradebook.for_folder(course)
+    entry = book.data["students"]["Roe-Rick"]["assignments"]["ps02"]
+    assert entry["action"] == "custom" and entry["total"] is not None
+
+
 def test_export_without_due_date_is_unchanged(tmp_path):
     folder = make_grading_folder(tmp_path / "c" / "ps01")
     GradeStore(folder, load_rubric(folder, 3)).update("Doe-Jane", 1,
@@ -565,6 +598,14 @@ def test_api_state_and_late_decision(course):
         assert r["late"]["action"] == "extension" and r["late"]["penalty_pts"] == 0
         client.post("/api/late", {"slug": "Roe-Rick", "action": "extension"},
                     expect=400)
+        r = client.post("/api/late", {"slug": "Roe-Rick", "action": "custom",
+                                      "penalty": "20", "note": "6 days"})
+        assert r["late"]["action"] == "custom"
+        assert r["late"]["penalty_pct"] == 20
+        assert r["late"]["decision"]["penalty"] == 20
+        client.post("/api/late", {"slug": "Roe-Rick", "action": "custom"},
+                    expect=400)
+        client.post("/api/late", {"slug": "Roe-Rick", "action": "apply"})
         client.post("/api/late", {"slug": "Nobody", "action": "waive"},
                     expect=400)
         page = client.get("/gradebook")            # falls back to the

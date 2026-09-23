@@ -22,8 +22,10 @@ facts and the instructor's decisions never overwrite each other:
     action: "auto" (follow the policy — the default when absent),
             "free" (spend the free late), "apply" (penalty even if a free
             late is available), "waive" (no penalty), "extension" (deadline
-            moved to ``extension``, tiers apply from there), or "discuss"
-            (hold the grade out of the Moodle upload).
+            moved to ``extension``, tiers apply from there), "custom"
+            (deduct ``penalty`` percent of the possible points, whatever
+            the tiers say), or "discuss" (hold the grade out of the
+            Moodle upload).
 
 ``<course>/gradebook.json`` (course-level, instructor side)
     per student per assignment: raw and final totals, lateness, action;
@@ -48,7 +50,8 @@ LATE_FILE = "late.json"
 GRADEBOOK_JSON = "gradebook.json"
 GRADEBOOK_CSV = "gradebook.csv"
 
-ACTIONS = ("auto", "free", "apply", "waive", "extension", "discuss")
+ACTIONS = ("auto", "free", "apply", "waive", "extension", "custom",
+           "discuss")
 
 DEFAULT_POLICY = {
     "free_lates": 1,          # free late assignments per student
@@ -227,7 +230,7 @@ def load_decisions(folder: Path) -> dict:
 
 def save_decision(folder: Path, slug: str, action: str,
                   note: str = "", extension: str | None = None,
-                  tz=None) -> dict:
+                  penalty=None, tz=None) -> dict:
     if action not in ACTIONS:
         raise LateError(f"unknown late action {action!r}")
     ext_iso = None
@@ -235,13 +238,16 @@ def save_decision(folder: Path, slug: str, action: str,
         if not extension:
             raise LateError("an extension needs a new deadline")
         ext_iso = iso(parse_due(extension, tz or course_tz(None)))
+    pct = None
+    if action == "custom":
+        pct = parse_penalty(penalty)
     decisions = load_decisions(folder)
     if action == "auto" and not note:
         decisions.pop(slug, None)
     else:
         decisions[slug] = {
             "action": action, "note": (note or "")[:300],
-            "extension": ext_iso,
+            "extension": ext_iso, "penalty": pct,
             "decided": datetime.now(timezone.utc).isoformat(
                 timespec="seconds"),
         }
@@ -250,7 +256,21 @@ def save_decision(folder: Path, slug: str, action: str,
     tmp.write_text(json.dumps(decisions, indent=2) + "\n")
     tmp.replace(path)
     return decisions.get(slug, {"action": "auto", "note": "",
-                                "extension": None})
+                                "extension": None, "penalty": None})
+
+
+def parse_penalty(value) -> float:
+    """A custom penalty as a percentage of the possible points (0-100)."""
+    text = str(value if value is not None else "").strip().rstrip("%").strip()
+    if not text:
+        raise LateError("a custom penalty needs a percentage (e.g. 15)")
+    try:
+        pct = float(text)
+    except ValueError:
+        raise LateError(f"custom penalty {value!r} is not a number")
+    if not 0 <= pct <= 100:
+        raise LateError("a custom penalty is a percentage between 0 and 100")
+    return round(pct, 2)
 
 
 # -------------------------------------------------------------- gradebook --
@@ -460,7 +480,8 @@ class LateStatus:
             "tier_pct": self.tier_pct,
             "tier_hold": self.tier_hold,
             "decision": self.decision or {"action": "auto", "note": "",
-                                          "extension": None},
+                                          "extension": None,
+                                          "penalty": None},
             "action": self.action,
             "penalty_pct": self.penalty_pct,
             "penalty_pts": self.penalty_pts,
@@ -521,6 +542,15 @@ def resolve(unit: dict, *, due: datetime | None, decision: dict | None,
     elif action == "discuss":
         st.action, st.hold = "discuss", True
         st.label = "held for discussion"
+    elif action == "custom":
+        st.action = "custom"
+        try:
+            st.penalty_pct = parse_penalty((decision or {}).get("penalty"))
+        except LateError as e:
+            st.penalty_pct = 0.0
+            st.notes.append(str(e))
+        st.penalty_pts = round(st.penalty_pct / 100.0 * (out_of or 0), 2)
+        st.label = f"{_num(st.penalty_pct)}% penalty (custom)"
     elif action == "free" or (action == "auto" and st.free_available):
         if action == "free" and have_book and st.free_available is False:
             st.notes.append("free late already spent on "

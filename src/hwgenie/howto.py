@@ -253,7 +253,11 @@ __NAV__
   policy</b>, <b class="ui">Use the free late</b>, <b class="ui">Apply
   the penalty</b>, <b class="ui">Waive</b> (a two-minutes-late grace),
   <b class="ui">Extension to&hellip;</b> (tiers then count from the new
-  deadline), or <b class="ui">Hold</b>. Add a note if you like and click
+  deadline), <b class="ui">Custom penalty&hellip;</b> (type the percent of
+  the possible points to deduct &mdash; the way to grade held work after
+  the conversation, e.g. 20% for a submission six days late), or
+  <b class="ui">Hold</b>. Add a note if you like (it stays on your side;
+  the student&rsquo;s feedback sheet states the penalty itself) and click
   <b class="ui">Save</b>. Decisions live in <code>late.json</code> in the
   grading folder &mdash; never pushed or pulled &mdash; so pulling grades
   cannot undo them.</p>

@@ -267,7 +267,8 @@ class GradingApp:
             late_mod.save_decision(
                 self.folder, slug, str(req.get("action", "auto")),
                 note=str(req.get("note") or ""),
-                extension=req.get("extension") or None, tz=ctx.tz)
+                extension=req.get("extension") or None,
+                penalty=req.get("penalty"), tz=ctx.tz)
         except late_mod.LateError as e:
             raise GradeError(str(e))
         ctx, _ = self.late_context()
@@ -1733,11 +1734,12 @@ __BASE__
   .latebar .muted { color: var(--muted); }
   .latebar .verdict { font-weight: 600; padding: .05rem .4rem;
     background: var(--mark-bg); }
-  .latebar .verdict.apply, .latebar .verdict.discuss { background: var(--alert);
-    color: var(--bg); }
+  .latebar .verdict.apply, .latebar .verdict.discuss,
+  .latebar .verdict.custom { background: var(--alert); color: var(--bg); }
   .latebar select, .latebar input { font-size: .8rem; padding: .15rem .3rem; }
   .latebar .latenote { width: 12rem; }
   .latebar .lateext { width: 9.5rem; }
+  .latebar .latepct { width: 4.5rem; }
   .latenotes { flex-basis: 100%; font-size: .78rem; color: var(--alert); }
   .collab { font-size: .85rem; color: var(--muted); margin: .15rem 0 0; }
   .collab.real { color: var(--fg); }
@@ -3029,6 +3031,7 @@ const LATE_ACTIONS = [
   ["apply", "Apply the penalty"],
   ["waive", "Waive (grace)"],
   ["extension", "Extension to…"],
+  ["custom", "Custom penalty…"],
   ["discuss", "Hold — discuss with student"],
 ];
 
@@ -3054,6 +3057,10 @@ function lateBlock(u) {
       <input class="lateext" type="text" placeholder="2026-09-07 23:59"
         title="New deadline (course time)" value="${esc((d.extension || "").replace("T", " ").slice(0, 16))}"
         ${d.action === "extension" ? "" : "hidden"}>
+      <input class="latepct" type="number" min="0" max="100" step="0.5"
+        placeholder="% off" title="Percent of the possible points to deduct"
+        value="${d.penalty === null || d.penalty === undefined ? "" : d.penalty}"
+        ${d.action === "custom" ? "" : "hidden"}>
       <input class="latenote" type="text" placeholder="note (optional)"
         value="${esc(d.note || "")}">
       <button class="latesave ghost">Save</button>`;
@@ -3069,6 +3076,7 @@ document.addEventListener("change", e => {
   if (!e.target.classList.contains("lateact")) return;
   const bar = e.target.closest(".latebar");
   bar.querySelector(".lateext").hidden = e.target.value !== "extension";
+  bar.querySelector(".latepct").hidden = e.target.value !== "custom";
 });
 
 document.addEventListener("click", async e => {
@@ -3077,7 +3085,8 @@ document.addEventListener("click", async e => {
   const slug = bar.dataset.slug;
   const body = {slug, action: bar.querySelector(".lateact").value,
                 note: bar.querySelector(".latenote").value,
-                extension: bar.querySelector(".lateext").value || null};
+                extension: bar.querySelector(".lateext").value || null,
+                penalty: bar.querySelector(".latepct").value || null};
   try {
     const r = await api("/api/late", body);
     unit(slug).late = r.late;
