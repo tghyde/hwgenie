@@ -302,3 +302,24 @@ def test_body_renewcommand_and_font_size_dropped():
     assert "arraystretch" not in html and "bar" not in html
     assert "Row reducing gives" in html and "done." in html
     assert not any("Unknown macro" in w for w in conv.warnings)
+
+
+def test_tabular_inside_display_math_becomes_equation_table():
+    # \[ \begin{tabular}...\end{tabular} \] is legal LaTeX but KaTeX has no
+    # tabular: render it as a centred, headerless table instead.
+    _c, html = convert(
+        "we get\n\\[\n\\begin{tabular}{rrcl}\n"
+        "    $A:$& $x_3 + 90$ &$=$&$ x_1 + 100$\\\\\n"
+        "    $B:$& $x_1 + 40$ &$=$&$ x_2 + x_4$\n"
+        "\\end{tabular}\n\\]\ndone."
+    )
+    assert "\\[" not in html and "tabular" not in html
+    assert '<div class="center">' in html
+    assert '<div class="table-wrap eqtab">' in html
+    assert "<th" not in html
+    assert '<td class="al-right">$A:$</td>' in html
+    assert '<td class="al-left">$ x_1 + 100$</td>' in html
+    assert "<p>we get</p>" in html and "<p>done.</p>" in html
+    # a plain display equation is untouched
+    _c, html = convert("\\[ x = 1 \\]")
+    assert "\\[ x = 1 \\]" in html

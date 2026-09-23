@@ -284,6 +284,10 @@ code {
   padding: .35rem .75rem;
 }
 .table-wrap th { background: var(--code-bg); font-weight: 600; }
+.table-wrap.eqtab th, .table-wrap.eqtab td {
+  border: none; padding: .15rem .45rem; background: none;
+  white-space: nowrap;
+}
 .al-left { text-align: left; }
 .al-center { text-align: center; }
 .al-right { text-align: right; }

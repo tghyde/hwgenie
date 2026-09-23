@@ -1824,6 +1824,11 @@ __BASE__
   .pcontent table { border-collapse: collapse; }
   .pcontent td, .pcontent th { border: 1px solid var(--border);
                                padding: .2rem .55rem; }
+  .pcontent .eqtab td, .pcontent .eqtab th { border: none;
+                                             padding: .1rem .45rem;
+                                             white-space: nowrap; }
+  .pcontent .eqtab { overflow-x: auto; margin: .4rem 0; }
+  .pcontent .eqtab table { margin: 0 auto; }
   .nodata { color: var(--muted); font-style: italic; font-size: .9rem;
             margin-top: .5rem; }
   .nodata a { color: var(--accent); }

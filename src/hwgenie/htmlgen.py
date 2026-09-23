@@ -286,6 +286,14 @@ class HtmlConverter:
             return i + 1
         if isinstance(n, LatexMathNode):
             raw = self.text[n.pos : n.pos + n.len]
+            # \[ \begin{tabular}...\end{tabular} \] is legal LaTeX (a text
+            # box centred on its own line) but KaTeX has no tabular, so the
+            # whole display would render as an error.  Show it as a centred
+            # borderless table instead.
+            tab = self._display_tabular_html(raw)
+            if tab is not None:
+                flow.block(tab)
+                return i + 1
             raw, mathnotes = _extract_math_footnotes(raw)
             for note in mathnotes:
                 self.footnotes.append(self.convert_fragment(note))
@@ -857,8 +865,36 @@ class HtmlConverter:
         cap = f"<figcaption>{caption}</figcaption>" if caption else ""
         return f'<figure class="fig">{"".join(parts)}{cap}</figure>'
 
+    _DISPLAY_TABULAR_RE = re.compile(
+        r"^\s*(?:\\(?:small|footnotesize|scriptsize|normalsize|large|"
+        r"centering)\s*)*(\\begin\{tabular\*?\}.*\\end\{tabular\*?\})\s*$",
+        re.S,
+    )
+
+    def _display_tabular_html(self, raw: str) -> Optional[str]:
+        """If `raw` is display math (\\[...\\] or $$...$$) wrapping nothing
+        but a tabular, return it rendered as a centred equation table
+        (no header row, no cell borders); otherwise None."""
+        r = raw.strip()
+        if r.startswith("\\[") and r.endswith("\\]"):
+            inner = r[2:-2]
+        elif r.startswith("$$") and r.endswith("$$") and len(r) >= 4:
+            inner = r[2:-2]
+        else:
+            return None
+        m = self._DISPLAY_TABULAR_RE.match(inner)
+        if not m:
+            return None
+        table = self._tabular_text_html(m.group(1), header=False, cls="eqtab")
+        if not table:
+            return None
+        return f'<div class="center">\n{table}\n</div>'
+
     def _tabular_html(self, n) -> str:
-        env_text = self.text[n.pos : n.pos + n.len]
+        return self._tabular_text_html(self.text[n.pos : n.pos + n.len])
+
+    def _tabular_text_html(self, env_text: str, *, header: bool = True,
+                           cls: str = "") -> str:
         span = texscan.table_body_span(env_text)
         if span is None:
             return f'<pre class="code"><code>{esc(env_text)}</code></pre>'
@@ -888,10 +924,14 @@ class HtmlConverter:
                 tds.append(f'<{tag} class="al-{al}">{c}</{tag}>')
             return "<tr>" + "".join(tds) + "</tr>"
 
+        wrap = f'<div class="table-wrap {cls}">' if cls else '<div class="table-wrap">'
+        if not header:
+            body_rows = "\n".join(tr(r, "td") for r in rows)
+            return f"{wrap}<table>\n<tbody>\n{body_rows}\n</tbody>\n</table></div>"
         head = tr(rows[0], "th")
         rest = "\n".join(tr(r, "td") for r in rows[1:])
         return (
-            '<div class="table-wrap"><table>\n'
+            f"{wrap}<table>\n"
             f"<thead>{head}</thead>\n<tbody>\n{rest}\n</tbody>\n"
             "</table></div>"
         )
