@@ -77,6 +77,8 @@ SKIP_MACROS = {
     "hwdue": 1,
     "hwmaketitle": 0, "hwcourse": 0, "hwsemester": 0, "hwvariant": 1,
     "hwpreview": 1,
+    # \handoutspace{2in}: blank writing space in the handout PDF only.
+    "handoutspace": 1,
     "!": 0, ";": 0, ":": 0,
 }
 
@@ -444,6 +446,27 @@ class HtmlConverter:
             if args and not self.include_solutions:
                 self.walk(args[0].nodelist, flow)
             return j
+        if name == "solbox":
+            # \solbox{...}: the correct choice on a circle-the-answer
+            # question -- boxed in the solutions, plain in the handout.
+            args, j = self._macro_args(nodes, i, 1)
+            if args:
+                inner = self.convert_inline(args[0].nodelist)
+                if self.include_solutions:
+                    self._emit_wrapped(flow, '<span class="fbox">', "</span>", inner)
+                else:
+                    flow.inline(inner)
+            return j
+        if name in ("fbox", "framebox"):
+            args, j = self._macro_args(nodes, i, 1)
+            if args:
+                inner = self.convert_inline(args[-1].nodelist)
+                self._emit_wrapped(flow, '<span class="fbox">', "</span>", inner)
+            return j
+        if name == "hrulefill":
+            # "Name: \hrulefill" -- a rule that fills the rest of the line.
+            flow.inline('<span class="hrulefill"></span>')
+            return i + 1
         if name == "href":
             args, j = self._macro_args(nodes, i, 2)
             if len(args) == 2:
@@ -909,7 +932,10 @@ class HtmlConverter:
         rows_raw = texscan.split_top_level(body, "\\\\")
         rows: List[List[str]] = []
         for row in rows_raw:
-            cleaned = re.sub(r"\\hline|\\cline\{[^{}]*\}", "", row)
+            # A row ending in \\[1.6em] leaves its optional spacing argument
+            # at the start of the next chunk; it is layout, not a cell.
+            cleaned = re.sub(r"^\s*\[[^\]]*\]", "", row)
+            cleaned = re.sub(r"\\hline|\\cline\{[^{}]*\}", "", cleaned)
             if not cleaned.strip():
                 continue
             cells = texscan.split_top_level(cleaned, "&")

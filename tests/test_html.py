@@ -323,3 +323,35 @@ def test_tabular_inside_display_math_becomes_equation_table():
     # a plain display equation is untouched
     _c, html = convert("\\[ x = 1 \\]")
     assert "\\[ x = 1 \\]" in html
+
+
+def test_tabular_row_spacing_is_not_a_row():
+    # \\[1.6em] at the end of a row leaves "[1.6em]" at the start of the next
+    # chunk after splitting on \; it is spacing, not a one-cell row.
+    _, html = convert(
+        "\\begin{tabular}{|l|c|}\n\\hline\n"
+        "\\textbf{Points} & 12\\\\\n\\hline\n"
+        "\\textbf{Score} & \\\\[1.6em]\n\\hline\n"
+        "\\end{tabular}"
+    )
+    assert "[1.6em]" not in html
+    assert html.count("<tr>") == 2
+
+
+def test_solbox_boxed_in_solutions_plain_in_handout():
+    body = "\\blue{No solutions \\qquad \\solbox{One solution} \\qquad Many}"
+    _, sol = convert(body, include_solutions=True)
+    assert '<span class="fbox">One solution</span>' in sol
+    _, hand = convert(body, include_solutions=False)
+    assert "fbox" not in hand
+    assert "One solution" in hand
+    # \fbox always boxes; \handoutspace is PDF-only layout.
+    _, html = convert("Pick \\fbox{$x_2$} here. \\handoutspace{2in} Next.")
+    assert '<span class="fbox">' in html and "2in" not in html
+    assert "Next." in html
+
+
+def test_hrulefill_renders_as_blank_line():
+    _, html = convert("\\noindent\\textbf{Name:}\\ \\hrulefill")
+    assert '<span class="hrulefill"></span>' in html
+    assert "Unknown macro \\hrulefill" not in " ".join(_.warnings)

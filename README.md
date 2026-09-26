@@ -65,7 +65,9 @@ ps/N/problem-set-N.pdf, problem-set-N-submission.tex
 ps/N/solutions.html, problem-set-N-solutions.pdf   (only once released)
 handouts/<slug>/      built handouts (\hwtype{handout}): HTML + PDF; a handout
                       with solution environments (a study guide, say) also gets
-                      solutions.html + a solutions PDF once \hwsolutions{yes}
+                      solutions.html + a solutions PDF once \hwsolutions{yes};
+                      with \hwrelease{no} + \hwsolutions{yes} only the
+                      solutions are published (an exam given on paper)
 ```
 
 Solutions release is controlled by the `solutions` metadata key per

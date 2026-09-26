@@ -467,3 +467,77 @@ def test_handout_without_solutions_unchanged(repo):
     assert "solutions.html" not in page
     ab = [a for a in result.assignments if a.meta.doc_type == "handout"][0]
     assert not ab.has_solutions and ab.released
+
+
+HANDOUT_EXAM_DOC = """\\documentclass{{article}}
+\\usepackage{{hwgenie}}
+\\hwtype{{handout}}
+\\hwtitle{{Midterm 1}}
+\\hwrelease{{no}}
+\\hwsolutions{{{solutions}}}
+\\begin{{document}}
+\\hwmaketitle
+\\begin{{problem}}
+Circle one: \\solbox{{Yes}} \\qquad No
+\\handoutonly{{BLANK GRID}}
+\\begin{{solution}}
+FILLED GRID answer.
+\\end{{solution}}
+\\end{{problem}}
+\\end{{document}}
+"""
+
+
+def _write_exam(repo, solutions):
+    handouts = repo / "source" / "handouts"
+    handouts.mkdir(parents=True)
+    (handouts / "midterm1.tex").write_text(
+        HANDOUT_EXAM_DOC.format(solutions=solutions))
+
+
+def test_handout_unreleased_with_solutions_hidden_stays_offline(repo):
+    _write_exam(repo, "no")
+    result = build_site(repo, compile_pdfs=False, today=date(2025, 10, 15))
+    assert result.ok, result.errors
+    assert not (result.out_dir / "handouts/midterm-1").exists()
+    assert "midterm-1" not in (result.out_dir / "index.html").read_text()
+    assert any("not released yet" in w for w in result.warnings)
+
+
+def test_handout_solutions_only(repo):
+    # \hwrelease{no} + \hwsolutions{yes}: an exam given on paper -- the blank
+    # version never goes online, the solutions do.
+    _write_exam(repo, "yes")
+    result = build_site(repo, compile_pdfs=False, today=date(2025, 10, 15))
+    assert result.ok, result.errors
+    site = result.out_dir
+    d = site / "handouts/midterm-1"
+    sol = (d / "solutions.html").read_text()
+    assert "FILLED GRID" in sol and "BLANK GRID" not in sol
+    assert '<span class="fbox">Yes</span>' in sol
+    assert 'href="./"' not in sol            # no link to a handout page
+    assert "Midterm1-Math261-Fall2025.pdf" not in sol
+    assert "Midterm1-solutions-Math261-Fall2025.pdf" in sol
+    # the folder URL forwards to the solutions
+    stub = (d / "index.html").read_text()
+    assert 'http-equiv="refresh"' in stub and "solutions.html" in stub
+    assert "BLANK GRID" not in stub
+    index = (site / "index.html").read_text()
+    assert '<a href="handouts/midterm-1/solutions.html">Midterm 1 Solutions</a>' in index
+    assert "handouts/midterm-1/Midterm1-solutions-Math261-Fall2025.pdf" in index
+    assert 'handouts/midterm-1/Midterm1-Math261-Fall2025.pdf' not in index
+    assert 'href="handouts/midterm-1/">' not in index
+    ab = [a for a in result.assignments if a.meta.doc_type == "handout"][0]
+    assert ab.has_solutions and ab.released and not ab.handout_released
+    assert "html" not in ab.files and "solutions_html" in ab.files
+
+
+def test_handout_released_with_solutions_keeps_handout_card(repo):
+    # A regular released handout is unaffected by the solutions-only mode.
+    _write_study_guide(repo, "yes")
+    result = build_site(repo, compile_pdfs=False, today=date(2025, 10, 15))
+    ab = [a for a in result.assignments if a.meta.doc_type == "handout"][0]
+    assert ab.handout_released
+    index = (result.out_dir / "index.html").read_text()
+    assert ">Midterm Study Guide</a>" in index
+    assert "Midterm Study Guide Solutions" not in index

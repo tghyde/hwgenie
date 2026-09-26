@@ -37,6 +37,8 @@ def run_build_site(args) -> int:
                 "handout": "Handout"}.get(a.meta.doc_type, "Problem Set")
         label = f"{kind} {a.meta.number}".strip()
         status = "released" if a.released else "solutions hidden"
+        if not getattr(a, "handout_released", True):
+            status = "solutions only"
         print(f"  {label} ({status}) -> {a.rel_url}")
     for w in result.warnings:
         print(f"warning: {w}", file=sys.stderr)

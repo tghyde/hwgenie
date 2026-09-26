@@ -123,6 +123,15 @@ blockquote.epigraph footer {
 }
 .task { color: var(--accent); }
 .alert { color: var(--alert); }
+.fbox {
+  display: inline-block; border: 1.5px solid currentColor;
+  border-radius: 3px; padding: 0 .35em; margin: 0 .05em;
+}
+.hrulefill {
+  display: inline-block; width: 100%; max-width: 18em;
+  border-bottom: 1px solid currentColor; vertical-align: baseline;
+  margin-left: .4em;
+}
 
 details.problem {
   scroll-margin-top: 4.5rem;
