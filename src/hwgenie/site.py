@@ -817,7 +817,9 @@ def render_index(
         href = a.rel_url
         if not a.handout_released:
             # Solutions-only handout (an exam): the card is the solutions.
-            label = f"{label} Solutions"
+            # (Unless the title already says so: \hwtitle{Midterm 1 Solutions}.)
+            if not label.rstrip().lower().endswith("solutions"):
+                label = f"{label} Solutions"
             href = f"{a.rel_url}solutions.html"
             links = [view_box(href, "Solutions"),
                      file_box(f"{a.rel_url}{sol_pdf}", "Solutions PDF")]

@@ -541,3 +541,15 @@ def test_handout_released_with_solutions_keeps_handout_card(repo):
     index = (result.out_dir / "index.html").read_text()
     assert ">Midterm Study Guide</a>" in index
     assert "Midterm Study Guide Solutions" not in index
+
+
+def test_handout_solutions_only_title_already_says_solutions(repo):
+    _write_exam(repo, "yes")
+    tex = repo / "source/handouts/midterm1.tex"
+    tex.write_text(tex.read_text().replace(
+        "\\hwtitle{Midterm 1}", "\\hwtitle{Midterm 1 Solutions}"))
+    result = build_site(repo, compile_pdfs=False, today=date(2025, 10, 15))
+    assert result.ok, result.errors
+    index = (result.out_dir / "index.html").read_text()
+    assert ">Midterm 1 Solutions</a>" in index
+    assert "Solutions Solutions" not in index
