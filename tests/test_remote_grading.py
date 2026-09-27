@@ -8,7 +8,8 @@ import pytest
 from test_grade import _start_server, make_grading_folder
 
 import hwgenie.remote_grading as rg
-from hwgenie.grade import GradeError
+from hwgenie.grade import GradeError, GradeStore, load_rubric
+from pathlib import Path
 
 
 @pytest.fixture
@@ -305,3 +306,109 @@ def test_server_version_and_upgrade(monkeypatch):
     monkeypatch.setattr(rg, "_run", dead_run)
     info = rg.server_version(cfg)
     assert info["version"] is None and "timed out" in info["error"]
+
+
+# ------------------------------------------------------- merging pulls --
+
+def _gf(parts: dict, updated: str) -> dict:
+    return {"parts": {k: {"score": sc, "max": 5.0, "ec": False,
+                          "status": "graded", "comments": [],
+                          "ai_draft": None, "by": by, **extra}
+                      for k, (sc, by, extra) in parts.items()},
+            "updated": updated}
+
+
+def test_merge_keeps_newer_local_part():
+    """The instructor corrects part 2 locally after the grader's last
+    save: the pull must keep it (this used to be overwritten)."""
+    server = _gf({"1": (5, "Taj", {"updated": "2026-09-26T10:00:00+00:00"}),
+                  "2": (3, "Taj", {"updated": "2026-09-26T10:00:00+00:00"})},
+                 "2026-09-26T10:00:00+00:00")
+    local = _gf({"1": (5, "Taj", {"updated": "2026-09-26T10:00:00+00:00"}),
+                 "2": (5, "Trevor", {"updated": "2026-09-27T19:00:00+00:00"})},
+                "2026-09-27T19:00:00+00:00")
+    merged, rep = rg.merge_grade_file(local, server)
+    assert merged["parts"]["2"]["score"] == 5
+    assert rep == {"kept": ["2"], "taken": []}
+    assert merged["updated"] == "2026-09-27T19:00:00+00:00"
+
+
+def test_merge_takes_newer_server_part_and_new_parts():
+    server = _gf({"1": (4, "Taj", {"updated": "2026-09-27T20:00:00+00:00"}),
+                  "2": (5, "Taj", {"updated": "2026-09-26T10:00:00+00:00"}),
+                  "3": (2, "Taj", {"updated": "2026-09-27T20:00:00+00:00"})},
+                 "2026-09-27T20:00:00+00:00")
+    local = _gf({"1": (5, "Trevor", {"updated": "2026-09-27T19:00:00+00:00"}),
+                 "2": (5, "Taj", {"updated": "2026-09-26T10:00:00+00:00"})},
+                "2026-09-27T19:00:00+00:00")
+    merged, rep = rg.merge_grade_file(local, server)
+    assert [merged["parts"][k]["score"] for k in ("1", "2", "3")] == [4, 5, 2]
+    assert rep == {"kept": [], "taken": ["1", "3"]}
+
+
+def test_merge_legacy_files_use_file_stamp_local_wins_ties():
+    """Files from before v0.59 carry no per-part stamps: the file-level
+    'updated' decides, and with no stamps at all the local copy wins."""
+    server = _gf({"1": (3, "Taj", {})}, "2026-09-26T10:00:00+00:00")
+    local = _gf({"1": (5, "Trevor", {})}, "2026-09-27T19:00:00+00:00")
+    merged, rep = rg.merge_grade_file(local, server)
+    assert merged["parts"]["1"]["score"] == 5 and rep["kept"] == ["1"]
+    server["updated"] = "2026-09-28T00:00:00+00:00"
+    merged, rep = rg.merge_grade_file(local, server)
+    assert merged["parts"]["1"]["score"] == 3 and rep["taken"] == ["1"]
+    a = {"parts": {"1": {"score": 1}}}
+    b = {"parts": {"1": {"score": 2}}}
+    assert rg.merge_grade_file(a, b)[0]["parts"]["1"]["score"] == 1
+    assert rg.merge_grade_file(None, b)[0] == b
+
+
+def test_merge_grades_dir_backs_up_and_logs(tmp_path):
+    stage, grades = tmp_path / "stage", tmp_path / "grades"
+    stage.mkdir(); grades.mkdir()
+    old = "2026-09-26T10:00:00+00:00"; new = "2026-09-27T19:00:00+00:00"
+    # A: local newer -> kept; B: server newer -> taken + backup;
+    # C: only on server -> new; D: identical -> unchanged
+    (stage / "A.json").write_text(json.dumps(_gf({"1": (3, "Taj", {"updated": old})}, old)))
+    (grades / "A.json").write_text(json.dumps(_gf({"1": (5, "T", {"updated": new})}, new)))
+    (stage / "B.json").write_text(json.dumps(_gf({"1": (3, "Taj", {"updated": new})}, new)))
+    (grades / "B.json").write_text(json.dumps(_gf({"1": (5, "T", {"updated": old})}, old)))
+    (stage / "C.json").write_text(json.dumps(_gf({"1": (4, "Taj", {})}, old)))
+    (stage / "D.json").write_text(json.dumps(_gf({"1": (4, "Taj", {})}, old)))
+    (grades / "D.json").write_text(json.dumps(_gf({"1": (4, "Taj", {})}, old)))
+    log = []
+    summary = rg.merge_grades(stage, grades, log.append)
+    assert summary == {"new": ["C"], "kept": {"A": ["1"]},
+                       "taken": {"B": ["1"]}, "unchanged": 1}
+    assert json.loads((grades / "A.json").read_text())["parts"]["1"]["score"] == 5
+    assert json.loads((grades / "B.json").read_text())["parts"]["1"]["score"] == 3
+    backup = grades / rg.PRE_PULL_DIR / "B.json"
+    assert json.loads(backup.read_text())["parts"]["1"]["score"] == 5
+    assert not (grades / rg.PRE_PULL_DIR / "A.json").exists()
+    assert (grades / "C.json").is_file()
+    assert any(l.startswith("A: kept local part(s) 1") for l in log)
+    assert any(l.startswith("B: took server part(s) 1") for l in log)
+
+
+def test_pull_merges_from_a_staging_copy(grading_folder, cfg, monkeypatch):
+    """The rsync lands in a temp dir, and the merge writes grades/."""
+    store = GradeStore(grading_folder, load_rubric(grading_folder, 3))
+    store.update("Alice-A", 1, {"score": 5}, by="Trevor")     # local edit
+    local_before = json.loads(store.path("Alice-A").read_text())
+    assert local_before["parts"]["1"]["updated"]              # per-part stamp
+
+    def fake_run(cmd, log, input_text=None, timeout=600):
+        assert cmd[0] == "rsync"
+        dest = Path(cmd[-1])
+        assert dest.name == "grades" and "hwgenie-pull-" in str(dest)
+        stale = _gf({"1": (2, "Taj", {"updated": "2026-01-01T00:00:00+00:00"})},
+                    "2026-01-01T00:00:00+00:00")
+        (dest / "Alice-A.json").write_text(json.dumps(stale))
+        (dest / "Bob-B.json").write_text(json.dumps(stale))
+
+    monkeypatch.setattr(rg, "_run", fake_run)
+    log = []
+    rg.pull(grading_folder, cfg, log.append)
+    after = json.loads(store.path("Alice-A").read_text())
+    assert after["parts"]["1"]["score"] == 5                  # kept
+    assert json.loads(store.path("Bob-B").read_text())["parts"]["1"]["score"] == 2
+    assert any("1 new, 1 with newer local edits kept" in l for l in log)

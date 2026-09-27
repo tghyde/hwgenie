@@ -162,19 +162,25 @@ __NAV__
       <b class="ui">Open grading site &#8599;</b> link. Progress shows
       live in the assignment&rsquo;s row here; everything anyone enters
       is labeled with their name.</li>
-    <li>When grading is done, click <b class="ui">Pull grades</b> to copy
-      their work into your local folder.</li>
+    <li>When grading is done, click <b class="ui">Pull grades</b> to
+      merge their work into your local folder. The merge is part by
+      part and the newest edit wins, so a correction you made locally
+      after the grader&rsquo;s last save is kept; a part the grader
+      changed later replaces yours, and your previous file is saved to
+      <code>grades/.pre-pull/</code> first. The log under the button
+      lists every part kept or taken.</li>
     <li><b class="ui">Overview</b> (next to Pull, and in the
       grader&rsquo;s header) shows how the assignment went: average per
       part with the feedback pages&rsquo; score pies, the distribution of
       totals, who did particularly well or struggled, and whether the
       totals have been recorded in the course gradebook yet.</li>
   </ol>
-  <div class="note warn">While an assignment is on the server, the server
-  copy is the source of truth: don&rsquo;t also grade it locally, and
-  <b>pull before you re-push</b> (a push mirrors your local copy over
-  the server&rsquo;s, grades included &mdash; late submissions are fine
-  to add this way, just pull first).</div>
+  <div class="note warn">While an assignment is on the server, grade it
+  there rather than locally where you can; local fixes survive a pull,
+  but two people editing the same part on both sides means the later
+  edit wins. <b>Pull before you re-push</b> (a push mirrors your local
+  copy over the server&rsquo;s &mdash; late submissions are fine to add
+  this way, just pull first).</div>
   <p>Grading entirely on your own Mac works too, of course &mdash; skip
   the push/pull and grade under <b class="ui">Local Grading</b>.</p>
 

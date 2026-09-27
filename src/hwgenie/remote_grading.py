@@ -22,8 +22,11 @@ The push mirrors hwgrader-push.command: stage a copy without return/,
 bundle the assignment's template.tex into the folder and relativize the
 manifest's template path (an absolute local path means nothing on the
 server), then ``rsync --delete`` — so the server copy is an exact
-mirror.  Pull copies only grades/*.json down, never deleting local
-files.  Server-side assignment names: a folder literally named
+mirror.  Pull fetches grades/*.json and MERGES them into the local
+files part by part, newest edit wins (a local correction made after the
+grader's last save survives; a part the server changed later replaces
+the local one, whose file is first saved to grades/.pre-pull/).  Nothing
+local is deleted.  Server-side assignment names: a folder literally named
 ``grading`` is listed under its parent's name (ps01/grading -> ps01).
 """
 
@@ -248,17 +251,135 @@ def _remote_has_grades(cfg: dict, name: str, log) -> bool:
 
 
 def pull(folder: Path, cfg: dict, log=lambda s: None) -> str:
-    """Copy the server's grades/*.json for this assignment down into the
-    local grading folder (overwrites same-name files, deletes nothing)."""
+    """Fetch the server's grades/*.json for this assignment and merge them
+    into the local grading folder, part by part, newest edit wins — so a
+    correction the instructor made locally after the grader's last save
+    survives the pull (see merge_grades).  Deletes nothing."""
     folder = Path(folder).resolve()
     if not (folder / MANIFEST_NAME).is_file():
         raise GradeError(f"{folder} is not a grading folder")
     name = server_name(folder)
     (folder / "grades").mkdir(exist_ok=True)
-    _run(["rsync", "-rlt", f"{cfg['host']}:{cfg['root']}/{name}/grades/",
-          f"{folder / 'grades'}/"], log)
-    log(f"pulled grades for '{name}'")
+    with tempfile.TemporaryDirectory(prefix="hwgenie-pull-") as tmp:
+        stage = Path(tmp) / "grades"
+        stage.mkdir()
+        _run(["rsync", "-rlt", f"{cfg['host']}:{cfg['root']}/{name}/grades/",
+              f"{stage}/"], log)
+        summary = merge_grades(stage, folder / "grades", log)
+    log(f"pulled grades for '{name}': {len(summary['new'])} new, "
+        f"{len(summary['kept'])} with newer local edits kept, "
+        f"{len(summary['taken'])} updated from the server, "
+        f"{summary['unchanged']} unchanged")
     return name
+
+
+PRE_PULL_DIR = ".pre-pull"     # inside grades/: local files a pull replaced
+
+
+def _part_key(k: str):
+    return (0, int(k)) if k.isdigit() else (1, k)
+
+
+def _stamp(part: dict, data: dict) -> str:
+    """When a part was last edited: its own stamp (v0.59+), else the
+    file's.  ISO-8601 UTC strings compare correctly as text."""
+    return str(part.get("updated") or data.get("updated") or "")
+
+
+def merge_grade_file(local: dict | None, server: dict) -> tuple[dict, dict]:
+    """Merge one student's server grade file into the local one.
+
+    Part by part: a part only one side has is taken from that side; a
+    part that differs goes to whichever side edited it more recently, the
+    local copy winning ties (and the whole comparison when neither side
+    is stamped).  Returns ``(merged, report)`` with ``report`` =
+    ``{"kept": [parts local won], "taken": [parts server won]}``.
+    """
+    if local is None:
+        return json.loads(json.dumps(server)), {"kept": [], "taken": []}
+    lparts = local.get("parts") or {}
+    sparts = server.get("parts") or {}
+    merged_parts: dict = {}
+    kept: list[str] = []
+    taken: list[str] = []
+    for k in sorted(set(lparts) | set(sparts), key=_part_key):
+        lp, sp = lparts.get(k), sparts.get(k)
+        if lp is None:
+            merged_parts[k] = sp
+            taken.append(k)
+        elif sp is None or lp == sp:
+            merged_parts[k] = lp
+        elif _stamp(sp, server) > _stamp(lp, local):
+            merged_parts[k] = sp
+            taken.append(k)
+        else:
+            merged_parts[k] = lp
+            kept.append(k)
+    merged = dict(local)
+    merged["parts"] = merged_parts
+    stamps = [x for x in (local.get("updated"), server.get("updated")) if x]
+    if stamps:
+        merged["updated"] = max(str(x) for x in stamps)
+    return json.loads(json.dumps(merged)), {"kept": kept, "taken": taken}
+
+
+def merge_grades(stage: Path, grades_dir: Path, log=lambda s: None) -> dict:
+    """Merge every ``<slug>.json`` in ``stage`` (a fresh copy of the
+    server's grades/) into ``grades_dir`` with merge_grade_file.  A local
+    file that loses a part to the server is first copied to
+    ``grades/.pre-pull/<slug>.json`` so nothing is lost silently."""
+    stage, grades_dir = Path(stage), Path(grades_dir)
+    grades_dir.mkdir(parents=True, exist_ok=True)
+    summary: dict = {"new": [], "kept": {}, "taken": {}, "unchanged": 0}
+    for sf in sorted(stage.glob("*.json")):
+        slug = sf.stem
+        try:
+            server = json.loads(sf.read_text())
+        except json.JSONDecodeError as e:
+            log(f"{slug}: server file is not valid JSON ({e}) — skipped")
+            continue
+        lf = grades_dir / sf.name
+        local = None
+        if lf.is_file():
+            try:
+                local = json.loads(lf.read_text())
+            except json.JSONDecodeError:
+                log(f"{slug}: local file is not valid JSON — replaced by "
+                    f"the server's (old copy in grades/{PRE_PULL_DIR}/)")
+                _backup(lf, grades_dir)
+        merged, rep = merge_grade_file(local, server)
+        if local is None:
+            summary["new"].append(slug)
+            log(f"{slug}: new")
+        if rep["kept"]:
+            summary["kept"][slug] = rep["kept"]
+            log(f"{slug}: kept local part(s) {', '.join(rep['kept'])} "
+                "(edited here after the server's copy)")
+        if local is not None and merged == local:
+            if not rep["kept"]:
+                summary["unchanged"] += 1
+            continue                      # nothing to write
+        if rep["taken"] and local is not None:
+            summary["taken"][slug] = rep["taken"]
+            replaced = [k for k in rep["taken"]
+                        if (local.get("parts") or {}).get(k) is not None]
+            if replaced:
+                _backup(lf, grades_dir)
+                log(f"{slug}: took server part(s) {', '.join(rep['taken'])} "
+                    "(newer than local; the local file was saved to "
+                    f"grades/{PRE_PULL_DIR}/ first)")
+            else:
+                log(f"{slug}: took server part(s) {', '.join(rep['taken'])}")
+        tmp = lf.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(merged, indent=2) + "\n")
+        tmp.replace(lf)
+    return summary
+
+
+def _backup(lf: Path, grades_dir: Path) -> None:
+    bdir = grades_dir / PRE_PULL_DIR
+    bdir.mkdir(exist_ok=True)
+    shutil.copy2(lf, bdir / lf.name)
 
 
 # ------------------------------------------------------------- app state --

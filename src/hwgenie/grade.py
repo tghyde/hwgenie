@@ -308,8 +308,12 @@ class GradeStore:
             ]
         if fields and by:
             p["by"] = str(by)[:80]
-        data["updated"] = datetime.now(timezone.utc).isoformat(
-            timespec="seconds")
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        if fields:
+            # per-part stamp: pulling from the grading server merges part
+            # by part, newest edit wins (see remote_grading.merge_grades)
+            p["updated"] = now
+        data["updated"] = now
         self.save(slug, data)
         return data
 
