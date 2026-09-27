@@ -222,9 +222,24 @@ __NAV__
       without raising the denominator.</li>
   </ol>
   <p>Then each week: <b class="ui">Grades &rarr; Import &rarr; CSV
-  file</b>, upload <code>extra-credit-upload.csv</code>, map
-  <b class="ui">Email address</b> as the identifier, and map the
-  <b class="ui">Extra credit</b> column onto the grade item.</p>
+  file</b>, upload <code>extra-credit-upload.csv</code>, and on the
+  mapping page that follows set:</p>
+  <ul>
+    <li><b class="ui">Identify user by</b> &rarr; <b class="ui">Map
+      from</b>: <b class="ui">Email address</b>; <b class="ui">Map
+      to</b>: <b class="ui">Email address</b>. (Not <b class="ui">User
+      ID</b> &mdash; that is Moodle&rsquo;s internal numeric id, which the
+      CSV does not contain. &ldquo;Map to&rdquo; names the Moodle user
+      field the CSV column is compared against, so it must match.)</li>
+    <li><b class="ui">Grade item mappings</b> &rarr;
+      <b class="ui">Email address</b>: <b class="ui">Ignore</b>;
+      <b class="ui">Full name</b>: <b class="ui">Ignore</b>;
+      <b class="ui">Extra credit</b>: the grade item you created above
+      (e.g. &ldquo;PS3 extra credit&rdquo;).</li>
+  </ul>
+  <p>Click <b class="ui">Upload grades</b>. Moodle reports how many
+  grades were imported; that count should equal the number of students
+  in the CSV (the <b class="ui">Return</b> panel shows it).</p>
 
   <h2 id="late">7. Late work and the course gradebook</h2>
   <p>Moodle stamps every submission (&ldquo;Last modified
