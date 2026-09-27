@@ -163,13 +163,15 @@ def _dir_times(root: Path) -> dict[str, datetime]:
 
 
 def find_worksheet_near(*dirs: Path) -> Path | None:
-    """The single Grades-*.csv in the first directory that has exactly one."""
+    """The newest Grades-*.csv in the first directory that has any (a
+    re-downloaded worksheet lands beside the old one as "... (1).csv";
+    the fresh one carries the late submissions' times)."""
     for d in dirs:
         if d is None or not Path(d).is_dir():
             continue
-        hits = sorted(Path(d).glob("Grades-*.csv"))
-        if len(hits) == 1:
-            return hits[0]
+        hits = [p for p in Path(d).glob("Grades-*.csv") if p.is_file()]
+        if hits:
+            return max(hits, key=lambda p: (p.stat().st_mtime, p.name))
     return None
 
 

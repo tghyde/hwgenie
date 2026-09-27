@@ -219,3 +219,49 @@ def test_install_tex(moodle_dir, template_file, tmp_path):
 
     assert main(["install-tex", str(dest), "Doe-Jane", str(recon)]) == 0
     assert main(["install-tex", str(dest), "Nobody", str(recon)]) == 1
+
+
+# ------------------------------------------------- newest download wins --
+
+def _touch(p: Path, mtime: float, text: str = "x") -> Path:
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text)
+    import os
+    os.utime(p, (mtime, mtime))
+    return p
+
+
+def test_find_worksheet_near_prefers_newest(tmp_path):
+    """A re-downloaded worksheet lands as "... (1).csv" beside the old one;
+    the newer file (with the late submissions' times) must win, even
+    though it sorts alphabetically first."""
+    from hwgenie.collect import find_worksheet_near
+    raw = tmp_path / "moodle-raw"
+    old = _touch(raw / "Grades-X--1.csv", 1_000_000)
+    new = _touch(raw / "Grades-X--1 (1).csv", 2_000_000)
+    assert find_worksheet_near(raw) == new
+    # the other way round too: mtime decides, not the name
+    import os
+    os.utime(old, (3_000_000, 3_000_000))
+    assert find_worksheet_near(raw) == old
+    assert find_worksheet_near(tmp_path / "nowhere", raw) == old
+    assert find_worksheet_near(tmp_path) is None
+
+
+def test_assignment_files_lists_newest_first(tmp_path):
+    """The New-assignment panel collects the FIRST zip the server lists,
+    so the listing is newest first: "... (1).zip" (the re-download) or
+    "....zip" (the re-download after clearing Downloads) — whichever was
+    written last — comes before the stale one."""
+    from hwgenie.grade_gui import AppHolder
+    asg = tmp_path / "math221" / "ps02"
+    _touch(asg / "moodle-raw" / "Z-1.zip", 1_000_000)
+    _touch(asg / "moodle-raw" / "Z-1 (1).zip", 2_000_000)
+    _touch(asg / "moodle-raw" / "Grades-Z--1 (1).csv", 1_500_000)
+    _touch(asg / "moodle-raw" / "Grades-Z--1.csv", 2_500_000)
+    _touch(asg / "build" / "ps02.tex", 1)
+    files = AppHolder.assignment_files(asg)
+    assert files["moodle-raw"] == ["Grades-Z--1.csv", "Z-1 (1).zip",
+                                   "Grades-Z--1 (1).csv", "Z-1.zip"]
+    assert files["build"] == ["ps02.tex"]
+    assert files["collected"] is False

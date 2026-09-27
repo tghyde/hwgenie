@@ -686,11 +686,18 @@ class AppHolder:
 
     @staticmethod
     def assignment_files(asg: Path) -> dict:
+        # Newest first, so the picker's "first zip / first worksheet" is
+        # the one just downloaded: a re-download named "... (1).zip" sorts
+        # alphabetically BEFORE the original, which once made the panel
+        # re-collect a stale zip and silently miss a late submission.
         def ls(sub):
             d = asg / sub
-            return sorted(f.name for f in d.iterdir()
-                          if f.is_file() and not f.name.startswith(".")) \
-                if d.is_dir() else []
+            if not d.is_dir():
+                return []
+            files = [f for f in d.iterdir()
+                     if f.is_file() and not f.name.startswith(".")]
+            return [f.name for f in sorted(
+                files, key=lambda f: (-f.stat().st_mtime, f.name))]
         return {"moodle-raw": ls("moodle-raw"), "build": ls("build"),
                 "collected": (asg / "grading" / MANIFEST_NAME).is_file()}
 
@@ -4010,12 +4017,16 @@ function showNew(r) {
 
 function renderNewFiles(files) {
   const raw = files["moodle-raw"] || [], build = files["build"] || [];
-  const zip = raw.find(f => f.toLowerCase().endsWith(".zip"));
-  const csv = raw.find(f => f.toLowerCase().endsWith(".csv"));
+  // the server lists files newest first, so [0] is the latest download
+  const zips = raw.filter(f => f.toLowerCase().endsWith(".zip"));
+  const csvs = raw.filter(f => f.toLowerCase().endsWith(".csv"));
+  const zip = zips[0], csv = csvs[0];
   const tex = build.find(f => f.toLowerCase().endsWith(".tex"));
-  const li = (ok, what, name) =>
-    `<span class="f">${ok ? "✓" : "○"} ${what}: ${name ? "<b>" + esc(name) + "</b>" : "<i>missing</i>"}</span>`;
-  $("#nlist").innerHTML = li(!!zip, "Moodle zip", zip) + li(!!csv, "worksheet", csv) +
+  const li = (ok, what, name, n) =>
+    `<span class="f">${ok ? "✓" : "○"} ${what}: ${name ? "<b>" + esc(name) + "</b>" : "<i>missing</i>"}` +
+    `${n > 1 ? ` <span class="muted">(newest of ${n})</span>` : ""}</span>`;
+  $("#nlist").innerHTML = li(!!zip, "Moodle zip", zip, zips.length) +
+    li(!!csv, "worksheet", csv, csvs.length) +
     li(!!tex, "assignment .tex", tex) +
     (files.collected ? `<span class="f">✓ already collected — “Collect now” updates it</span>` : "");
   $("#ncollect").disabled = !zip;
