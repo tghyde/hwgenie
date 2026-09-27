@@ -328,7 +328,7 @@ def test_do_bump_all_runs_template_then_courses_then_server(monkeypatch):
     monkeypatch.setattr(ca, "_do_upgrade_server", lambda: order.append("server"))
     ca._do_bump_all()
     assert order == ["bump", ("sync", ["tghyde/math221"]), "server"]
-    assert any("restart your local" in ln for ln in state.lines)
+    assert any("Restart hwGenie" in ln for ln in state.lines)
 
 
 def test_do_upgrade_server(monkeypatch):

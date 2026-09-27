@@ -565,8 +565,9 @@ def _do_bump_all() -> None:
     else:
         COURSES.log("no local course clones — nothing to sync")
     _do_upgrade_server()
-    COURSES.log("Done — restart your local hwGenie app to run the new "
-                "version yourself.")
+    COURSES.log("Done — this app is still running the old version: click "
+                "Restart hwGenie in the banner at the bottom of the page "
+                "(it appears within a few seconds).")
 
 
 def start_sync(repos: list[str], roots: list[Path]) -> dict:

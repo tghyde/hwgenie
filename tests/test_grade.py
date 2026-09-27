@@ -671,3 +671,36 @@ def test_get_app_rebuilds_when_folder_changes(grading_folder):
     a2 = holder.get_app(grading_folder)
     assert a2 is not a1
     assert a2.rubric[0].max == 10
+
+
+# ------------------------------------------------ stale server restart --
+
+def test_code_changed_detects_newer_source(tmp_path):
+    import os
+    from hwgenie.grade_gui import AppHolder
+    holder = AppHolder(root=tmp_path)
+    src = tmp_path / "src"; src.mkdir()
+    (src / "a.py").write_text("x = 1\n")
+    holder.src_dir = src
+    os.utime(src / "a.py", (holder.started - 100, holder.started - 100))
+    assert holder.code_changed() is False
+    holder._stale_checked = 0.0                       # drop the 5 s cache
+    os.utime(src / "a.py", (holder.started + 60, holder.started + 60))
+    assert holder.code_changed() is True
+
+
+def test_ping_reports_stale_and_restart_sets_events(tmp_path, monkeypatch):
+    import os
+    from hwgenie.grade_gui import AppHolder
+    holder = AppHolder(root=tmp_path)
+    src = tmp_path / "src"; src.mkdir()
+    (src / "a.py").write_text("x = 1\n")
+    holder.src_dir = src
+    _server, client = _start_server(holder)
+    assert client.post("/ping", {})["stale"] is False
+    holder._stale_checked = 0.0
+    os.utime(src / "a.py", (holder.started + 60, holder.started + 60))
+    assert client.post("/ping", {})["stale"] is True
+    assert client.post("/api/restart", {})["ok"] is True
+    assert holder.restart.wait(2)
+    assert holder.shutdown.wait(2)

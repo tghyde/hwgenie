@@ -25,8 +25,10 @@ from __future__ import annotations
 import errno
 import html
 import json
+import os
 import re
 import subprocess
+import sys
 import threading
 import time
 import urllib.parse
@@ -537,6 +539,37 @@ class AppHolder:
         self.shutdown = threading.Event()
         self.last_ping: float | None = None   # for --auto-exit
         self.bye_at: float | None = None
+        # Restart support: the hwGrader launcher only focuses an already
+        # running server, so after a hwgenie update the old code kept
+        # serving until every tab was closed.  The pages ask on each ping
+        # whether the source changed since we started and offer Restart.
+        self.started = time.time()
+        self.src_dir = Path(__file__).resolve().parent
+        self.restart = threading.Event()
+        self._stale_checked = 0.0
+        self._stale = False
+
+    def code_changed(self) -> bool:
+        """True when a hwgenie source file is newer than this process
+        (an update landed while it was running).  Checked at most every
+        five seconds."""
+        now = time.monotonic()
+        if now - self._stale_checked < 5 and self._stale_checked:
+            return self._stale
+        self._stale_checked = now
+        try:
+            newest = max((f.stat().st_mtime for f in self.src_dir.glob("*.py")),
+                         default=0.0)
+        except OSError:
+            newest = 0.0
+        self._stale = newest > self.started + 1
+        return self._stale
+
+    def request_restart(self) -> None:
+        """Stop serving and exec the same command again (serve_app does
+        the exec once the socket is closed)."""
+        self.restart.set()
+        threading.Timer(0.3, self.shutdown.set).start()
 
     @staticmethod
     def _folder_sig(p: Path) -> tuple:
@@ -1190,7 +1223,10 @@ def make_handler(holder: AppHolder):
                 self._json(start_create(data))
             elif self.path == "/ping":
                 holder.alive()
+                self._json({"ok": True, "stale": holder.code_changed()})
+            elif self.path == "/api/restart":
                 self._json({"ok": True})
+                holder.request_restart()
             elif self.path == "/bye":
                 holder.bye_at = time.monotonic()
                 self._json({"ok": True})
@@ -1272,15 +1308,29 @@ def serve_app(folder: Path | None, port: int = 0,
                                          holder.last_ping, holder.bye_at):
                     holder.shutdown.set()
         threading.Thread(target=watchdog, daemon=True).start()
-    if open_browser and local:
+    if open_browser and local and not os.environ.get("HWGENIE_RESTARTED"):
         _open_ui(url)
     try:
         holder.shutdown.wait()
     except KeyboardInterrupt:
         pass
     server.shutdown()
+    server.server_close()
+    if holder.restart.is_set():
+        _reexec()
     print("hwGenie closed.")
     return 0
+
+
+def _reexec() -> None:
+    """Replace this process with a fresh one running the same command
+    (same pid, same port), so a restart picks up updated hwgenie code.
+    The open tab reloads itself; HWGENIE_RESTARTED stops the new process
+    from opening a second one."""
+    print("hwGenie: restarting with the updated code…", flush=True)
+    os.environ["HWGENIE_RESTARTED"] = "1"
+    os.execv(sys.executable, [sys.executable, "-m", "hwgenie.cli",
+                              *sys.argv[1:]])
 
 
 # -------------------------------------------------------------- the pages --
@@ -3473,8 +3523,42 @@ if (window.ResizeObserver) {
 // liveness for --auto-exit servers: heartbeat plus a goodbye beacon so
 // closing the tab shuts hwGrader down (a reload's next ping cancels it)
 setInterval(() => {
-  fetch("/ping", {method: "POST", body: "{}"}).catch(() => {});
+  fetch("/ping", {method: "POST", body: "{}"})
+    .then(r => r.json()).then(d => { if (d && d.stale) staleBanner(); })
+    .catch(() => {});
 }, 2000);
+// hwGenie was updated while this server ran: offer a restart (the
+// launcher only focuses a running server, so this is the only way the
+// new code gets loaded short of closing every tab)
+function staleBanner() {
+  if (document.getElementById("stale")) return;
+  const b = document.createElement("div");
+  b.id = "stale";
+  b.style.cssText = "position:fixed;left:0;right:0;bottom:0;z-index:9999;" +
+    "padding:.6em 1em;background:#7a4b00;color:#fff;font:15px system-ui;" +
+    "display:flex;gap:1em;align-items:center;justify-content:center";
+  b.innerHTML = "hwGenie was updated since this app started \u2014 it is " +
+    "still running the old version. <button id=\"stalebtn\" style=\"" +
+    "font:inherit;padding:.3em .9em;border-radius:6px;border:0;" +
+    "background:#fff;color:#7a4b00;cursor:pointer\">Restart hwGenie</button>";
+  document.body.appendChild(b);
+  document.getElementById("stalebtn").addEventListener("click", async () => {
+    b.textContent = "Restarting\u2026";
+    try { await fetch("/api/restart", {method: "POST", body: "{}"}); }
+    catch (e) {}
+    const t0 = Date.now();
+    const poll = async () => {
+      try {
+        const r = await fetch("/ping", {method: "POST", body: "{}"});
+        const d = await r.json();
+        if (r.ok && d && !d.stale) { location.reload(); return; }
+      } catch (e) {}
+      if (Date.now() - t0 < 30000) setTimeout(poll, 700);
+      else b.textContent = "The restart did not come back \u2014 reopen hwGrader.";
+    };
+    setTimeout(poll, 1500);
+  });
+}
 addEventListener("pagehide", () => {
   try { navigator.sendBeacon("/bye", "{}"); } catch (e) {}
 });
@@ -4317,8 +4401,42 @@ $("#path").addEventListener("keydown", e => {
   if (e.key === "Enter") $("#open").click();
 });
 setInterval(() => {
-  fetch("/ping", {method: "POST", body: "{}"}).catch(() => {});
+  fetch("/ping", {method: "POST", body: "{}"})
+    .then(r => r.json()).then(d => { if (d && d.stale) staleBanner(); })
+    .catch(() => {});
 }, 2000);
+// hwGenie was updated while this server ran: offer a restart (the
+// launcher only focuses a running server, so this is the only way the
+// new code gets loaded short of closing every tab)
+function staleBanner() {
+  if (document.getElementById("stale")) return;
+  const b = document.createElement("div");
+  b.id = "stale";
+  b.style.cssText = "position:fixed;left:0;right:0;bottom:0;z-index:9999;" +
+    "padding:.6em 1em;background:#7a4b00;color:#fff;font:15px system-ui;" +
+    "display:flex;gap:1em;align-items:center;justify-content:center";
+  b.innerHTML = "hwGenie was updated since this app started \u2014 it is " +
+    "still running the old version. <button id=\"stalebtn\" style=\"" +
+    "font:inherit;padding:.3em .9em;border-radius:6px;border:0;" +
+    "background:#fff;color:#7a4b00;cursor:pointer\">Restart hwGenie</button>";
+  document.body.appendChild(b);
+  document.getElementById("stalebtn").addEventListener("click", async () => {
+    b.textContent = "Restarting\u2026";
+    try { await fetch("/api/restart", {method: "POST", body: "{}"}); }
+    catch (e) {}
+    const t0 = Date.now();
+    const poll = async () => {
+      try {
+        const r = await fetch("/ping", {method: "POST", body: "{}"});
+        const d = await r.json();
+        if (r.ok && d && !d.stale) { location.reload(); return; }
+      } catch (e) {}
+      if (Date.now() - t0 < 30000) setTimeout(poll, 700);
+      else b.textContent = "The restart did not come back \u2014 reopen hwGrader.";
+    };
+    setTimeout(poll, 1500);
+  });
+}
 addEventListener("pagehide", () => {
   try { navigator.sendBeacon("/bye", "{}"); } catch (e) {}
 });
