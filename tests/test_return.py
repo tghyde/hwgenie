@@ -293,3 +293,27 @@ def test_no_ec_csv_without_ec_parts(returned):
     folder, result = returned
     assert result.extra_credit is None
     assert not (result.out_dir / "extra-credit-upload.csv").exists()
+
+
+def test_find_worksheet_prefers_newest(tmp_path):
+    """Each re-collect copies its worksheet into the grading folder, so
+    after late work there are several; the export must fill the newest
+    (the old rule — exactly one, else none — silently skipped the
+    worksheet and only the feedback zip came out)."""
+    import os
+    from hwgenie.feedback import find_worksheet
+    a = tmp_path / "Grades-X--1.csv"; a.write_text("Identifier,Grade\n")
+    b = tmp_path / "Grades-X--1 (2).csv"; b.write_text("Identifier,Grade\n")
+    os.utime(a, (1_000_000, 1_000_000)); os.utime(b, (2_000_000, 2_000_000))
+    assert find_worksheet(tmp_path) == b
+    os.utime(a, (3_000_000, 3_000_000))
+    assert find_worksheet(tmp_path) == a
+    assert find_worksheet(tmp_path / "empty") is None
+
+
+def test_missing_worksheet_warns(grading_folder):
+    _seed_grades(grading_folder)
+    result = build_feedback(grading_folder, pdf=False)
+    assert result.worksheet is None
+    assert any("grading-worksheet-upload.csv not written" in w
+               for w in result.warnings)

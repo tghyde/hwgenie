@@ -577,7 +577,12 @@ def build_feedback(folder: Path, out: Path | None = None, pdf: bool = False,
 
     ws = Path(worksheet) if worksheet else find_worksheet(app.folder)
     ws_info = None
-    if ws is not None:
+    if ws is None:
+        warnings.append(
+            f"no Moodle grading worksheet (Grades-*.csv) in {app.folder} "
+            f"— {WORKSHEET_OUT} not written; download it from the "
+            "assignment's \"View all submissions\" page and re-collect")
+    else:
         try:
             ws_info = fill_worksheet(app, exported, out_dir, ws, statuses)
             if ws_info.get("held"):
@@ -748,9 +753,11 @@ WORKSHEET_OUT = "grading-worksheet-upload.csv"
 
 def find_worksheet(folder: Path) -> Path | None:
     """Moodle grading-worksheet exports are named Grades-<course>-....csv;
-    auto-detect one dropped into the grading folder."""
-    hits = sorted(Path(folder).glob("Grades-*.csv"))
-    return hits[0] if len(hits) == 1 else None
+    auto-detect the newest one in the grading folder (every re-collect
+    copies the worksheet it used in, so late work leaves several)."""
+    hits = [p for p in Path(folder).glob("Grades-*.csv") if p.is_file()]
+    return (max(hits, key=lambda p: (p.stat().st_mtime, p.name))
+            if hits else None)
 
 
 def fill_worksheet(app, exported: list[str], out_dir: Path,
