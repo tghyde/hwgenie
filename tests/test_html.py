@@ -202,6 +202,15 @@ def test_katex_macro_extraction():
     assert "\\notme" not in macros
 
 
+def test_katex_arraystretch_predefined():
+    # KaTeX does not predefine \arraystretch, so a solution's
+    # \renewcommand{\arraystretch}{1.3} inside \[...\] was a parse error.
+    assert extract_macros("")["\\arraystretch"] == "1"
+    # A preamble-level redefinition still wins over the default.
+    macros = extract_macros("\\renewcommand{\\arraystretch}{1.2}\n\\begin{document}")
+    assert macros["\\arraystretch"] == "1.2"
+
+
 @pytest.mark.skipif(not SAMPLE.exists(), reason="sample file not present")
 def test_sample_html_end_to_end(tmp_path):
     result = build(SAMPLE, out_dir=tmp_path, compile_pdfs=False)

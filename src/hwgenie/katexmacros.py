@@ -49,6 +49,11 @@ DEFAULT_MACROS = {
     "\\fold": "#1",
     # %CLEAR keep-marker for table cells: identity in rendered output.
     "\\keep": "#1",
+    # KaTeX honours \arraystretch in arrays but does not predefine it, so a
+    # \renewcommand{\arraystretch}{1.3} inside display math is a parse error
+    # ("command does not yet exist").  Predefining LaTeX's default makes the
+    # \renewcommand legal; the new value stays local to that expression.
+    "\\arraystretch": "1",
 }
 
 
