@@ -174,6 +174,56 @@ def test_center_tikzpicture_removed_from_submission():
     assert "Still here." in sub
     assert "tikzpicture" in v["handout"]
     assert "tikzcd" in v["handout"]
+    # The two consecutive diagrams leave ONE footnote, attached to the text
+    # right before them, pointing students at the HTML/PDF versions.
+    assert sub.count("\\footnote{") == 1
+    assert "Look at the hexagon:\\footnote{2 diagrams shown at this point" in sub
+    assert "HTML or PDF version" in sub
+    assert "footnote" not in v["handout"]
+    assert "footnote" not in v["solutions"]
+
+
+def test_removed_figure_footnote_attaches_past_comments():
+    v = variants_of(
+        "\\begin{problem}\nSee the picture.  % 50\\% of students miss this\n"
+        "% the figure:\n"
+        "\\begin{figure}\\centering\\includegraphics{a.png}\\end{figure}\n"
+        "\\begin{solution}\nS.\n\\end{solution}\n\\end{problem}\n"
+    )
+    sub = v["submission"]
+    assert "includegraphics" not in sub
+    assert "See the picture.\\footnote{A diagram shown at this point" in sub
+    # The footnote goes before the comments, not inside one.
+    assert "miss this\\footnote" not in sub
+    assert sub.count("\\footnote{") == 1
+
+
+def test_removed_figure_inside_solution_leaves_no_footnote():
+    v = variants_of(
+        "\\begin{problem}\nP.\n"
+        "\\begin{solution}\nSee:\n"
+        "\\begin{center}\\begin{tikzpicture}\\draw (0,0)--(1,1);"
+        "\\end{tikzpicture}\\end{center}\n"
+        "\\end{solution}\n"
+        "\\end{problem}\n"
+    )
+    sub = v["submission"]
+    assert "tikzpicture" not in sub
+    assert "footnote" not in sub
+    assert "%Write your solution here" in sub
+
+
+def test_removed_figure_footnote_with_no_space_before():
+    # A diagram glued to the preceding text: the footnote must not be lost
+    # as an edit "contained" in the removal starting at the same position.
+    v = variants_of(
+        "\\begin{problem}\nLook:\\begin{tikzcd}A\\end{tikzcd} done.\n"
+        "\\end{problem}\n"
+    )
+    sub = v["submission"]
+    assert "tikzcd" not in sub
+    assert "Look:\\footnote{A diagram shown" in sub
+    assert "assignment.} done." in sub
 
 
 def test_usetikzlibrary_removed_from_submission_only():

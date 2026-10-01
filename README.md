@@ -6,7 +6,7 @@ Generates all derivative homework files from a single LaTeX source. Phase 1
 | Output | Contents |
 |---|---|
 | `Problem Set N (Course Sem).pdf` | **Handout** — problems + figures, no solutions |
-| `Problem Set N [submission] (Course Sem).tex` | **Submission template** — blank `solution` environments, figures removed, metadata removed |
+| `Problem Set N [submission] (Course Sem).tex` | **Submission template** — blank `solution` environments, figures removed (footnote left in their place), metadata removed |
 | `Problem Set N [solutions] (Course Sem).pdf` | **Solutions** — everything, with a SOLUTIONS banner |
 | `Problem Set N [source] (Course Sem).tex` | Copy of the source |
 | `html/problem-set-N.html` | **Handout (HTML)** — responsive, KaTeX math, light/dark |
@@ -103,9 +103,13 @@ the handout and replaced with a SOLUTIONS / SUBMISSION banner in those versions.
 handout; replaced by an empty environment (indentation preserved) in the
 submission template.
 
-**Images** — either `figure` environments or `center` environments containing
-an `\includegraphics` are removed from the submission template (both forms are
-detected; the old script only handled `figure`).
+**Images and diagrams** — `figure` environments, `tikzpicture`/`tikzcd`
+diagrams, and `center` environments containing an `\includegraphics` or a tikz
+diagram are removed from the submission template.  Each removed block leaves a
+`\footnote` on the text just before it telling students the diagram was removed
+from the template and can be found in the HTML or PDF version of the assignment
+(consecutive diagrams share one footnote; diagrams inside a solution get none,
+since the solution is blanked anyway).
 
 **Answer tables** — put `%CLEAR` at the start of a `tabular` body
 (e.g. `\begin{tabular}{|c|c|} %CLEAR`) to keep the header row and first column

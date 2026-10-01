@@ -64,7 +64,10 @@ def apply_edits(text: str, edits: List[Edit]) -> str:
     """Apply edits; edits fully contained inside an earlier (outer) edit are
     dropped (e.g. a figure inside a solution that is being removed)."""
     kept: List[Edit] = []
-    for e in sorted(edits, key=lambda e: (e[0], -e[1])):
+    # A pure insertion (zero-width edit) sorts BEFORE a replacement starting
+    # at the same position, so it lands in front of the replaced text instead
+    # of being dropped as "contained" in it.
+    for e in sorted(edits, key=lambda e: (e[0], e[1] > e[0], -e[1])):
         if kept and e[0] < kept[-1][1] and e[1] <= kept[-1][1]:
             continue  # contained in previous edit
         if kept and e[0] < kept[-1][1]:
@@ -113,21 +116,81 @@ def solution_edits(text: str, nodes, mode: str) -> List[Edit]:
 TIKZ_ENVS = ("tikzpicture", "tikzcd")
 
 
+def removed_figure_note(count: int = 1) -> str:
+    """The footnote that marks the spot of a figure/diagram dropped from the
+    submission template.  `count` > 1 when several consecutive diagrams were
+    removed at the same spot (they share one footnote)."""
+    if count == 1:
+        what, verb, it = "A diagram", "has", "it"
+    else:
+        what, verb, it = f"{count} diagrams", "have", "they"
+    return (
+        f"\\footnote{{{what} shown at this point in the assignment {verb} "
+        f"been removed from this template; {it} can be found in the HTML or "
+        f"PDF version of the assignment.}}"
+    )
+
+
+_COMMENT_RE = re.compile(r"(?<!\\)%")
+
+
+def _attach_point(text: str, pos: int) -> Optional[int]:
+    """Position just after the last non-blank, non-comment character before
+    `pos`, i.e. where a \\footnote marking something removed at `pos` should
+    be attached.  None when nothing precedes `pos` but whitespace/comments."""
+    end = pos
+    while end > 0:
+        line_start = text.rfind("\n", 0, end) + 1
+        line = text[line_start:end]
+        m = _COMMENT_RE.search(line)
+        if m:
+            line = line[:m.start()]
+        line = line.rstrip()
+        if line:
+            return line_start + len(line)
+        end = line_start - 1
+    return None
+
+
 def figure_edits(text: str, nodes) -> List[Edit]:
     """Remove figure/figure* environments, tikz diagrams, AND center
     environments that contain an \\includegraphics or a tikz diagram (bare
     centered figures, as used in practice).  A tikz diagram inside a removed
-    center/figure is dropped by apply_edits as a nested edit."""
-    edits: List[Edit] = []
+    center/figure is dropped by apply_edits as a nested edit.
+
+    Each removed (outermost) block leaves a \\footnote attached to the text
+    just before it, telling the student the diagram lives in the HTML/PDF
+    versions.  Blocks with nothing but whitespace/comments between them share
+    one footnote.  Footnotes for blocks inside a solution are later dropped
+    by apply_edits, since the whole solution is blanked."""
+    spans: List[Tuple[int, int]] = []
     for env in texscan.iter_envs(nodes, ("figure", "figure*")):
-        edits.append((env.pos, env.pos + env.len, ""))
+        spans.append((env.pos, env.pos + env.len))
     for env in texscan.iter_envs(nodes, ("center",)):
         if texscan.contains_macro(env, "includegraphics") or any(
             True for _ in texscan.iter_envs(env.nodelist or [], TIKZ_ENVS)
         ):
-            edits.append((env.pos, env.pos + env.len, ""))
+            spans.append((env.pos, env.pos + env.len))
     for env in texscan.iter_envs(nodes, TIKZ_ENVS):
-        edits.append((env.pos, env.pos + env.len, ""))
+        spans.append((env.pos, env.pos + env.len))
+    edits: List[Edit] = [(s, e, "") for s, e in spans]
+
+    # Outermost spans only, in document order.
+    outer: List[Tuple[int, int]] = []
+    for s, e in sorted(spans, key=lambda se: (se[0], -se[1])):
+        if outer and s < outer[-1][1]:
+            continue
+        outer.append((s, e))
+    notes: dict = {}          # attach position -> count (insertion order)
+    attach_of: dict = {}      # span end -> its attach position
+    for s, e in outer:
+        p = _attach_point(text, s)
+        if p is None:
+            continue
+        p = attach_of.get(p, p)   # directly after a removed block: share
+        attach_of[e] = p
+        notes[p] = notes.get(p, 0) + 1
+    edits.extend((p, p, removed_figure_note(n)) for p, n in notes.items())
     return edits
 
 
