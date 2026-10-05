@@ -191,6 +191,46 @@ def test_problem_brace_protected_title():
     assert "[CRT" not in html and "[{CRT" not in html
 
 
+def test_problem_title_with_inline_math():
+    # math301 handout 2: "[Case $P$: the first two lines are distinct and
+    # parallel]" — pylatexenc splits the title at the $, so the closing
+    # bracket lives in a later chars node.
+    _c, html = convert(
+        "\\begin{problem}[Case $P$: the first two lines are parallel]\n"
+        "Do it.\n\\end{problem}"
+    )
+    assert "problem-note" in html
+    assert "Case " in html and "the first two lines are parallel" in html
+    assert "[Case" not in html and "parallel]" not in html
+    assert "<p>Do it.</p>" in html or "Do it." in html
+
+
+def test_problem_title_with_macro():
+    _c, html = convert(
+        "\\begin{problem}[Lines in \\emph{affine} space]\nDo it.\n\\end{problem}"
+    )
+    assert "problem-note" in html
+    assert "<em>affine</em> space" in html
+    assert "[Lines" not in html
+
+
+def test_theorem_title_with_inline_math():
+    _c, html = convert(
+        "\\begin{theorem}[$p$-Fixed Point Congruence]\nTrue.\n\\end{theorem}"
+    )
+    assert "thm-note" in html
+    assert "-Fixed Point Congruence" in html
+    assert "[$p$" not in html and "Congruence]" not in html
+
+
+def test_problem_unclosed_bracket_left_alone():
+    _c, html = convert(
+        "\\begin{problem}\n[Not a title. Just text.\n\\end{problem}"
+    )
+    assert "problem-note" not in html
+    assert "[Not a title" in html
+
+
 def test_sections_collected_for_toc():
     conv, html = convert(
         "\\section{Overview}\nA.\n"

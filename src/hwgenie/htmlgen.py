@@ -1012,7 +1012,16 @@ class HtmlConverter:
                 f"{inner.result()}\n</div>")
 
     def _extract_bracket_title(self, nodelist):
-        """Pull a leading [Optional Title] out of an environment's content."""
+        """Pull a leading [Optional Title] out of an environment's content.
+
+        pylatexenc does not know our environments take an optional argument,
+        so the title arrives as ordinary content: "[Lines]\n..." is a single
+        chars node, but math or macros inside the title split it into
+        several nodes ("[Case ", $P$, ": the first two lines]\n...").  Scan
+        forward across nodes for the closing "]" (tracking nested brackets
+        in the text), convert whatever sits between the brackets inline,
+        and hand back the content with the title removed.
+        """
         nodes = [c for c in (nodelist or []) if c is not None]
         k = 0
         while (
@@ -1021,33 +1030,59 @@ class HtmlConverter:
             and not nodes[k].chars.strip()
         ):
             k += 1
-        if k < len(nodes) and isinstance(nodes[k], LatexCharsNode):
-            chars = nodes[k].chars.lstrip()
-            if chars.startswith("["):
-                close = chars.find("]")
-                if close >= 0:
-                    title = esc(chars[1:close].strip())
-                    rest = LatexCharsNode(
-                        chars=chars[close + 1 :],
-                        pos=nodes[k].pos, len=nodes[k].len,
-                    )
-                    return nodes[:k] + [rest] + nodes[k + 1 :], title
-                # "[{Protected Title}]" — a group protects a ']' inside the
-                # title (e.g. [{CRT for $\ZZ[i]$}]); pylatexenc splits it
-                # into "[", {group}, "]...".
-                if chars.strip() == "[" and k + 2 < len(nodes) + 1:
-                    grp = nodes[k + 1] if k + 1 < len(nodes) else None
-                    after = nodes[k + 2] if k + 2 < len(nodes) else None
-                    if (isinstance(grp, LatexGroupNode)
-                            and isinstance(after, LatexCharsNode)
-                            and after.chars.lstrip().startswith("]")):
-                        title = self.convert_inline(grp.nodelist).strip()
-                        rest = LatexCharsNode(
-                            chars=after.chars.lstrip()[1:],
-                            pos=after.pos, len=after.len,
-                        )
-                        return nodes[:k] + [rest] + nodes[k + 3 :], title
-        return nodes, ""
+        if not (k < len(nodes) and isinstance(nodes[k], LatexCharsNode)):
+            return nodes, ""
+        first = nodes[k].chars.lstrip()
+        if not first.startswith("["):
+            return nodes, ""
+
+        title_nodes: List = []
+        depth = 0
+        j = k
+        text = first  # the chars still to scan in nodes[j]
+        while True:
+            # Scan this chars node for the bracket that closes the title.
+            close = -1
+            for idx, ch in enumerate(text):
+                if ch == "[":
+                    depth += 1
+                elif ch == "]":
+                    depth -= 1
+                    if depth == 0:
+                        close = idx
+                        break
+            if close >= 0:
+                lead = text[1:close] if j == k else text[:close]
+                if lead:
+                    title_nodes.append(LatexCharsNode(
+                        chars=lead, pos=nodes[j].pos, len=nodes[j].len))
+                rest = LatexCharsNode(
+                    chars=text[close + 1:], pos=nodes[j].pos, len=nodes[j].len)
+                break
+            # No closing bracket here: the whole node belongs to the title.
+            title_nodes.append(LatexCharsNode(
+                chars=text[1:] if j == k else text,
+                pos=nodes[j].pos, len=nodes[j].len))
+            j += 1
+            # Swallow atomic nodes (math, groups, macros) until the next text.
+            while j < len(nodes) and not isinstance(nodes[j], LatexCharsNode):
+                if isinstance(nodes[j], LatexEnvironmentNode):
+                    return nodes, ""  # a title never spans an environment
+                title_nodes.append(nodes[j])
+                j += 1
+            if j >= len(nodes):
+                return nodes, ""  # never closed: not a title after all
+            text = nodes[j].chars
+
+        # "[{Protected Title}]" — a group protects a ']' inside the title
+        # (e.g. [{CRT for $\ZZ[i]$}]); render the group's contents.
+        meaningful = [t for t in title_nodes
+                      if not (isinstance(t, LatexCharsNode)
+                              and not t.chars.strip())]
+        if len(meaningful) == 1 and isinstance(meaningful[0], LatexGroupNode):
+            title_nodes = list(meaningful[0].nodelist or [])
+        title = self.convert_inline(title_nodes).strip()
+        return nodes[:k] + [rest] + nodes[j + 1:], title
 
     def _math_env_html(self, n) -> str:
         name = n.environmentname
