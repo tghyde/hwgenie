@@ -692,7 +692,6 @@ NAV_CSS = """
 .scrollbar a { color: var(--accent); padding: .1rem .3rem; }
 .scrollbar a:hover { background: var(--hover-bg); }
 .scrollbar .sb-label { color: var(--muted); }
-.scrollbar .sb-jumps { display: flex; gap: .7rem; }
 .scrollbar .sb-top { margin-left: auto; }
 @media (max-width: 30rem) {
   .scrollbar { gap: .55rem; padding-left: .7rem; }
@@ -719,8 +718,9 @@ nav.site .sep-dot { color: var(--muted); }
 .scrollbar .sb-toc[aria-expanded="true"]::after { content: " ▴"; }
 
 /* Table of contents: a fixed sidebar in the left gutter when the viewport
-   is wide enough to hold one beside the 44rem text column; otherwise a
-   dropdown panel under the sticky bar, opened by its "Contents" button. */
+   is wide enough to hold one beside the 44rem text column (the sticky bar
+   is hidden there — the sidebar carries its home and top links); otherwise
+   a dropdown panel under the sticky bar, opened by its "Contents" button. */
 nav.toc {
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   font-size: .82rem;
@@ -749,9 +749,14 @@ nav.toc a.active {
   border-left-color: var(--accent);
 }
 nav.toc .toc-num { color: var(--muted); font-weight: 400; margin-right: .45em; }
+nav.toc .toc-note { color: var(--muted); font-weight: 400; }
 nav.toc li.toc-l2 a { padding-left: 1.5rem; }
 nav.toc li.toc-l3 a { padding-left: 2.4rem; }
+nav.toc .toc-home, nav.toc .toc-top { margin: 0 0 .7rem; padding: 0 .6rem; }
+nav.toc .toc-top { margin: .7rem 0 0; }
+nav.toc .toc-home a, nav.toc .toc-top a { color: var(--accent); }
 @media (min-width: 74rem) {
+  .scrollbar { display: none; }
   nav.toc {
     position: fixed;
     top: 5rem;
@@ -761,7 +766,6 @@ nav.toc li.toc-l3 a { padding-left: 2.4rem; }
     overflow-y: auto;
     z-index: 40;
   }
-  .scrollbar .sb-toc { display: none; }
 }
 @media (max-width: 73.99rem) {
   nav.toc {
@@ -777,7 +781,8 @@ nav.toc li.toc-l3 a { padding-left: 2.4rem; }
     padding: .5rem .6rem .7rem;
   }
   nav.toc.open { display: block; }
-  nav.toc .toc-title { display: none; }
+  /* the bar above the panel already has the title, home and top links */
+  nav.toc .toc-title, nav.toc .toc-home, nav.toc .toc-top { display: none; }
 }
 @media print {
   nav.toc, .scrollbar, #themetoggle { display: none; }
@@ -823,7 +828,7 @@ TOC_JS = """
   var bar = document.getElementById("scrollnav");
   var btn = bar ? bar.querySelector(".sb-toc") : null;
   var wide = window.matchMedia ? matchMedia("(min-width: 74rem)") : null;
-  var links = Array.prototype.slice.call(toc.querySelectorAll("a[href^='#']"));
+  var links = Array.prototype.slice.call(toc.querySelectorAll("ul a[href^='#']"));
   var targets = links.map(function(a) {
     return document.getElementById(a.getAttribute("href").slice(1));
   });
@@ -840,7 +845,17 @@ TOC_JS = """
     });
   }
   toc.addEventListener("click", function(ev) {
-    if (ev.target.closest("a")) setOpen(false);
+    var a = ev.target.closest("a");
+    if (!a) return;
+    var href = a.getAttribute("href");
+    if (href === "#top") {
+      ev.preventDefault();
+      window.scrollTo({top: 0, behavior: "smooth"});
+    } else if (href && href.charAt(0) === "#") {
+      var t = document.getElementById(href.slice(1));
+      if (t && t.tagName === "DETAILS") t.open = true;
+    }
+    setOpen(false);
   });
   document.addEventListener("click", function(ev) {
     if (toc.classList.contains("open") && !toc.contains(ev.target)) setOpen(false);
@@ -892,10 +907,18 @@ TOC_JS = """
 """
 
 
-def toc_html(sections: List[Tuple[int, str, str, str]]) -> str:
+def toc_html(
+    sections: List[Tuple[int, str, str, str]],
+    home: Optional[Tuple[str, str]] = None,
+    label: str = "",
+) -> str:
     """Table-of-contents nav from (level, number, title html, anchor id)
     entries.  Levels are normalized so the shallowest heading present sits
-    flush left (a handout made only of subsections is not indented)."""
+    flush left (a handout made only of subsections is not indented).
+
+    `home` is an (href, label) back link and `label` the page's short name
+    ("PS 3 · Solutions"); both show only in the desktop sidebar, where the
+    nav replaces the sticky bar that otherwise carries them."""
     if not sections:
         return ""
     base = min(level for level, _n, _t, _a in sections)
@@ -907,11 +930,16 @@ def toc_html(sections: List[Tuple[int, str, str, str]]) -> str:
             f'<li class="toc-l{depth}"><a href="#{html_mod.escape(anchor)}">'
             f"{num_html}{title}</a></li>"
         )
+    home_html = (
+        f'<p class="toc-home"><a href="{home[0]}">← {html_mod.escape(home[1])}</a></p>\n'
+        if home else ""
+    )
+    title = html_mod.escape(label) if label else "Contents"
     return (
         '<nav class="toc" id="toc" aria-label="Table of contents">\n'
-        '<p class="toc-title">Contents</p>\n<ul>\n'
+        f'{home_html}<p class="toc-title">{title}</p>\n<ul>\n'
         + "\n".join(items)
-        + "\n</ul>\n</nav>"
+        + '\n</ul>\n<p class="toc-top"><a href="#top">↑ Top</a></p>\n</nav>'
     )
 
 
@@ -919,20 +947,15 @@ def scrollbar_html(
     home_href: Optional[str],
     home_label: str,
     page_label: str,
-    jump_links: Optional[List[Tuple[str, str]]] = None,
     toc_toggle: bool = False,
 ) -> str:
+    """Sticky bar that slides in on scroll at narrow widths (hidden by CSS
+    where the sidebar ToC fits): back link, page label, optional
+    "Contents" toggle for the ToC dropdown, and a back-to-top link."""
     home = (
         f'<a href="{home_href}">← {html_mod.escape(home_label)}</a>'
         if home_href else ""
     )
-    jumps = ""
-    if jump_links:
-        items = " ".join(
-            f'<a href="#{html_mod.escape(anchor)}">{html_mod.escape(num)}</a>'
-            for num, anchor in jump_links
-        )
-        jumps = f'<span class="sb-jumps">{items}</span>'
     toggle = (
         '<button type="button" class="sb-toc" aria-controls="toc" '
         'aria-expanded="false">Contents</button>'
@@ -943,7 +966,6 @@ def scrollbar_html(
         f"{home}"
         f'<span class="sb-label">{html_mod.escape(page_label)}</span>'
         f"{toggle}"
-        f"{jumps}"
         f'<a class="sb-top" href="#top" aria-label="Back to top">↑ Top</a>'
         f"</div>"
     )

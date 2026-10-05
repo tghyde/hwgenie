@@ -363,7 +363,7 @@ B.
 """
 
 
-def test_toc_on_lessons_and_handouts_not_problem_sets(repo):
+def test_toc_sidebar_on_every_page(repo):
     lessons = repo / "source" / "lessons"
     lessons.mkdir(parents=True)
     (lessons / "lesson1.tex").write_text(TOC_DOC.format(doc_type="lesson"))
@@ -383,9 +383,45 @@ def test_toc_on_lessons_and_handouts_not_problem_sets(repo):
         assert 'var toc = document.getElementById("toc")' in html
         # the nav comes before the column so it never affects text flow
         assert html.index('id="toc"') < html.index("<main>")
+        # sidebar carries what the (desktop-hidden) sticky bar used to
+        assert '<p class="toc-home"><a href="../../#' in html
+        assert '<p class="toc-top"><a href="#top">↑ Top</a></p>' in html
+    assert '<p class="toc-title">Lesson 1</p>' in (site / "lessons/1/index.html").read_text()
+    assert '<p class="toc-title">Handout 1</p>' in (site / "handouts/1/index.html").read_text()
+
+    # Problem sets outline by problem; the bar no longer lists jump links.
     ps1 = (site / "ps/1/index.html").read_text()
-    assert 'id="toc"' not in ps1
-    assert 'class="sb-toc"' not in ps1
+    assert '<nav class="toc" id="toc" aria-label="Table of contents">' in ps1
+    assert '<p class="toc-title">PS 1</p>' in ps1
+    assert '<li class="toc-l1"><a href="#problem-1.1">Problem 1.1</a></li>' in ps1
+    assert 'class="sb-toc" aria-controls="toc"' in ps1
+    assert "sb-jumps" not in ps1
+    sol = (site / "ps/1/solutions.html").read_text()
+    assert '<p class="toc-title">PS 1 · Solutions</p>' in sol
+
+
+def test_outline_nests_problems_under_headings(repo):
+    handouts = repo / "source" / "handouts"
+    handouts.mkdir(parents=True)
+    (handouts / "guide.tex").write_text(
+        "\\documentclass{article}\n\\usepackage{hwgenie}\n"
+        "\\hwtype{handout}\n\\hwnumber{2}\n\\hwtitle{Guide}\n"
+        "\\begin{document}\n\\hwmaketitle\n"
+        "\\subsection{Warm-up}\n"
+        "\\begin{problem}[Cosets of $H$]\nA.\n\\end{problem}\n"
+        "\\subsection{Harder}\n"
+        "\\begin{problem}\nB.\n\\end{problem}\n"
+        "\\end{document}\n"
+    )
+    result = build_site(repo, compile_pdfs=False, today=date(2025, 10, 15))
+    assert result.ok, result.errors
+    html = (result.out_dir / "handouts/2/index.html").read_text()
+    toc = html[html.index('<nav class="toc"'):html.index("</nav>")]
+    assert ('<li class="toc-l1"><a href="#sec-2.1"><span class="toc-num">2.1</span>Warm-up</a></li>\n'
+            '<li class="toc-l2"><a href="#problem-2.1">Problem 2.1 '
+            '<span class="toc-note">· Cosets of $H$</span></a></li>\n'
+            '<li class="toc-l1"><a href="#sec-2.2"><span class="toc-num">2.2</span>Harder</a></li>\n'
+            '<li class="toc-l2"><a href="#problem-2.2">Problem 2.2</a></li>') in toc
 
 
 HANDOUT_SOL_DOC = """\\documentclass{{article}}

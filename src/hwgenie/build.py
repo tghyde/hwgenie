@@ -271,22 +271,21 @@ def build_html(
     if solutions_page:
         title += " (Solutions)"
 
-    # Lessons and handouts get a table of contents built from their
-    # headings (problem sets navigate by problem instead).
-    toc = ""
-    if meta.doc_type != "problemset" and len(conv.sections) >= 2:
-        toc = toc_html(conv.sections)
+    # Every page gets a table of contents from its outline — headings and
+    # problems in document order.  Wide viewports show it as a sidebar that
+    # also carries the back link and page label; narrow ones tuck it behind
+    # the sticky bar's "Contents" button.
+    kind = {"lesson": "Lesson", "syllabus": "Syllabus",
+            "handout": "Handout"}.get(meta.doc_type, "PS")
+    bar_label = f"{kind} {meta.number}".strip()
+    if include_solutions and meta.doc_type in ("problemset", "handout"):
+        bar_label += " · Solutions"
+    toc = toc_html(conv.outline, home=sb_home, label=bar_label)
 
     scrollbar = ""
     if sb_home:
-        kind = {"lesson": "Lesson", "syllabus": "Syllabus",
-                "handout": "Handout"}.get(meta.doc_type, "PS")
-        label = f"{kind} {meta.number}".strip()
-        if include_solutions and meta.doc_type in ("problemset", "handout"):
-            label += " · Solutions"
         scrollbar = scrollbar_html(
-            sb_home[0], sb_home[1], label, conv.problem_anchors,
-            toc_toggle=bool(toc),
+            sb_home[0], sb_home[1], bar_label, toc_toggle=bool(toc),
         )
 
     page = render_page(

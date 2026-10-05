@@ -174,6 +174,10 @@ class HtmlConverter:
         # (level, number, title html, anchor id) per \section-family heading,
         # in document order — drives the page table of contents.
         self.sections: List[Tuple[int, str, str, str]] = []
+        # The same, with problems interleaved (one level below the heading
+        # they sit under) — the page outline shown in the sidebar ToC.
+        self.outline: List[Tuple[int, str, str, str]] = []
+        self._heading_level = 0
         self.theorems = self._parse_newtheorems()
         self.eq_prefix = self._parse_eq_prefix()
 
@@ -223,6 +227,8 @@ class HtmlConverter:
         self._label_ctx = []
         self.problem_anchors = []
         self.sections = []
+        self.outline = []
+        self._heading_level = 0
 
     def convert(self) -> str:
         masked = texscan.mask_verbatim(self.text)
@@ -573,6 +579,8 @@ class HtmlConverter:
                     k += 1
             level = {"section": 1, "subsection": 2}.get(base, 3)
             self.sections.append((level, num, title, sec_id))
+            self.outline.append((level, num, title, sec_id))
+            self._heading_level = level
             flow.block(
                 f'<{tag} class="sec-head" id="{sec_id}">{num_html}{title}</{tag}>')
             return j
@@ -688,6 +696,10 @@ class HtmlConverter:
             self._label_ctx.pop()
             title_html = (f' <span class="problem-note">· {title}</span>'
                           if title else "")
+            note = f' <span class="toc-note">· {title}</span>' if title else ""
+            self.outline.append((self._heading_level + 1, "",
+                                 f"Problem {esc(num)}{note}",
+                                 f"problem-{_anchor_slug(num)}"))
             flow.block(
                 f'<details class="problem" open id="problem-{_anchor_slug(num)}">\n'
                 f'<summary><h2 class="problem-title">Problem {esc(num)}'

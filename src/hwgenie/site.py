@@ -51,12 +51,14 @@ from .htmltemplate import (
     FOOTER_HTML,
     NAV_CSS,
     SCROLLBAR_JS,
+    TOC_JS,
     THEME_HEAD_SCRIPT,
     THEME_TOGGLE_HTML,
     THEME_TOGGLE_JS,
     file_box,
     katex_block,
     scrollbar_html,
+    toc_html,
     view_box,
 )
 from .htmlgen import HtmlConverter
@@ -937,8 +939,9 @@ def render_index(
             + "\n".join(cards)
         )
     body = "\n".join(sections) if sections else "<p>Nothing posted yet.</p>"
-    # Sticky nav (appears on scroll, same component as assignment pages):
-    # section jumps for whichever sections exist.
+    # Section outline for whichever sections exist: a sidebar ToC on wide
+    # viewports, a "Contents" dropdown on the sticky bar on narrow ones
+    # (same components as the assignment pages).
     jumps = []
     if top_cards:
         jumps.append(("Handouts", "handouts"))
@@ -948,7 +951,8 @@ def render_index(
         jumps.append(("Lessons", "lessons"))
     if cards:
         jumps.append(("Problem Sets", "problem-sets"))
-    scrollbar = scrollbar_html(None, "", course, jumps) if jumps else ""
+    toc = toc_html([(1, "", e(name), anchor) for name, anchor in jumps])
+    scrollbar = scrollbar_html(None, "", course, toc_toggle=bool(toc)) if jumps else ""
     macros_json = json.dumps(macros or {}, ensure_ascii=False)
     plain_heading = re.sub(r"\$", "", heading)
     header = (
@@ -976,6 +980,7 @@ def render_index(
 <body id="top">
 {THEME_TOGGLE_HTML}
 {scrollbar}
+{toc}
 {hero if banner else ""}
 <main>
 {"" if banner else header}
@@ -986,6 +991,7 @@ def render_index(
 </main>
 {THEME_TOGGLE_JS}
 {SCROLLBAR_JS}
+{TOC_JS if toc else ""}
 </body>
 </html>
 """

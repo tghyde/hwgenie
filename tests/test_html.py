@@ -249,6 +249,22 @@ def test_toc_html_normalizes_levels_and_numbers():
     assert ('<li class="toc-l1"><a href="#sec-1.1">'
             '<span class="toc-num">1.1</span>The Basics</a></li>') in toc
     assert '<li class="toc-l2"><a href="#sec-cyclic-g">Cyclic $G$</a></li>' in toc
+    # bare call: generic title, no back link, always a back-to-top link
+    assert '<p class="toc-title">Contents</p>' in toc
+    assert "toc-home" not in toc
+    assert toc.rstrip().endswith(
+        '<p class="toc-top"><a href="#top">↑ Top</a></p>\n</nav>')
+
+
+def test_toc_html_sidebar_carries_home_and_page_label():
+    from hwgenie.htmltemplate import toc_html
+    toc = toc_html([(1, "", "Problem 3.1", "problem-3.1")],
+                   home=("../../#problem-sets", "Math <221>"), label="PS 3 · Solutions")
+    assert toc.startswith(
+        '<nav class="toc" id="toc" aria-label="Table of contents">\n'
+        '<p class="toc-home"><a href="../../#problem-sets">← Math &lt;221&gt;</a></p>\n'
+        '<p class="toc-title">PS 3 · Solutions</p>\n<ul>\n')
+    assert '<li class="toc-l1"><a href="#problem-3.1">Problem 3.1</a></li>' in toc
 
 
 def test_scrollbar_contents_toggle():
@@ -259,6 +275,8 @@ def test_scrollbar_contents_toggle():
     assert ('<button type="button" class="sb-toc" aria-controls="toc" '
             'aria-expanded="false">Contents</button>') in with_toc
     assert with_toc.index("sb-label") < with_toc.index("sb-toc") < with_toc.index("sb-top")
+    # jump links live in the ToC now, never in the bar
+    assert "sb-jumps" not in with_toc
 
 
 def test_matrix_colspec_rewritten_for_katex():
