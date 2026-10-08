@@ -282,10 +282,14 @@ def build_html(
         bar_label += " · Solutions"
     toc = toc_html(conv.outline, home=sb_home, label=bar_label)
 
+    # The bar's "Contents" button is the only way to open the ToC at narrow
+    # widths, so a standalone page (no home link) still gets the bar whenever
+    # it has a ToC; the back link is simply left out.
     scrollbar = ""
-    if sb_home:
+    if sb_home or toc:
+        home_href, home_label = sb_home if sb_home else (None, "")
         scrollbar = scrollbar_html(
-            sb_home[0], sb_home[1], bar_label, toc_toggle=bool(toc),
+            home_href, home_label, bar_label, toc_toggle=bool(toc),
         )
 
     page = render_page(
