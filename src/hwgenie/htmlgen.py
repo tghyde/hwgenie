@@ -388,6 +388,40 @@ class HtmlConverter:
             return parsed[:count], i + 1
         return self._take_groups(nodes, i + 1, count)
 
+    def _starred_macro_args(self, nodes, i: int, count: int
+                            ) -> Tuple[bool, List, int]:
+        """Like _macro_args, but also report whether the macro carried a
+        star (\\subsection* etc.).  pylatexenc never puts the star in
+        macroname: for macros it knows (\\section, \\subsection, ...) the
+        star is a one-character chars node in the parsed argument list;
+        for unknown macros it is the start of the chars node that follows
+        the macro node, which is consumed here so the title group can be
+        found."""
+        n = nodes[i]
+        starred = False
+        if n.nodeargd and n.nodeargd.argnlist:
+            for a in n.nodeargd.argnlist:
+                if isinstance(a, LatexCharsNode) and a.chars.strip() == "*":
+                    starred = True
+            parsed = self._parsed_group_args(n)
+            if parsed:
+                return starred, parsed[:count], i + 1
+        j = i + 1
+        if j < len(nodes) and isinstance(nodes[j], LatexCharsNode):
+            chars = nodes[j].chars
+            if chars.lstrip().startswith("*"):
+                starred = True
+                rest = chars.lstrip()[1:]
+                if rest.strip():
+                    # "\\foo* text": keep the text as an ordinary chars node.
+                    nodes[j] = LatexCharsNode(
+                        parsing_state=nodes[j].parsing_state,
+                        pos=nodes[j].pos, len=nodes[j].len, chars=rest)
+                else:
+                    j += 1
+        args, j = self._take_groups(nodes, j, count)
+        return starred, args, j
+
     def macro(self, nodes, i: int, flow: Flow) -> int:
         n = nodes[i]
         name = n.macroname
@@ -552,12 +586,12 @@ class HtmlConverter:
                     f"<footer>{attribution}</footer></blockquote>"
                 )
             return j
-        if name.rstrip("*") in ("section", "subsection", "subsubsection"):
-            args, j = self._macro_args(nodes, i, 1)
+        if name in ("section", "subsection", "subsubsection"):
+            starred, args, j = self._starred_macro_args(nodes, i, 1)
             title = self.convert_inline(args[0].nodelist) if args else ""
-            base = name.rstrip("*")
+            base = name
             num = ""
-            if base == "subsection" and not name.endswith("*"):
+            if base == "subsection" and not starred:
                 self.subsec_counter += 1
                 num = (f"{self.section}.{self.subsec_counter}"
                        if self.section else str(self.subsec_counter))

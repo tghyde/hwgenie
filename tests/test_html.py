@@ -382,3 +382,29 @@ def test_hrulefill_renders_as_blank_line():
     _, html = convert("\\noindent\\textbf{Name:}\\ \\hrulefill")
     assert '<span class="hrulefill"></span>' in html
     assert "Unknown macro \\hrulefill" not in " ".join(_.warnings)
+
+
+def test_starred_subsection_is_unnumbered():
+    # pylatexenc reports the macro name as "subsection" and carries the
+    # star separately, so the star must be detected from the argument
+    # nodes rather than the name.
+    conv, out = convert(
+        "\\subsection*{Step 1: Setup}\nA.\n"
+        "\\subsection*{Step 2: Setup}\nB.\n"
+        "\\subsection{Numbered}\nC.\n"
+    )
+    assert conv.subsec_counter == 1
+    assert out.count('<span class="sec-num">') == 1
+    assert '<h2 class="sec-head" id="sec-step-1-setup">Step 1: Setup</h2>' in out
+    assert '<h2 class="sec-head" id="sec-step-2-setup">Step 2: Setup</h2>' in out
+    assert ('<h2 class="sec-head" id="sec-3.1">'
+            '<span class="sec-num">3.1</span>Numbered</h2>') in out
+    assert conv.outline == [
+        (2, "", "Step 1: Setup", "sec-step-1-setup"),
+        (2, "", "Step 2: Setup", "sec-step-2-setup"),
+        (2, "3.1", "Numbered", "sec-3.1"),
+    ]
+    from hwgenie.htmltemplate import toc_html
+    toc = toc_html(conv.outline)
+    assert '<a href="#sec-step-1-setup">Step 1: Setup</a>' in toc
+    assert "toc-num" in toc and toc.count("toc-num") == 1
