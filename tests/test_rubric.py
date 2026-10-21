@@ -228,3 +228,92 @@ def test_collect_seeds_rubric_parts(tmp_path):
     collect(zpath, dest, template=tmpl)
     assert (dest / "rubric.yml").read_text().endswith("- 1.1: 3\n- 1.2: 7 ec\n")
     assert STUDENT_TEX  # (import used: keeps the fixture module loaded)
+
+
+# ------------------------------------------------------------ extra credit --
+
+CHALLENGE_TEMPLATE = "\n".join([
+    r"\documentclass[11pt]{article}",
+    r"\begin{document}",
+    r"Problems marked \red{(Challenge)} are optional and are for extra credit",
+    r"\begin{problem}",                                    # 1: part (c) EC
+    r"\begin{enumerate}",
+    r"    \item Plain. \begin{solution}\end{solution}",
+    r"    \item Also plain, mentions a challenge in passing.",
+    r"    \begin{solution}\end{solution}",
+    r"    \item \red{(Challenge)} \blue{Hard.}",
+    r"    \begin{solution}",
+    r"    \end{solution}",
+    r"\end{enumerate}",
+    r"\end{problem}",
+    r"\begin{problem}[(Challenge)]",                       # 2: whole problem
+    r"\blue{Prove it.}",
+    r"\begin{solution}\end{solution}",
+    r"\begin{enumerate}",
+    r"    \item Sub a. \begin{solution}\end{solution}",
+    r"\end{enumerate}",
+    r"\end{problem}",
+    r"\begin{problem}",                                    # 3: nested lists
+    r"\begin{enumerate}",
+    r"    \item \red{(Challenge)} Two sub-parts:",
+    r"    \begin{enumerate}",
+    r"        \item sub i \begin{solution}\end{solution}",
+    r"        \item sub ii \begin{solution}\end{solution}",
+    r"    \end{enumerate}",
+    r"    \item Back to normal. \begin{solution}\end{solution}",
+    r"\end{enumerate}",
+    r"\end{problem}",
+    r"\begin{problem}",                                    # 4: opening text
+    r"\red{(Challenge)} Everything here is optional.",
+    r"\begin{enumerate}",
+    r"    \item a \begin{solution}\end{solution}",
+    r"    \item b \begin{solution}\end{solution}",
+    r"\end{enumerate}",
+    r"\end{problem}",
+    r"\begin{problem}[{A title with $\ZZ[i]$}]",           # 5: bracketed item
+    r"\begin{enumerate}",
+    r"    \item[(Challenge)] bracketed label \begin{solution}\end{solution}",
+    r"    \item Ordinary. \begin{solution}\end{solution}",
+    r"\end{enumerate}",
+    r"\end{problem}",
+    r"\end{document}",
+])
+
+
+def test_template_ec_boxes(tmp_path):
+    t = tmp_path / "ps05.tex"
+    t.write_text(CHALLENGE_TEMPLATE)
+    labels = rubric_mod.template_box_labels(t)
+    assert labels == ["1.1", "1.2", "1.3", "2.1", "2.2", "3.1", "3.2", "3.3",
+                      "4.1", "4.2", "5.1", "5.2"]
+    ec = rubric_mod.template_ec_boxes(t)
+    assert sorted(labels[i - 1] for i in ec) == [
+        "1.3", "2.1", "2.2", "3.1", "3.2", "4.1", "4.2", "5.1"]
+    assert rubric_mod.template_ec_boxes(None) == set()
+    assert rubric_mod.template_ec_boxes(tmp_path / "nope.tex") == set()
+    # defaults carry the marks; a count mismatch drops them with the labels
+    parts = rubric_mod.default_parts(t, 12)
+    assert [p.label for p in parts if p.ec] == [
+        "1.3", "2.1", "2.2", "3.1", "3.2", "4.1", "4.2", "5.1"]
+    assert not any(p.ec for p in rubric_mod.default_parts(t, 7))
+
+
+def test_seed_and_payload_carry_ec_defaults(tmp_path):
+    t = tmp_path / "ps05.tex"
+    t.write_text(CHALLENGE_TEMPLATE)
+    g = _manifest(tmp_path / "math221" / "ps05" / "grading", 12, t)
+    assert rubric_mod.seed_parts(g, t, 12)
+    text = (g / "rubric.yml").read_text()
+    assert "- 1.2: 5\n- 1.3: 5 ec\n- 2.1: 5 ec\n- 2.2: 5 ec\n- 3.1: 5 ec\n" in text
+    assert text.endswith("- 4.2: 5 ec\n- 5.1: 5 ec\n- 5.2: 5\n")
+    d = rubric_mod.payload(g)
+    assert d["default_ec"] == [False, False, True, True, True, True, True,
+                               False, True, True, True, False]
+    assert d["default_timezone"] == "America/New_York"
+    assert [p["ec"] for p in d["parts"]] == d["default_ec"]
+    # a hand-edited file keeps its own marks; the defaults stay available
+    (g / "rubric.yml").write_text("parts:\n" + "".join(
+        f"- {lb}: 5\n" for lb in d["default_labels"]))
+    d = rubric_mod.payload(g)
+    assert not any(p["ec"] for p in d["parts"])
+    assert sum(d["default_ec"]) == 8

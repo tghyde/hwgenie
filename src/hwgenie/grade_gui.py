@@ -713,8 +713,22 @@ class AppHolder:
         existed = asg.is_dir()
         for sub in ("moodle-raw", "build"):
             (asg / sub).mkdir(parents=True, exist_ok=True)
+        # the assignment source from the course clone next to the lab
+        # (its solutions show to graders; its \hwdue is the deadline)
+        from . import late as late_mod
+        from .collect import fetch_source
+        try:
+            source = fetch_source(asg)
+        except OSError as e:
+            source = {"course": None, "path": None, "name": None,
+                      "copied": False, "note": str(e), "due": None,
+                      "due_text": None}
+        settings = late_mod.read_settings(asg / "grading")
         return {"ok": True, "path": str(asg), "existed": existed,
-                "course": course, "name": name,
+                "course": course, "name": name, "source": source,
+                "due": settings.get("due") or source.get("due"),
+                "timezone": settings.get("timezone")
+                or late_mod.DEFAULT_TIMEZONE,
                 "files": self.assignment_files(asg)}
 
     @staticmethod
@@ -3764,8 +3778,11 @@ __NAV__
       <button id="ncreate">Create</button>
     </div>
     <p class="hint">Makes <code>&lt;lab&gt;/&lt;course&gt;/&lt;ps&gt;/</code>
-      with <code>moodle-raw/</code> and <code>build/</code>. Picking an
-      existing assignment just reopens it so you can add files.</p>
+      with <code>moodle-raw/</code> and <code>build/</code>, and copies the
+      problem set&rsquo;s source .tex in from the course repo next to the
+      lab (<code>math221</code> &rarr; <code>math221-fall2026/source/
+      problem-sets/ps04/ps04.tex</code>). Picking an existing assignment
+      just reopens it so you can add files.</p>
     <div id="nfiles" hidden>
       <p class="hint" id="npath"></p>
       <div class="manual">
@@ -3773,14 +3790,17 @@ __NAV__
           <input type="file" id="nupload" multiple accept=".zip,.csv,.tex" hidden>
         </label>
         <input id="ndue" spellcheck="false" style="flex:0 0 11rem"
-          placeholder="due: 2026-09-11 23:59" title="Deadline in course time">
+          placeholder="due: 2026-09-11 23:59"
+          title="Deadline in course time (New York) — read from the source's \hwdue line; edit if it is wrong">
         <button id="ncollect" disabled>Collect now</button>
       </div>
       <p class="hint">From Moodle: the <b>Download all submissions</b> zip and
-        the <b>grading worksheet</b> csv; from the course repo: the
-        assignment&rsquo;s <b>.tex source</b> (solutions show to graders).
-        Zips and csvs land in <code>moodle-raw/</code>, tex in
-        <code>build/</code>.</p>
+        the <b>grading worksheet</b> csv. The assignment&rsquo;s <b>.tex
+        source</b> is fetched from the course repo (solutions show to
+        graders) &mdash; add it by hand only if that fails. The due date
+        comes from the source&rsquo;s <code>\hwdue</code> line; change
+        it here or later in Rubric &amp; deadline. Zips and csvs land in
+        <code>moodle-raw/</code>, tex in <code>build/</code>.</p>
       <div id="nlist" class="hint"></div>
     </div>
   </div>
@@ -3816,17 +3836,17 @@ __NAV__
           title="Deadline in course time (YYYY-MM-DD HH:MM); blank = nothing is flagged late"></label>
         <label>Time zone <input id="rtz" spellcheck="false"
           placeholder="America/New_York"
-          title="IANA zone the deadline and Moodle's timestamps are in; blank = this machine's"></label>
+          title="IANA zone the deadline and Moodle's timestamps are in (America/New_York unless you say otherwise)"></label>
       </div>
       <table id="rparts">
         <thead><tr><th>#</th><th>Problem</th><th>Label</th><th>Max</th>
-          <th title="Extra credit: points count but the max does not">EC</th></tr></thead>
+          <th title="Extra credit: points count but the max does not. Parts the source marks (Challenge) start checked">EC</th></tr></thead>
         <tbody></tbody>
       </table>
       <div class="manual">
         <button id="rsave">Save rubric</button>
         <button class="ghost" id="rlabels"
-          title="Number the parts from the template: problem.box">Template labels</button>
+          title="Re-read the template: number the parts problem.box and check EC on the parts it marks (Challenge)">From template</button>
         <span class="grow"></span>
         <span id="rtotal" class="hint"></span>
       </div>
@@ -3962,7 +3982,7 @@ async function runCollect(body) {
     if (!CFG.grader) { rubricOptions(s.folders, d.folder); loadRubric(d.folder); }
     if (NEW) { const r = await (await fetch("/api/assignment/new",
       {method: "POST", body: JSON.stringify({course: NEW.course, name: NEW.name})})).json();
-      if (r.ok) renderNewFiles(r.files); }
+      if (r.ok) { NEW.files = r.files; NEW.source = r.source; renderNewFiles(r.files); } }
   } catch (e) {
     log.textContent = "";
     log.style.display = "none";
@@ -4005,7 +4025,7 @@ function renderRubric() {
   $("#rpath").innerHTML = (d.exists ? "" : "<b>No rubric.yml yet</b> — " +
     "defaults shown; saving creates ") + `<code>${esc(d.path)}</code>`;
   $("#rdue").value = d.due || "";
-  $("#rtz").value = d.timezone || "";
+  $("#rtz").value = d.timezone || d.default_timezone || "";
   const prob = {};
   d.problems.forEach(p => p.boxes.forEach((b, i) =>
     { prob[b] = `${p.num} (box ${i + 1})`; }));
@@ -4067,6 +4087,9 @@ function wireRubric() {
     if (!RUB) return;
     $("#rparts tbody").querySelectorAll(".rlabel").forEach((inp, i) => {
       inp.value = RUB.default_labels[i] || String(i + 1); });
+    $("#rparts tbody").querySelectorAll(".rec").forEach((inp, i) => {
+      inp.checked = !!(RUB.default_ec || [])[i]; });
+    rubricTotal();
   });
   [$("#rdue"), $("#rtz")].forEach(el => el.addEventListener("keydown", e => {
     if (e.key === "Enter") saveRubric();
@@ -4096,6 +4119,10 @@ function showNew(r) {
   $("#nfiles").hidden = false;
   $("#npath").innerHTML = (r.existed ? "Reopened " : "Created ") +
     `<code>${esc(r.path)}</code>`;
+  // the deadline read from the source (or already in rubric.yml) — the
+  // field stays editable for the odd assignment that says otherwise
+  if (r.due) $("#ndue").value = r.due;
+  else if (!r.existed) $("#ndue").value = "";
   renderNewFiles(r.files);
 }
 
@@ -4106,12 +4133,24 @@ function renderNewFiles(files) {
   const csvs = raw.filter(f => f.toLowerCase().endsWith(".csv"));
   const zip = zips[0], csv = csvs[0];
   const tex = build.find(f => f.toLowerCase().endsWith(".tex"));
-  const li = (ok, what, name, n) =>
+  const src = (NEW && NEW.source) || {};
+  const li = (ok, what, name, n, note) =>
     `<span class="f">${ok ? "✓" : "○"} ${what}: ${name ? "<b>" + esc(name) + "</b>" : "<i>missing</i>"}` +
-    `${n > 1 ? ` <span class="muted">(newest of ${n})</span>` : ""}</span>`;
+    `${n > 1 ? ` <span class="muted">(newest of ${n})</span>` : ""}` +
+    `${note ? ` <span class="muted">${esc(note)}</span>` : ""}</span>`;
+  const courseName = src.course ? src.course.split("/").filter(Boolean).pop() : "";
+  const texNote = !tex ? (src.note || "add it with Add files…")
+    : src.name === tex ? (src.copied ? `fetched from ${courseName}` : `from ${courseName}`)
+      + (src.note ? ` — ${src.note}` : "")
+    : (src.note || "");
+  const dueNote = src.due_text
+    ? (src.due ? `from \\hwdue{${src.due_text}}`
+               : `could not read a date from \\hwdue{${src.due_text}} — type it`)
+    : (tex ? "no \\hwdue line in the source — type it" : "");
   $("#nlist").innerHTML = li(!!zip, "Moodle zip", zip, zips.length) +
     li(!!csv, "worksheet", csv, csvs.length) +
-    li(!!tex, "assignment .tex", tex) +
+    li(!!tex, "assignment .tex", tex, 0, texNote) +
+    li(!!$("#ndue").value, "due", $("#ndue").value, 0, dueNote) +
     (files.collected ? `<span class="f">✓ already collected — “Collect now” updates it</span>` : "");
   $("#ncollect").disabled = !zip;
   NEW.zip = zip ? NEW.path + "/moodle-raw/" + zip : null;
@@ -4126,6 +4165,7 @@ async function uploadFiles(list) {
       const r = await fetch("/api/assignment/upload?" + q, {method: "POST", body: f});
       const d = await r.json();
       if (!d.ok) throw new Error(d.error || "upload failed");
+      NEW.files = d.files;
       renderNewFiles(d.files);
     } catch (e) {
       $("#err").textContent = e.message; $("#err").style.display = "block";
@@ -4168,6 +4208,7 @@ function wireNew() {
   $("#ncollect").addEventListener("click", () => {
     if (NEW && NEW.zip) runCollect({zip: NEW.zip, due: $("#ndue").value.trim()});
   });
+  $("#ndue").addEventListener("input", () => { if (NEW) renderNewFiles(NEW.files); });
 }
 
 function showView(view) {

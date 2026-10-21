@@ -6,7 +6,8 @@ parses the parts and ``late.py`` the settings; this module is the editor
 behind the app's Rubric & deadline panel: it turns the file into a JSON
 payload, validates an edited payload and writes the file back, and it
 seeds a fresh grading folder's parts from the template's problem/box
-structure so labels read "2.3" rather than "Part 7".
+structure so labels read "2.3" rather than "Part 7", with the parts the
+source marks (Challenge) already flagged extra credit.
 """
 
 from __future__ import annotations
@@ -29,15 +30,21 @@ HEADER = [
 
 # ---------------------------------------------------------------- defaults --
 
+def _template_text(template: Path | None) -> str | None:
+    if template is None:
+        return None
+    try:
+        return Path(template).read_text(errors="replace")
+    except OSError:
+        return None
+
+
 def template_box_labels(template: Path | None) -> list[str]:
     """One label per solution box in template order, ``<problem>.<k>``
     (box k of that problem); boxes outside any problem environment get
     their global ordinal.  Empty when the template is missing."""
-    if template is None:
-        return []
-    try:
-        text = Path(template).read_text(errors="replace")
-    except OSError:
+    text = _template_text(template)
+    if text is None:
         return []
     from .grade_gui import template_problem_blocks
     labels: dict[int, str] = {}
@@ -53,11 +60,68 @@ def _count_boxes(text: str) -> int:
                for ln in text.splitlines())
 
 
+# "(Challenge)" marks extra credit in the assignment sources: on an \item
+# for one part, or on the problem itself — \begin{problem}[(Challenge)]
+# or in the statement before any part — for all of its parts.
+_CHALLENGE_RE = re.compile(r"\(\s*challenge\b[^()]*\)", re.I)
+_LIST_ENVS = r"enumerate|itemize|parts|subparts|questions|subquestions|description"
+_EC_TOKEN_RE = re.compile(
+    r"\\begin\{(?:" + _LIST_ENVS + r")\}|\\end\{(?:" + _LIST_ENVS + r")\}"
+    r"|\\item\b|HWGRADERBOX(\d+)")
+
+
+def _ec_boxes_in_problem(tex: str) -> set[int]:
+    """Solution-box ordinals (HWGRADERBOX<n> tokens) of one problem that
+    are extra credit.  A box is extra credit when the problem is, or when
+    the \\item it sits under — at any list depth — carries (Challenge)."""
+    tokens = list(_EC_TOKEN_RE.finditer(tex))
+    boxes = [int(t.group(1)) for t in tokens if t.group(1)]
+    head = tex[:tokens[0].start()] if tokens else tex
+    if _CHALLENGE_RE.search(head):
+        return set(boxes)
+    out: set[int] = set()
+    stack: list[bool] = []       # per open list: is its current item EC?
+    for i, t in enumerate(tokens):
+        tok = t.group(0)
+        if tok.startswith(r"\begin"):
+            stack.append(False)
+        elif tok.startswith(r"\end"):
+            if stack:
+                stack.pop()
+        elif tok.startswith(r"\item"):
+            end = tokens[i + 1].start() if i + 1 < len(tokens) else len(tex)
+            flag = bool(_CHALLENGE_RE.search(tex[t.end():end]))
+            if stack:
+                stack[-1] = flag
+            else:
+                stack.append(flag)
+        elif any(stack):
+            out.add(int(t.group(1)))
+    return out
+
+
+def template_ec_boxes(template: Path | None) -> set[int]:
+    """Global ordinals of the solution boxes the template marks
+    (Challenge) — the extra-credit defaults for a fresh rubric."""
+    text = _template_text(template)
+    if text is None:
+        return set()
+    from .grade_gui import template_problem_blocks
+    out: set[int] = set()
+    for blk in template_problem_blocks(text):
+        out |= _ec_boxes_in_problem(blk["tex"])
+    return out
+
+
 def default_parts(template: Path | None, n_parts: int) -> list[RubricPart]:
     labels = template_box_labels(template)
+    ec: set[int] = set()
     if len(labels) != n_parts:
         labels = [str(i) for i in range(1, n_parts + 1)]
-    return [RubricPart(label=lb) for lb in labels]
+    else:
+        ec = template_ec_boxes(template)
+    return [RubricPart(label=lb, ec=(i in ec))
+            for i, lb in enumerate(labels, start=1)]
 
 
 # ------------------------------------------------------------ read/write --
@@ -114,11 +178,8 @@ def seed_parts(folder: Path, template: Path | None, n_parts: int) -> bool:
 # ------------------------------------------------------------- app payload --
 
 def _problems(template: Path | None) -> list[dict]:
-    if template is None:
-        return []
-    try:
-        text = Path(template).read_text(errors="replace")
-    except OSError:
+    text = _template_text(template)
+    if text is None:
         return []
     from .grade_gui import template_problem_blocks
     return [{"num": b["num"], "boxes": b["boxes"]}
@@ -128,7 +189,8 @@ def _problems(template: Path | None) -> list[dict]:
 def payload(folder: Path) -> dict:
     """What the editor shows for a grading folder: the file's settings and
     parts (padded/defaulted like the grader sees them), the template's
-    problem → boxes map and the default labels, plus the file's own text."""
+    problem → boxes map and the default labels / extra-credit marks, plus
+    the file's own text."""
     folder = Path(folder)
     manifest = load_manifest(folder)
     n_parts = infer_n_parts(manifest)
@@ -151,10 +213,12 @@ def payload(folder: Path) -> dict:
         "ok": True, "folder": str(folder), "path": str(path),
         "exists": path.is_file(), "name": late_mod.assignment_key(folder),
         "due": st.get("due"), "timezone": st.get("timezone"),
+        "default_timezone": late_mod.DEFAULT_TIMEZONE,
         "n_parts": n_parts,
         "parts": [{"label": rp.label, "max": rp.max, "ec": rp.ec}
                   for rp in parts],
         "default_labels": [rp.label for rp in defaults],
+        "default_ec": [rp.ec for rp in defaults],
         "problems": _problems(template),
         "template": str(template) if template else None,
         "text": text,

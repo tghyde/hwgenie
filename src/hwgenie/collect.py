@@ -334,6 +334,14 @@ def collect(src: Path, dest: Path, template: Path | None = None,
         except late_mod.LateError as e:
             raise CollectError(str(e))
     settings = late_mod.read_settings(dest)
+    due_from_source = None
+    if not due and not settings.get("due") and template is not None:
+        # the assignment source says when it is due (\hwdue{...}); the
+        # instructor can still change it in Rubric & deadline
+        due_from_source = source_due(template, dest).get("due")
+        due = due_from_source
+    if not timezone_name and not settings.get("timezone"):
+        timezone_name = late_mod.DEFAULT_TIMEZONE
     tz_name = timezone_name or settings.get("timezone")
     try:
         tz = late_mod.course_tz(tz_name)
@@ -542,6 +550,136 @@ def find_course_dir(template: Path | None, dest: Path) -> Path | None:
     return None
 
 
+def course_semester(course: Path | None) -> str | None:
+    """"Fall 2026" from the course clone's course.yml (else coursedata.tex)."""
+    if course is None:
+        return None
+    cfg = Path(course) / "course.yml"
+    if cfg.is_file():
+        from .course_admin import parse_course_yml
+        try:
+            sem = parse_course_yml(cfg.read_text(encoding="utf-8")
+                                   ).get("semester")
+        except OSError:
+            sem = None
+        if sem:
+            return sem
+    cd = Path(course) / "coursedata.tex"
+    if cd.is_file():
+        m = re.search(r"\\hwsemester\}\s*\{([^{}]*)\}",
+                      cd.read_text(errors="replace"))
+        if m and m.group(1).strip():
+            return m.group(1).strip()
+    return None
+
+
+_HWDUE_CMD = re.compile(r"^[^%\n]*?\\hwdue\s*\{([^{}]*)\}", re.M)
+
+
+def source_due(template: Path | None, dest: Path | None = None,
+               course: Path | None = None) -> dict:
+    """The deadline written in the assignment source: ``{"text": the
+    \\hwdue display text or None, "due": "YYYY-MM-DD HH:MM" or None}``.
+    The year comes from the course's semester (``course`` or the clone
+    found for the template/assignment), since the source never says."""
+    out = {"text": None, "due": None}
+    if template is None:
+        return out
+    try:
+        text = Path(template).read_text(errors="replace")
+    except OSError:
+        return out
+    m = _HWDUE_CMD.search(text)
+    if not m or not m.group(1).strip():
+        return out
+    out["text"] = m.group(1).strip()
+    if course is None:
+        course = find_course_dir(template, dest) if dest is not None else \
+            find_course_dir(template, Path(template).parent)
+    out["due"] = late_mod.parse_hwdue(out["text"],
+                                      semester=course_semester(course))
+    return out
+
+
+def _ps_number(name: str) -> str | None:
+    """'ps04' / 'PS4' / 'problem-set-4' -> '4' (None when not numbered)."""
+    m = re.fullmatch(r"(?:ps|hw|pset|problem[-_ ]?set)?[-_ ]?0*(\d+)[a-z]?",
+                     name.strip().lower())
+    return m.group(1) if m else None
+
+
+def find_source_tex(course: Path, name: str) -> Path | None:
+    """The assignment source in a course clone for lab folder ``name``:
+    ``source/problem-sets/<name>/<name>.tex``, else the .tex named after
+    its folder (or the only one) in the problem-set folder with the same
+    number (ps04 ~ ps4)."""
+    ps_root = Path(course) / "source" / "problem-sets"
+    if not ps_root.is_dir():
+        return None
+    direct = ps_root / name / f"{name}.tex"
+    if direct.is_file():
+        return direct
+    num = _ps_number(name)
+    try:
+        dirs = sorted(d for d in ps_root.iterdir() if d.is_dir())
+    except OSError:
+        return None
+    for d in dirs:
+        if d.name.lower() != name.lower() and not (num and _ps_number(d.name) == num):
+            continue
+        texes = sorted(t for t in d.glob("*.tex") if t.is_file())
+        same = [t for t in texes if t.stem.lower() == d.name.lower()]
+        if same:
+            return same[0]
+        if len(texes) == 1:
+            return texes[0]
+    return None
+
+
+def fetch_source(asg: Path) -> dict:
+    """Give a lab assignment folder (``grading-lab/math221/ps04``) its
+    source .tex without the instructor hunting for it: find the course
+    clone next to the lab, the problem set's source inside it, and copy
+    it into ``build/`` (fresh — a copy that drifted from the repo is
+    replaced until the assignment has been collected).  Reports what it
+    found, plus the deadline read from the source::
+
+        {"course", "path", "name", "copied", "note", "due", "due_text"}
+    """
+    asg = Path(asg)
+    build, grading = asg / "build", asg / "grading"
+    out = {"course": None, "path": None, "name": None, "copied": False,
+           "note": None, "due": None, "due_text": None}
+    course = find_course_dir(None, grading)
+    if course is None:
+        out["note"] = (f"no course clone named {asg.parent.name}-… with an "
+                       "hwgenie.sty found next to the grading lab")
+        return out
+    out["course"] = str(course)
+    src = find_source_tex(course, asg.name)
+    if src is None:
+        out["note"] = (f"no source/problem-sets/{asg.name}/{asg.name}.tex "
+                       f"in {course.name}")
+        return out
+    out["path"], out["name"] = str(src), src.name
+    dest = build / src.name
+    if not dest.is_file():
+        build.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(src, dest)        # fresh mtime: newest_tex picks it
+        out["copied"] = True
+    elif _sha256(dest) != _sha256(src):
+        if (grading / MANIFEST_NAME).is_file():
+            out["note"] = (f"{src.name} in {course.name} has changed since "
+                           "it was collected — build/ copy kept")
+        else:
+            shutil.copyfile(src, dest)
+            out["copied"] = True
+            out["note"] = f"refreshed from {course.name}"
+    d = source_due(dest, grading, course)
+    out["due"], out["due_text"] = d["due"], d["text"]
+    return out
+
+
 def course_macro_text(course: Path) -> str:
     """hwgenie.sty + coursedata.tex — everything KaTeX needs to know
     about the course's own macros (RR, ZZ, theorem names…)."""
@@ -650,10 +788,12 @@ def add_parser(sub) -> None:
                         "zip or in the grading folder.")
     p.add_argument("--due",
                    help="Deadline, e.g. '2026-09-04 23:59' (course timezone); "
-                        "written to rubric.yml so lateness can be computed.")
+                        "written to rubric.yml so lateness can be computed.  "
+                        "Default: the \\hwdue{...} line of the template when "
+                        "it is the assignment source.")
     p.add_argument("--timezone",
                    help="IANA zone for the due date and Moodle's timestamps "
-                        "(default: this machine's zone); written to rubric.yml.")
+                        "(default: America/New_York); written to rubric.yml.")
     p.add_argument("--fresh", action="store_true",
                    help="Ignore an existing manifest and rebuild every unit "
                         "(the pre-update behaviour).")
@@ -714,7 +854,8 @@ def run_collect(args: argparse.Namespace) -> int:
               "worksheet found)")
     if not result.late:
         print("  no due date — set one with --due 'YYYY-MM-DD HH:MM' (or a "
-              "due: line in rubric.yml) to flag late work")
+              "due: line in rubric.yml, or \\hwdue in the source) to flag "
+              "late work")
     print("  (tex* = reconstructed from PDF, not the student's original)")
     return 0
 

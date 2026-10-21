@@ -86,16 +86,21 @@ __NAV__
     <li>Make a folder for the assignment, e.g.
       <code>grading-lab/math221/ps01/</code> &mdash; easiest via
       <b class="ui">New assignment</b> under <b class="ui">Collect from
-      Moodle</b> on the Grading tab: pick or name the course folder, name
-      the problem set, then <b class="ui">Add files&hellip;</b> picks the
-      zip, worksheet and .tex straight from Downloads and files them
-      for you &mdash; with the zip and worksheet
-      in <code>moodle-raw/</code> and the assignment&rsquo;s .tex in
-      <code>build/</code> &mdash; the <em>source</em> file (e.g.
-      <code>ps01.tex</code> from the course repo) if graders should see
-      your solutions in the problem pane, or the blank submission
-      template students downloaded if they shouldn&rsquo;t. Solutions
-      never reach the student feedback either way.</li>
+      Moodle</b> on the Grading tab: pick or name the course folder and
+      name the problem set. The panel then fetches the assignment&rsquo;s
+      <em>source</em> .tex itself &mdash; from the course clone next to the
+      grading lab whose name starts with the course folder&rsquo;s
+      (<code>math221</code> &rarr; <code>math221-fall2026/source/
+      problem-sets/ps04/ps04.tex</code>) &mdash; into <code>build/</code>,
+      and fills the <b class="ui">due</b> field from the source&rsquo;s
+      <code>\hwdue</code> line (the year comes from the course&rsquo;s
+      semester; edit the field if the source is wrong or says
+      &ldquo;never&rdquo;). <b class="ui">Add files&hellip;</b> picks the
+      zip and worksheet straight from Downloads and files them in
+      <code>moodle-raw/</code>; it also takes a .tex if the fetch failed
+      or you would rather graders saw the blank submission template than
+      your solutions in the problem pane. Solutions never reach the
+      student feedback either way.</li>
     <li>Collect, in Terminal from the <code>hwgenie</code> folder:
       <code>.venv/bin/hwgenie collect "&lt;zip&gt;" --dest
       "&lt;assignment&gt;/grading" --template "&lt;template.tex&gt;"</code>.
@@ -106,8 +111,10 @@ __NAV__
       <code>submissions/&lt;slug&gt;/submission.pdf</code>). The
       &ldquo;no tex&rdquo; and &ldquo;0 solution boxes&rdquo; flags are
       fixable &mdash; see <a href="#recon">section 8</a>.
-      Add <code>--due "2026-09-04 23:59"</code> (course time) so late
-      work is flagged &mdash; see <a href="#late">Late work</a>.
+      The due date is read from the source&rsquo;s <code>\hwdue</code>
+      line when the template is the source; add <code>--due "2026-09-04
+      23:59"</code> (course time) to say otherwise &mdash; see
+      <a href="#late">Late work</a>.
       <em>Or skip Terminal:</em> paste the zip&rsquo;s path (and the due
       date) into <b class="ui">Collect from Moodle</b> on the Grading
       tab &mdash; with the layout above it finds the worksheet and the
@@ -134,6 +141,11 @@ __NAV__
   <p>The grading folder gets a <code>rubric.yml</code> with one line per
   solution box, labeled from the template&rsquo;s problems
   (<code>2.3</code> = problem 2, third box) and worth 5 points each.
+  Parts the source marks <code>(Challenge)</code> &mdash; on the part&rsquo;s
+  <code>\item</code>, or on the whole problem via
+  <code>\begin{problem}[(Challenge)]</code> or its opening sentence, which
+  marks every part &mdash; start out as extra credit; <b class="ui">From
+  template</b> in the panel re-applies those marks and labels at any time.
   The easiest way to edit it is in the app: <b class="ui">Grading &rarr;
   Collect from Moodle &rarr; Rubric &amp; deadline</b> &mdash; pick the
   assignment, set the deadline, labels, points and extra credit, and
@@ -255,8 +267,8 @@ __NAV__
   &amp; deadline</b> (<a href="#rubric">section 2</a>),
   <code>collect --due "2026-09-04 23:59"</code>, or a
   <code>due: 2026-09-04 23:59</code> line in <code>rubric.yml</code>
-  (add a <b class="ui">Time zone</b> such as <code>America/New_York</code>
-  if the machine isn&rsquo;t in course time) &mdash; and hwGrader shows a red <b class="ui">late</b>
+  (the <b class="ui">Time zone</b> is <code>America/New_York</code> unless
+  you change it) &mdash; and hwGrader shows a red <b class="ui">late</b>
   badge with the delay on every late student, in the sidebar and in both
   views. Graders see the badge; the decision is yours.</p>
   <p><b>The policy</b> (edit <code>policy</code> in the course
@@ -339,6 +351,12 @@ __NAV__
           "&lt;assignment&gt;/reconstructed/&lt;slug&gt;/submission.tex"</code>.
           If its item counts don&rsquo;t match the template&rsquo;s boxes
           it says so and writes nothing &mdash; use the next option.</li>
+        <li><em>Their own .tex organised as unnumbered
+          <code>\section{}</code> per problem with one
+          <code>\subsection{}</code> per part</em> (the Overleaf
+          blank-project habit) &mdash; same as above with
+          <code>split_sections.py</code> in place of
+          <code>split_tex.py</code>; it takes the same arguments.</li>
         <li><em>Their own .tex in any other shape</em> (problems as
           <code>\textbf{Problem 2.1}</code>, blockquotes, whatever) &mdash;
           open it beside the template and copy each answer into its

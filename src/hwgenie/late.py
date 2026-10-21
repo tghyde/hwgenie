@@ -11,8 +11,9 @@ facts and the instructor's decisions never overwrite each other:
     ``collected`` (when the unit entered the grading folder).
 
 ``rubric.yml`` (assignment settings, pushed to the grading server)
-    ``due: 2026-09-04 23:59`` and optionally ``timezone: America/New_York``
-    (default: the machine's local zone).  Without ``due`` nothing is late.
+    ``due: 2026-09-04 23:59`` and ``timezone: America/New_York`` (collect
+    writes ``DEFAULT_TIMEZONE`` when none is given; a file without one is
+    read in the machine's local zone).  Without ``due`` nothing is late.
 
 ``late.json`` (instructor decisions; never pushed or pulled)::
 
@@ -42,7 +43,7 @@ from __future__ import annotations
 import csv
 import json
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -73,6 +74,12 @@ class LateError(Exception):
 
 
 # ---------------------------------------------------------------- times ----
+
+# Every course so far has been taught in New York; collect writes this
+# into rubric.yml when nothing else names a zone, so the instructor never
+# types it and the graders' server (wherever it runs) agrees.
+DEFAULT_TIMEZONE = "America/New_York"
+
 
 def course_tz(name: str | None):
     if not name:
@@ -118,6 +125,69 @@ def parse_due(text: str, tz) -> datetime:
     if dt is None:
         raise LateError(f"cannot parse due date {s!r} (use YYYY-MM-DD HH:MM)")
     return dt
+
+
+_MONTHS = {m.lower(): i for i, m in enumerate(
+    ["January", "February", "March", "April", "May", "June", "July",
+     "August", "September", "October", "November", "December"], start=1)}
+_MONTHS.update({k[:3]: v for k, v in list(_MONTHS.items())})
+_MONTHS["sept"] = 9
+_HWDUE_RE = re.compile(
+    r"(?P<month>[A-Za-z]{3,9})\.?\s+(?P<day>\d{1,2})(?:st|nd|rd|th)?"
+    r"(?:,?\s*(?P<year>\d{4}))?"
+    r"(?:.*?\b(?P<hour>\d{1,2})(?::(?P<min>\d{2}))?\s*(?P<ampm>[ap])\.?m\b"
+    r"|.*?\b(?P<noon>noon|midnight)\b)?",
+    re.IGNORECASE | re.DOTALL)
+
+
+def parse_hwdue(text: str, year: int | None = None,
+                semester: str | None = None) -> str | None:
+    """The ``\\hwdue{...}`` display text of an assignment source
+    ("Friday, October 2nd by 11:59pm") as a ``due:`` value
+    ("2026-10-02 23:59"), or None when it names no date ("never").
+
+    The source never carries a year: it comes from ``semester`` ("Fall
+    2026"; a January/February date in a fall term rolls into the next
+    year), else ``year``, else the year that puts the date nearest to
+    today.  Without a time of day the deadline is 23:59."""
+    s = re.sub(r"\\[a-zA-Z]+\*?|[{}]", " ", text or "")   # \red{...} wrappers
+    s = re.sub(r"\s+", " ", s).strip()
+    m = _HWDUE_RE.search(s)
+    if not m or m.group("month").lower() not in _MONTHS:
+        return None
+    month = _MONTHS[m.group("month").lower()]
+    day = int(m.group("day"))
+    if m.group("year"):
+        y = int(m.group("year"))
+    else:
+        y = year
+        sem = re.search(r"(\d{4})", semester or "")
+        if sem:
+            y = int(sem.group(1))
+            if re.search(r"\bfall\b|\bautumn\b", semester, re.I) and month <= 2:
+                y += 1
+        if y is None:
+            today = datetime.now()
+            y = today.year
+            try:
+                if datetime(y, month, day) - today > timedelta(days=183):
+                    y -= 1
+                elif today - datetime(y, month, day) > timedelta(days=183):
+                    y += 1
+            except ValueError:
+                pass
+    hour, minute = 23, 59
+    if m.group("hour"):
+        hour = int(m.group("hour")) % 12
+        if m.group("ampm").lower() == "p":
+            hour += 12
+        minute = int(m.group("min") or 0)
+    elif m.group("noon"):
+        hour, minute = (12, 0) if m.group("noon").lower() == "noon" else (0, 0)
+    try:
+        return datetime(y, month, day, hour, minute).strftime("%Y-%m-%d %H:%M")
+    except ValueError:
+        return None
 
 
 def iso(dt: datetime | None) -> str | None:

@@ -1035,3 +1035,134 @@ def test_new_assignment_locked_on_grader_server(tmp_path):
         client.get("/api/lab", expect=404)
     finally:
         server.shutdown()
+
+
+# ------------------------------------------------ deadline from the source --
+
+@pytest.mark.parametrize("text, semester, want", [
+    ("Friday, October 2nd by 11:59pm", "Fall 2026", "2026-10-02 23:59"),
+    ("Friday, September 4th at 11:59pm", "Fall 2026", "2026-09-04 23:59"),
+    ("Friday, September 25 by 11:59pm", "Fall 2026", "2026-09-25 23:59"),
+    ("Friday, Sep. 4", "Spring 2027", "2027-09-04 23:59"),      # no time: 23:59
+    ("Monday, January 5th by noon", "Fall 2026", "2027-01-05 12:00"),  # rolls over
+    ("Wednesday, Feb 11, 2027 at 9 AM", "Fall 2026", "2027-02-11 09:00"),
+    (r"\textbf{Friday, October 2nd} by 11:59pm", "Fall 2026", "2026-10-02 23:59"),
+    ("never, optional Problem Set!", "Fall 2026", None),
+    ("", "Fall 2026", None),
+    ("Friday, Octember 2nd", "Fall 2026", None),
+])
+def test_parse_hwdue(text, semester, want):
+    assert late.parse_hwdue(text, semester=semester) == want
+
+
+def test_parse_hwdue_year_fallbacks():
+    assert late.parse_hwdue("October 2nd", year=2025) == "2025-10-02 23:59"
+    # no semester or year: the year that puts the date within six months
+    got = late.parse_hwdue("October 2nd")
+    y = int(got[:4])
+    assert abs((datetime(y, 10, 2) - datetime.now()).days) <= 183
+
+
+def test_collect_reads_due_from_source_and_defaults_to_new_york(tmp_path):
+    """A template that is the assignment source carries \\hwdue; collect
+    turns it into the due: line (year from the course's semester) and
+    writes the New York zone unless told otherwise."""
+    root = tmp_path / "HWGenie"
+    course = root / "math221-fall2026"
+    course.mkdir(parents=True)
+    (course / "hwgenie.sty").write_text("% sty")
+    (course / "course.yml").write_text('course: "Math 221"\nsemester: "Fall 2026"\n')
+    ps = root / "grading-lab" / "math221" / "ps01"
+    (ps / "moodle-raw").mkdir(parents=True)
+    (ps / "build").mkdir()
+    src = make_moodle_dir(tmp_path)
+    zpath = ps / "moodle-raw" / "MATH-221-PS1.zip"
+    with zipfile.ZipFile(zpath, "w") as z:
+        for f in src.rglob("*"):
+            if f.is_file():
+                z.write(f, str(f.relative_to(src)))
+    _write_ws(ps / "moodle-raw" / "Grades-MATH-221-PS1--9.csv", [
+        ("111", "Jane Doe", "Friday, September 4, 2026, 10:36 PM"),
+        ("222", "Rick Roe", "Saturday, September 5, 2026, 1:15 AM")])
+    tmpl = ps / "build" / "ps01.tex"
+    tmpl.write_text(SOURCE_TEX.replace(
+        r"\hwnumber{1}", "\\hwnumber{1}\n\\hwdue{Friday, September 4th by 11:59pm}"))
+    dest = ps / "grading"
+    res = collect(zpath, dest, template=tmpl)
+    st = late.read_settings(dest)
+    assert st == {"due": "2026-09-04 23:59", "timezone": "America/New_York"}
+    assert res.late["Pitt Roe-Rick"]["is_late"]
+    assert not res.late["Doe-Jane"]["is_late"]
+    # an explicit --due / a due already in rubric.yml wins over the source
+    collect(zpath, dest, template=tmpl, due="2026-09-06 23:59")
+    assert late.read_settings(dest)["due"] == "2026-09-06 23:59"
+    collect(zpath, dest, template=tmpl)
+    assert late.read_settings(dest)["due"] == "2026-09-06 23:59"
+    # "never" in the source: no due line, nothing is late
+    dest2 = ps / "grading2"
+    tmpl.write_text(SOURCE_TEX.replace(
+        r"\hwnumber{1}", "\\hwnumber{1}\n\\hwdue{never, optional!}"))
+    res = collect(zpath, dest2, template=tmpl, timezone_name="UTC")
+    assert late.read_settings(dest2) == {"due": None, "timezone": "UTC"}
+    assert not res.late
+
+
+def test_new_assignment_fetches_source_from_course_clone(tmp_path):
+    """New assignment: the course clone next to the lab supplies the
+    problem set's source and its deadline; the panel needs no file pick."""
+    from hwgenie.grade_gui import AppHolder
+    root = tmp_path / "HWGenie"
+    course = root / "math301-fall2026"
+    (course / "source" / "problem-sets" / "ps02").mkdir(parents=True)
+    (course / "hwgenie.sty").write_text("% sty")
+    (course / "course.yml").write_text('course: "Math 301"\nsemester: "Fall 2026"\n')
+    src = course / "source" / "problem-sets" / "ps02" / "ps02.tex"
+    src.write_text(SOURCE_TEX.replace(
+        r"\hwnumber{1}", "\\hwnumber{2}\n\\hwdue{Friday, September 11th by 11:59pm}"))
+    lab = root / "grading-lab"
+    (lab / "math301").mkdir(parents=True)
+    holder = AppHolder(root=lab)
+    server, client = _start_server(holder)
+    try:
+        r = client.post("/api/assignment/new", {"course": "math301",
+                                                "name": "ps02"})
+        assert r["ok"] and r["source"]["copied"]
+        assert r["source"]["path"] == str(src)
+        assert r["source"]["due_text"] == "Friday, September 11th by 11:59pm"
+        assert r["due"] == "2026-09-11 23:59"
+        assert r["timezone"] == "America/New_York"
+        assert r["files"]["build"] == ["ps02.tex"]
+        build_copy = lab / "math301" / "ps02" / "build" / "ps02.tex"
+        assert build_copy.read_text() == src.read_text()
+        # reopening: already there, nothing copied; a drifted repo copy is
+        # refreshed until the assignment has been collected
+        r = client.post("/api/assignment/new", {"course": "math301",
+                                                "name": "ps02"})
+        assert r["existed"] and not r["source"]["copied"]
+        src.write_text(src.read_text() + "% edited\n")
+        r = client.post("/api/assignment/new", {"course": "math301",
+                                                "name": "ps02"})
+        assert r["source"]["copied"] and "refreshed" in r["source"]["note"]
+        assert build_copy.read_text().endswith("% edited\n")
+        # ps3 ~ ps03: the numbered folder is found either way
+        (course / "source" / "problem-sets" / "ps03").mkdir()
+        (course / "source" / "problem-sets" / "ps03" / "ps03.tex").write_text(
+            SOURCE_TEX.replace(r"\hwnumber{1}", r"\hwnumber{3}"))
+        r = client.post("/api/assignment/new", {"course": "math301",
+                                                "name": "ps3"})
+        assert r["source"]["name"] == "ps03.tex" and r["due"] is None
+        assert r["source"]["due_text"] is None
+        # no such problem set / no such course: reported, nothing copied
+        r = client.post("/api/assignment/new", {"course": "math301",
+                                                "name": "ps09"})
+        assert r["source"]["path"] is None
+        assert "no source/problem-sets/ps09" in r["source"]["note"]
+        r = client.post("/api/assignment/new", {"course": "cs101",
+                                                "name": "ps01"})
+        assert r["source"]["course"] is None and "no course clone" in r["source"]["note"]
+        assert r["files"]["build"] == []
+        # the hub page carries the new wording
+        page = client.get("/grading?pick=1&view=collect").decode()
+        assert "fetched from the course repo" in page
+    finally:
+        server.shutdown()
