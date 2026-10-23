@@ -2476,11 +2476,15 @@ function highlightStmt(body, n, noScroll) {
   if (own && own.matches("details.isol"))
     bottom = Math.max(bottom, own.getBoundingClientRect().bottom);
   for (let i = start; i < idx; i++) {
-    if (all[i].closest("details.isol")) continue;
+    // KaTeX's internal spans (matrix .pstrut struts especially) poke well
+    // outside the visible math; the blocks holding the math measure true
+    if (all[i].closest("details.isol, .katex")) continue;
     const r = all[i].getBoundingClientRect();
     if (r.height === 0) continue;
     top = Math.min(top, r.top);
-    bottom = Math.max(bottom, r.bottom);
+    // an ancestor of the chip (the first part's <li>, or the <ol> of all
+    // the parts) only marks where the region starts
+    if (!all[i].contains(marker)) bottom = Math.max(bottom, r.bottom);
   }
   const bg = document.createElement("div");
   bg.className = "stmt-cardbg";
