@@ -2438,15 +2438,25 @@ async function ensureStmtPane() {
     });
     body.prepend(all);
   }
+  // opening/closing a solution moves everything below it; redraw the card
+  // (toggle doesn't bubble, hence the capture listener)
+  body.addEventListener("toggle", e => {
+    if (!e.target.matches("details.isol")) return;
+    const marker = body.querySelector(`.pbox[data-part="${activePart}"]`);
+    if (marker && marker.closest(".pprob").style.display !== "none")
+      highlightStmt(body, activePart, true);
+  }, true);
   typeset(body, stmtData.macros);
   stmtBuilt = true;
 }
 
 // Put one continuous card behind the statement region belonging to the
 // active part: everything between the previous part chip (or the problem
-// start) and this one.  A single absolutely-positioned backdrop, so the
-// card has no seams between paragraphs.
-function highlightStmt(body, n) {
+// start) and this one, plus this part's own instructor solution — but not
+// the previous part's, which sits right after its chip.  A single
+// absolutely-positioned backdrop, so the card has no seams between
+// paragraphs.
+function highlightStmt(body, n, noScroll) {
   body.querySelectorAll(".stmt-cardbg").forEach(e => e.remove());
   body.querySelectorAll(".pbox.cur")
     .forEach(e => e.classList.remove("cur"));
@@ -2462,7 +2472,11 @@ function highlightStmt(body, n) {
   const probR = prob.getBoundingClientRect();
   const mR = marker.getBoundingClientRect();
   let top = mR.top, bottom = mR.bottom;
+  const own = marker.nextElementSibling;
+  if (own && own.matches("details.isol"))
+    bottom = Math.max(bottom, own.getBoundingClientRect().bottom);
   for (let i = start; i < idx; i++) {
+    if (all[i].closest("details.isol")) continue;
     const r = all[i].getBoundingClientRect();
     if (r.height === 0) continue;
     top = Math.min(top, r.top);
@@ -2473,7 +2487,7 @@ function highlightStmt(body, n) {
   bg.style.top = (top - probR.top - 8) + "px";
   bg.style.height = (bottom - top + 16) + "px";
   prob.prepend(bg);
-  scrollPaneTo(body, marker, "center");
+  if (!noScroll) scrollPaneTo(body, marker, "center");
 }
 
 function updateStmtPane() {
