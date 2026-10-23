@@ -203,6 +203,46 @@ def worksheet_times(path: Path, tz) -> dict[str, datetime]:
     return out
 
 
+def worksheet_max(path: Path | None) -> float | None:
+    """The assignment's Maximum grade as Moodle reports it in a grading
+    worksheet (every row carries it), or None when it can't be read.
+    Moodle never takes it from an upload: it is the assignment's Grade
+    setting, 100 unless someone changed it."""
+    if path is None:
+        return None
+    try:
+        with open(path, newline="", encoding="utf-8-sig") as f:
+            reader = csv.reader(f)
+            header = next(reader, None)
+            rows = list(reader)
+    except OSError:
+        return None
+    if not header or "Maximum grade" not in header:
+        return None
+    cm = header.index("Maximum grade")
+    seen: dict[float, int] = {}
+    for row in rows:
+        try:
+            v = float(row[cm])
+        except (IndexError, ValueError):
+            continue
+        seen[v] = seen.get(v, 0) + 1
+    return max(seen, key=seen.get) if seen else None
+
+
+def max_grade_check(dest: Path) -> str | None:
+    """Collect's warning when Moodle's Maximum grade (from the worksheet)
+    differs from the rubric total, so it gets fixed before grades go up
+    rather than after Moodle shows them out of 100."""
+    from . import rubric as rubric_mod
+    try:
+        d = rubric_mod.payload(dest)
+    except Exception:
+        return None
+    return rubric_mod.max_grade_note(d["moodle_max"],
+                                     rubric_mod.base_total(d["parts"]))
+
+
 # ------------------------------------------------------------- one unit ----
 
 def _source_hashes(folder: Path) -> dict[str, str]:
@@ -852,6 +892,9 @@ def run_collect(args: argparse.Namespace) -> int:
     else:
         print("  submission times from the zip's file dates (no Grades-*.csv "
               "worksheet found)")
+    note = max_grade_check(result.dest)
+    if note:
+        print(f"  !! {note}")
     if not result.late:
         print("  no due date — set one with --due 'YYYY-MM-DD HH:MM' (or a "
               "due: line in rubric.yml, or \\hwdue in the source) to flag "

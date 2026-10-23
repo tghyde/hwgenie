@@ -209,6 +209,7 @@ def payload(folder: Path) -> dict:
     else:
         parts = parts + defaults[len(parts):]
     st = late_mod.read_settings(folder)
+    ws, moodle = moodle_max(folder)
     return {
         "ok": True, "folder": str(folder), "path": str(path),
         "exists": path.is_file(), "name": late_mod.assignment_key(folder),
@@ -222,7 +223,38 @@ def payload(folder: Path) -> dict:
         "problems": _problems(template),
         "template": str(template) if template else None,
         "text": text,
+        "moodle_max": moodle,
+        "worksheet": ws.name if ws else None,
     }
+
+
+def moodle_max(folder: Path) -> tuple[Path | None, float | None]:
+    """(worksheet, Maximum grade) from the newest Moodle grading worksheet
+    in the grading folder."""
+    from .collect import find_worksheet_near, worksheet_max
+    ws = find_worksheet_near(Path(folder))
+    return ws, worksheet_max(ws)
+
+
+def base_total(parts) -> float:
+    """The rubric total Moodle's Maximum grade should equal: every part's
+    max except the extra-credit ones."""
+    return sum((p["max"] if isinstance(p, dict) else p.max) or 0
+               for p in parts
+               if not (p["ec"] if isinstance(p, dict) else p.ec))
+
+
+def max_grade_note(moodle: float | None, total: float) -> str | None:
+    """The warning for a Moodle Maximum grade that differs from the rubric
+    total (Moodle defaults new assignments to 100 and ignores the column
+    on upload), or None when they agree or Moodle's is unknown."""
+    if moodle is None or abs(moodle - total) < 1e-9:
+        return None
+    return (f"Moodle's Maximum grade is {moodle:g} but the rubric totals "
+            f"{total:g} (without extra credit) — in Moodle set the "
+            f"assignment's Settings → Grade → Maximum grade to {total:g} "
+            "(if grades are already uploaded, choose Rescale existing "
+            "grades: No), or fix the rubric")
 
 
 _LABEL_RE = re.compile(r"^[^\s:#\"'][^:#\"']*$")

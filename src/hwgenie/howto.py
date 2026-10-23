@@ -161,10 +161,15 @@ __NAV__
       <a href="#ec">section 6</a>. EC parts show an
       <b class="ui">EC</b> badge while grading.</li>
   </ul>
-  <div class="note">Check that the Moodle assignment&rsquo;s
-  <b class="ui">Maximum grade</b> equals the rubric&rsquo;s total
-  <em>excluding</em> EC parts &mdash; the export warns you if they
-  disagree.</div>
+  <div class="note">The Moodle assignment&rsquo;s
+  <b class="ui">Maximum grade</b> must equal the rubric&rsquo;s total
+  <em>excluding</em> EC parts. Moodle sets it to 100 on a new assignment
+  and never changes it from an upload, so set it in the assignment&rsquo;s
+  <b class="ui">Settings &rarr; Grade</b>. If grades are already
+  uploaded, choose <b class="ui">Rescale existing grades: No</b>. The
+  Rubric &amp; deadline panel compares the two against the worksheet
+  under its total, and collect and the export warn you when they
+  differ.</div>
 
   <h2 id="server">3. Grading on the external server</h2>
   <ol>

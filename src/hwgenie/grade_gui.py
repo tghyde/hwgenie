@@ -805,7 +805,7 @@ class AppHolder:
         """Collect (or re-collect) from the assignment-folder layout; the
         result is the report the picker page shows."""
         from . import late as late_mod
-        from .collect import collect, locate
+        from .collect import collect, locate, max_grade_check
         if self.grader_only:
             raise GradeError("collecting is done by the instructor, not "
                              "on the hosted grader")
@@ -842,6 +842,7 @@ class AppHolder:
             "late": sorted(s_ for s_, lt in res.late.items()
                            if lt.get("is_late")),
             "lines": lines,
+            "max_grade": max_grade_check(plan["dest"]),
         }
 
 
@@ -3686,7 +3687,8 @@ __BASE__
                         border-color: transparent; }
   #rparts td.max { width: 6rem; } #rparts td.ec { width: 1%; text-align: center; }
   .manual .grow { flex: 1; }
-  #rstat.ok { color: var(--sol-accent); } #rstat.bad { color: var(--alert); }
+  #rstat.ok, #rmoodle.ok { color: var(--sol-accent); }
+  #rstat.bad, #rmoodle.bad { color: var(--alert); }
   .cards { display: grid; grid-template-columns: repeat(auto-fill,
            minmax(15rem, 1fr)); gap: .9rem; margin-top: .5rem; }
   .card { background: var(--card-bg); padding: 1rem 1.1rem 1rem;
@@ -3850,6 +3852,7 @@ __NAV__
         <span class="grow"></span>
         <span id="rtotal" class="hint"></span>
       </div>
+      <p class="hint" id="rmoodle"></p>
       <p class="hint" id="rstat"></p>
     </div>
     <p class="hint">Saved to <code>rubric.yml</code> in the grading folder;
@@ -3971,6 +3974,7 @@ async function runCollect(body) {
       `\n  times from: ${d.worksheet || "zip file dates (no worksheet found)"}` +
       `\n  due: ${d.due || "not set — nothing will be flagged late"}` +
       (d.late.length ? `\n  late: ${d.late.join(", ")}` : "") +
+      (d.max_grade ? `\n  !! ${d.max_grade}` : "") +
       (d.skipped.length ? `\n  skipped: ${d.skipped.join("; ")}` : "");
     log.textContent = head + (d.lines.length ? "\n\n" + d.lines.join("\n") : "");
     const a = document.createElement("a");
@@ -4056,6 +4060,25 @@ function rubricTotal() {
   $("#rtotal").textContent = `total ${+base.toFixed(2)}` +
     (ec ? ` + ${+ec.toFixed(2)} extra credit` : "") +
     ` · ${f.parts.length} parts`;
+  // Moodle's Maximum grade is the assignment's own setting (100 by
+  // default); an upload never changes it, so check it here
+  const mm = $("#rmoodle"), mx = RUB && RUB.moodle_max;
+  if (mx === null || mx === undefined) {
+    mm.textContent = RUB && RUB.worksheet === null ? "No Moodle grading " +
+      "worksheet in the folder — can't check Moodle's Maximum grade" : "";
+    mm.className = "hint";
+  } else if (Math.abs(mx - base) < 1e-9) {
+    mm.textContent = `✓ matches Moodle's Maximum grade (${+mx.toFixed(2)})`;
+    mm.className = "hint ok";
+  } else {
+    const t = +base.toFixed(2);
+    mm.textContent = `Moodle's Maximum grade is ${+mx.toFixed(2)} but the ` +
+      `rubric totals ${t} (without extra credit) — in Moodle set the ` +
+      `assignment's Settings → Grade → Maximum grade to ${t} (if grades ` +
+      `are already uploaded, choose Rescale existing grades: No), or fix ` +
+      `the points above. Moodle doesn't pick it up from the upload.`;
+    mm.className = "hint bad";
+  }
 }
 
 async function saveRubric() {

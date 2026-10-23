@@ -317,3 +317,54 @@ def test_seed_and_payload_carry_ec_defaults(tmp_path):
     d = rubric_mod.payload(g)
     assert not any(p["ec"] for p in d["parts"])
     assert sum(d["default_ec"]) == 8
+
+
+# ------------------------------------------------- Moodle Maximum grade --
+
+def _ws_with_max(path, max_grade):
+    _write_ws(path, [("111", "Jane Doe", "-")])
+    text = path.read_text(encoding="utf-8-sig")
+    path.write_text(text.replace('"10.00"', max_grade)
+                        .replace(",10.00,", f",{max_grade},"),
+                    encoding="utf-8-sig")
+
+
+def test_payload_reports_moodle_max(tmp_path):
+    g = _manifest(tmp_path / "ps04" / "grading", 3)
+    d = rubric_mod.payload(g)
+    assert d["moodle_max"] is None and d["worksheet"] is None
+    _ws_with_max(g / "Grades-TEST-PS4--1.csv", "100.00")
+    d = rubric_mod.payload(g)
+    assert d["moodle_max"] == 100.0
+    assert d["worksheet"] == "Grades-TEST-PS4--1.csv"
+    assert rubric_mod.base_total(d["parts"]) == 15.0
+
+
+def test_max_grade_note():
+    assert rubric_mod.max_grade_note(None, 50) is None
+    assert rubric_mod.max_grade_note(50.0, 50) is None
+    note = rubric_mod.max_grade_note(100.0, 50)
+    assert "Maximum grade is 100" in note and "totals 50" in note
+    assert "Maximum grade to 50" in note and "Rescale existing grades: No" in note
+
+
+def test_base_total_skips_ec():
+    parts = [{"label": "1", "max": 5, "ec": False},
+             {"label": "2", "max": 5, "ec": True},
+             {"label": "3", "max": 2.5, "ec": False}]
+    assert rubric_mod.base_total(parts) == 7.5
+
+
+def test_collect_warns_on_moodle_max(tmp_path, capsys):
+    from hwgenie.cli import main as cli_main
+    from hwgenie.collect import max_grade_check
+    src = make_moodle_dir(tmp_path)
+    _ws_with_max(src / "Grades-TEST-PS1--1.csv", "100.00")
+    dest = tmp_path / "grading"
+    assert cli_main(["collect", str(src), "--dest", str(dest)]) == 0
+    out = capsys.readouterr().out
+    assert "!! Moodle's Maximum grade is 100" in out
+    # once Moodle (here: a re-downloaded worksheet) agrees, it goes quiet
+    total = rubric_mod.base_total(rubric_mod.payload(dest)["parts"])
+    _ws_with_max(dest / "Grades-TEST-PS1--1.csv", f"{total:.2f}")
+    assert max_grade_check(dest) is None

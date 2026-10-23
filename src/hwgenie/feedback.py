@@ -40,6 +40,7 @@ from .htmlgen import HtmlConverter
 from .htmltemplate import FOLD_JS, KATEX_VERSION
 from .katexmacros import extract_macros
 from . import late as late_mod
+from . import rubric as rubric_mod
 from datetime import datetime, timezone
 
 RETURN_DIR = "return"
@@ -591,10 +592,7 @@ def build_feedback(folder: Path, out: Path | None = None, pdf: bool = False,
                     "worksheet): " + ", ".join(ws_info["held"]))
             if ws_info["max_mismatch"]:
                 got, want = ws_info["max_mismatch"]
-                warnings.append(
-                    f"worksheet Maximum grade is {got} but the rubric "
-                    f"totals {_fmt_score(want)} — check the assignment's "
-                    "grade settings")
+                warnings.append(rubric_mod.max_grade_note(float(got), want))
             if ws_info["locked"]:
                 warnings.append(
                     "grades locked in Moodle, not filled: "
