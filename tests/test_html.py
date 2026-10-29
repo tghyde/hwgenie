@@ -408,3 +408,21 @@ def test_starred_subsection_is_unnumbered():
     toc = toc_html(conv.outline)
     assert '<a href="#sec-step-1-setup">Step 1: Setup</a>' in toc
     assert "toc-num" in toc and toc.count("toc-num") == 1
+
+
+def test_wrapper_edge_spaces_survive():
+    # \textbf{Hint: }the ... -- TeX keeps the space inside the braces, so
+    # the HTML must too (math221 ps07 7.5.2 rendered "Hint:the").
+    _c, html = convert("\\textbf{Hint: }the formula.")
+    assert "<strong>Hint:</strong> the formula." in html
+    _c, html = convert("a\\emph{ b }c")
+    assert "a <em>b</em> c" in html
+    _c, html = convert("x\\textcolor{blue}{ y }z")
+    assert 'x <span class="task">y</span> z' in html
+    _c, html = convert("x\\fbox{ y }z")
+    assert 'x <span class="fbox">y</span> z' in html
+    # No phantom spaces when there were none.
+    _c, html = convert("\\textbf{Hint:} the formula.")
+    assert "<strong>Hint:</strong> the formula." in html
+    _c, html = convert("a\\emph{b}c")
+    assert "a<em>b</em>c" in html

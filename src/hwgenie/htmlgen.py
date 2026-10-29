@@ -439,7 +439,8 @@ class HtmlConverter:
             open_, close = WRAP_MACROS[name]
             args, j = self._macro_args(nodes, i, 1)
             inner = self.convert_inline(args[0].nodelist) if args else ""
-            self._emit_wrapped(flow, open_, close, inner)
+            self._emit_wrapped(flow, open_, close, inner,
+                               args[0].nodelist if args else None)
             return j
         if name == "textcolor":
             args, j = self._macro_args(nodes, i, 2)
@@ -451,7 +452,8 @@ class HtmlConverter:
                     open_ = f'<span class="{cls}">'
                 else:
                     open_ = f'<span style="color:{esc(color)}">'
-                self._emit_wrapped(flow, open_, "</span>", inner)
+                self._emit_wrapped(flow, open_, "</span>", inner,
+                                   args[1].nodelist)
             return j
         if name == "includegraphics":
             args, j = self._macro_args(nodes, i, 2)
@@ -493,15 +495,18 @@ class HtmlConverter:
             if args:
                 inner = self.convert_inline(args[0].nodelist)
                 if self.include_solutions:
-                    self._emit_wrapped(flow, '<span class="fbox">', "</span>", inner)
+                    self._emit_wrapped(flow, '<span class="fbox">', "</span>",
+                                       inner, args[0].nodelist)
                 else:
-                    flow.inline(inner)
+                    lead, trail = _edge_spaces(args[0].nodelist)
+                    flow.inline(lead + inner + trail)
             return j
         if name in ("fbox", "framebox"):
             args, j = self._macro_args(nodes, i, 1)
             if args:
                 inner = self.convert_inline(args[-1].nodelist)
-                self._emit_wrapped(flow, '<span class="fbox">', "</span>", inner)
+                self._emit_wrapped(flow, '<span class="fbox">', "</span>",
+                                   inner, args[-1].nodelist)
             return j
         if name == "hrulefill":
             # "Name: \hrulefill" -- a rule that fills the rest of the line.
@@ -669,8 +674,13 @@ class HtmlConverter:
         return _unwrap_single_p(flow.result())
 
     def _emit_wrapped(self, flow: Flow, open_: str, close: str,
-                      inner: str) -> None:
+                      inner: str, nodes=None) -> None:
         """Emit inner HTML inside an inline wrapper such as \\blue{...}.
+
+        `nodes` is the wrapper's argument node list. convert_inline strips
+        the text it produces, so a space at either edge of the argument
+        (\\textbf{Hint: }the ...) would otherwise vanish; TeX keeps it, so
+        it is re-emitted here as a single space outside the tags.
 
         Usually the argument is a run of text and stays inline. When it
         holds block content (a list, a display environment, several
@@ -681,7 +691,8 @@ class HtmlConverter:
         becomes a <div> carrying the same class or style.
         """
         if not _BLOCK_HTML_RE.match(inner):
-            flow.inline(open_ + inner + close)
+            lead, trail = _edge_spaces(nodes)
+            flow.inline(lead + open_ + inner + close + trail)
             return
         if open_.startswith("<span"):
             open_ = "<div" + open_[len("<span"):]
@@ -1311,6 +1322,19 @@ def _group_text(group) -> str:
 _BLOCK_HTML_RE = re.compile(
     r"\s*<(p|ol|ul|div|table|figure|blockquote|details|pre|h[1-6])\b"
 )
+
+
+def _edge_spaces(nodes) -> Tuple[str, str]:
+    """(" " or "", " " or ""): whether the node list starts/ends with
+    whitespace. A single newline counts (TeX reads it as a space); a
+    paragraph break does not matter here because such content is emitted
+    as a block anyway."""
+    if not nodes:
+        return "", ""
+    first, last = nodes[0], nodes[-1]
+    lead = (isinstance(first, LatexCharsNode) and first.chars[:1].isspace())
+    trail = (isinstance(last, LatexCharsNode) and last.chars[-1:].isspace())
+    return (" " if lead else ""), (" " if trail else "")
 
 
 def _unwrap_single_p(html: str) -> str:
