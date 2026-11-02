@@ -22,6 +22,7 @@ Only submissions with at least one graded part or comment are exported
 from __future__ import annotations
 
 import argparse
+import copy
 import csv
 import dataclasses
 import html as html_mod
@@ -35,7 +36,7 @@ import tempfile
 import zipfile
 from pathlib import Path
 
-from .grade import GradeError, split_preamble
+from .grade import GradeError, RubricPart, scale_score, split_preamble
 from .htmlgen import HtmlConverter
 from .htmltemplate import FOLD_JS, KATEX_VERSION
 from .katexmacros import extract_macros
@@ -88,8 +89,10 @@ def display_name(slug: str) -> str:
 def _fmt_score(v) -> str:
     if v is None:
         return "—"
-    if isinstance(v, float) and v == int(v):
-        v = int(v)
+    if isinstance(v, float):
+        v = round(v, 2)   # rescaled scores sum with float noise
+        if v == int(v):
+            v = int(v)
     return str(v)
 
 
@@ -118,6 +121,56 @@ def _assignment_title(app) -> str:
         if parts:
             return " — ".join(parts)
     return app.folder.name
+
+
+# --------------------------------------------------------------- rescaling --
+
+class _ScaledStore:
+    """Read-only GradeStore view with every part's score and max in export
+    points (see RubricPart.worth)."""
+
+    def __init__(self, store, rubric: list[RubricPart]):
+        self._store = store
+        self._rubric = rubric
+
+    def load(self, slug: str) -> dict:
+        data = copy.deepcopy(self._store.load(slug))
+        for n, rp in enumerate(self._rubric, start=1):
+            p = data["parts"][str(n)]
+            p["score"] = scale_score(rp, p["score"])
+            p["max"] = rp.out_of
+        return data
+
+    def __getattr__(self, name):
+        return getattr(self._store, name)
+
+
+class _ScaledApp:
+    """A GradingApp seen in export points: the rubric's maxes are the
+    parts' ``worth`` and store.load() scales the scores to match, so every
+    export output (feedback, worksheet, gradebook, late penalty) agrees
+    while the graders keep scoring on the original maxes."""
+
+    def __init__(self, app):
+        self._app = app
+        self.rubric = [RubricPart(label=rp.label, max=rp.out_of, ec=rp.ec)
+                       for rp in app.rubric]
+        self.store = _ScaledStore(app.store, app.rubric)
+
+    def late_context(self):
+        # GradingApp's own method, run on this view so the penalty is a
+        # share of the rescaled total
+        return type(self._app).late_context(self)
+
+    def __getattr__(self, name):
+        return getattr(self._app, name)
+
+
+def scaled_view(app):
+    """``app`` itself unless some rubric part is rescaled."""
+    if any(rp.worth is not None for rp in app.rubric):
+        return _ScaledApp(app)
+    return app
 
 
 def _unit_members(app, slug: str) -> list[str]:
@@ -221,7 +274,7 @@ def _split_totals(app, data: dict) -> tuple[float, float]:
             ec += s
         else:
             base += s
-    return base, ec
+    return round(base, 2), round(ec, 2)
 
 
 def _base_out_of(app) -> float:
@@ -475,6 +528,7 @@ def build_feedback(folder: Path, out: Path | None = None, pdf: bool = False,
     if app is None:
         from .grade_gui import GradingApp
         app = GradingApp(folder)
+    app = scaled_view(app)
     out_dir = Path(out) if out else app.folder / RETURN_DIR
     title = _assignment_title(app)
     stmts, tmacros = _statement_segments(app)

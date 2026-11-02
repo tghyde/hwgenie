@@ -140,6 +140,21 @@ class RubricPart:
     label: str
     max: float = DEFAULT_MAX
     ec: bool = False   # extra credit: excluded from the base total
+    # points the part counts for at export ("- 2.1: 5 -> 3"); graders
+    # keep scoring out of max and the export scales by worth/max
+    worth: float | None = None
+
+    @property
+    def out_of(self) -> float:
+        return self.max if self.worth is None else self.worth
+
+
+def scale_score(rp: RubricPart, score):
+    """A raw part score in export points (rounded to 0.01)."""
+    if score is None or rp.worth is None or not rp.max:
+        return score
+    v = round(score * rp.worth / rp.max, 2)
+    return int(v) if v == int(v) else v
 
 
 def _parse_rubric(text: str) -> list[RubricPart]:
@@ -164,6 +179,8 @@ def _parse_rubric(text: str) -> list[RubricPart]:
             if toks and toks[-1].lower() == "ec":
                 ec = True
                 maxval = " ".join(toks[:-1])
+            maxval, arrow, worthval = maxval.partition("->")
+            maxval, worthval = maxval.strip(), worthval.strip()
             mx: float = DEFAULT_MAX
             if maxval:
                 try:
@@ -172,7 +189,17 @@ def _parse_rubric(text: str) -> list[RubricPart]:
                     raise GradeError(
                         f"{RUBRIC_NAME}: bad max points {maxval!r} for part "
                         f"{label!r}")
-            parts.append(RubricPart(label=label, max=mx, ec=ec))
+            worth: float | None = None
+            if arrow:
+                try:
+                    worth = float(worthval)
+                except ValueError:
+                    worth = -1.0
+                if not (worth >= 0 and math.isfinite(worth)):
+                    raise GradeError(
+                        f"{RUBRIC_NAME}: bad export points {worthval!r} "
+                        f"(after ->) for part {label!r}")
+            parts.append(RubricPart(label=label, max=mx, ec=ec, worth=worth))
         else:
             in_parts = False
     return parts

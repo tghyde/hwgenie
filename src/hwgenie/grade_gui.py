@@ -1384,7 +1384,7 @@ def gradebook_data(course: Path) -> dict:
     provisional total under the late policy)."""
     from . import late as late_mod
     from .feedback import (_split_totals, _worksheet_people, display_name,
-                           find_worksheet)
+                           find_worksheet, scaled_view)
     course = Path(course).resolve()
     errors: list[str] = []
     try:
@@ -1403,7 +1403,8 @@ def gradebook_data(course: Path) -> dict:
         keys.append(key)
         folders.append(str(folder))
         try:
-            app = GradingApp(folder)
+            # export points, so live cells match what the export records
+            app = scaled_view(GradingApp(folder))
         except Exception as e:  # noqa: BLE001 — one bad folder, not the page
             errors.append(f"{key}: {e}")
             continue
@@ -3703,7 +3704,8 @@ __BASE__
     border: 1px solid var(--border); }
   #rparts input:focus { outline: 2px solid var(--accent);
                         border-color: transparent; }
-  #rparts td.max { width: 6rem; } #rparts td.ec { width: 1%; text-align: center; }
+  #rparts td.max, #rparts td.worth { width: 6rem; }
+  #rparts td.ec { width: 1%; text-align: center; }
   .manual .grow { flex: 1; }
   #rstat.ok, #rmoodle.ok { color: var(--sol-accent); }
   #rstat.bad, #rmoodle.bad { color: var(--alert); }
@@ -3860,6 +3862,7 @@ __NAV__
       </div>
       <table id="rparts">
         <thead><tr><th>#</th><th>Problem</th><th>Label</th><th>Max</th>
+          <th title="Points the part is worth in the export (feedback, worksheet, gradebook); graders still score out of Max. Blank = Max">Counts as</th>
           <th title="Extra credit: points count but the max does not. Parts the source marks (Challenge) start checked">EC</th></tr></thead>
         <tbody></tbody>
       </table>
@@ -4056,6 +4059,7 @@ function renderRubric() {
     <td class="prob">${esc(prob[i + 1] || "")}</td>
     <td><input type="text" class="rlabel" value="${esc(p.label)}" spellcheck="false"></td>
     <td class="max"><input type="number" class="rmax" min="0" step="any" value="${p.max}"></td>
+    <td class="worth"><input type="number" class="rworth" min="0" step="any" value="${p.worth ?? ""}" placeholder="${p.max}"></td>
     <td class="ec"><input type="checkbox" class="rec"${p.ec ? " checked" : ""}></td>
   </tr>`).join("");
   rubricTotal();
@@ -4067,15 +4071,19 @@ function readRubricForm() {
     parts: [...$("#rparts tbody").querySelectorAll("tr")].map(tr => ({
       label: tr.querySelector(".rlabel").value.trim(),
       max: tr.querySelector(".rmax").value.trim(),
+      worth: tr.querySelector(".rworth").value.trim(),
       ec: tr.querySelector(".rec").checked}))};
 }
 
 function rubricTotal() {
   const f = readRubricForm();
-  let base = 0, ec = 0;
+  let base = 0, ec = 0, graded = 0;
   f.parts.forEach(p => { const m = parseFloat(p.max) || 0;
-                         if (p.ec) ec += m; else base += m; });
+                         const w = p.worth === "" ? m : parseFloat(p.worth) || 0;
+                         if (p.ec) ec += w; else { base += w; graded += m; } });
   $("#rtotal").textContent = `total ${+base.toFixed(2)}` +
+    (Math.abs(graded - base) > 1e-9 ? ` (graded out of ${+graded.toFixed(2)})`
+                                    : "") +
     (ec ? ` + ${+ec.toFixed(2)} extra credit` : "") +
     ` · ${f.parts.length} parts`;
   // Moodle's Maximum grade is the assignment's own setting (100 by

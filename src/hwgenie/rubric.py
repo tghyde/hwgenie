@@ -23,8 +23,10 @@ from .grade import (DEFAULT_MAX, RUBRIC_NAME, GradeError, RubricPart,
 HEADER = [
     "# Rubric for {name} — one line per solution box, in template order.",
     '# Format: "- <label>: <max points>"; add a trailing "ec" to mark an',
-    '# extra-credit part (e.g. "- 2.4: 3 ec").  Edit here or in the app',
-    "# (Grading → Collect from Moodle → Rubric & deadline).",
+    '# extra-credit part (e.g. "- 2.4: 3 ec"), and "-> <points>" to rescale',
+    '# a part at export (e.g. "- 2.1: 5 -> 3": graded out of 5, counts 3).',
+    "# Edit here or in the app (Grading → Collect from Moodle → Rubric &",
+    "# deadline).",
 ]
 
 
@@ -137,6 +139,10 @@ def _header_lines(text: str) -> list[str]:
     return out
 
 
+def _num(v: float):
+    return int(v) if float(v).is_integer() else v
+
+
 def write_rubric(folder: Path, parts: list[RubricPart], *,
                  due: str | None = None, timezone: str | None = None,
                  name: str | None = None) -> Path:
@@ -154,8 +160,10 @@ def write_rubric(folder: Path, parts: list[RubricPart], *,
         lines.append(f"timezone: {timezone}")
     lines.append("parts:")
     for rp in parts:
-        mx = int(rp.max) if float(rp.max).is_integer() else rp.max
-        lines.append(f"- {rp.label}: {mx}" + (" ec" if rp.ec else ""))
+        lines.append(f"- {rp.label}: {_num(rp.max)}"
+                     + (f" -> {_num(rp.worth)}" if rp.worth is not None
+                        else "")
+                     + (" ec" if rp.ec else ""))
     folder.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines) + "\n")
     return path
@@ -216,8 +224,8 @@ def payload(folder: Path) -> dict:
         "due": st.get("due"), "timezone": st.get("timezone"),
         "default_timezone": late_mod.DEFAULT_TIMEZONE,
         "n_parts": n_parts,
-        "parts": [{"label": rp.label, "max": rp.max, "ec": rp.ec}
-                  for rp in parts],
+        "parts": [{"label": rp.label, "max": rp.max, "ec": rp.ec,
+                   "worth": rp.worth} for rp in parts],
         "default_labels": [rp.label for rp in defaults],
         "default_ec": [rp.ec for rp in defaults],
         "problems": _problems(template),
@@ -238,9 +246,12 @@ def moodle_max(folder: Path) -> tuple[Path | None, float | None]:
 
 def base_total(parts) -> float:
     """The rubric total Moodle's Maximum grade should equal: every part's
-    max except the extra-credit ones."""
-    return sum((p["max"] if isinstance(p, dict) else p.max) or 0
-               for p in parts
+    export points (its max unless rescaled) except the extra-credit ones."""
+    def pts(p):
+        if isinstance(p, dict):
+            return p["max"] if p.get("worth") is None else p["worth"]
+        return p.out_of
+    return sum(pts(p) or 0 for p in parts
                if not (p["ec"] if isinstance(p, dict) else p.ec))
 
 
@@ -262,7 +273,8 @@ _LABEL_RE = re.compile(r"^[^\s:#\"'][^:#\"']*$")
 
 def save(folder: Path, data: dict) -> dict:
     """Validate an edited payload and write rubric.yml; returns the fresh
-    payload.  ``data``: {due, timezone, parts: [{label, max, ec}]}."""
+    payload.  ``data``: {due, timezone, parts: [{label, max, ec, worth}]}
+    (``worth`` blank or missing = not rescaled)."""
     folder = Path(folder)
     manifest = load_manifest(folder)
     n_parts = infer_n_parts(manifest)
@@ -301,6 +313,16 @@ def save(folder: Path, data: dict) -> dict:
             raise GradeError(f"part {label}: bad max points {mx!r}")
         if not (mxf >= 0) or mxf != mxf or mxf == float("inf"):
             raise GradeError(f"part {label}: bad max points {mx!r}")
-        parts.append(RubricPart(label=label, max=mxf, ec=bool(item.get("ec"))))
+        wv = item.get("worth")
+        wf = None
+        if wv not in (None, ""):
+            try:
+                wf = float(wv)
+            except (TypeError, ValueError):
+                raise GradeError(f"part {label}: bad export points {wv!r}")
+            if not (wf >= 0) or wf == float("inf"):
+                raise GradeError(f"part {label}: bad export points {wv!r}")
+        parts.append(RubricPart(label=label, max=mxf, ec=bool(item.get("ec")),
+                                worth=wf))
     write_rubric(folder, parts, due=due or None, timezone=tz or None)
     return payload(folder)

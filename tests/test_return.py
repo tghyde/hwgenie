@@ -165,6 +165,61 @@ def test_worksheet_max_mismatch_warns(grading_folder):
     assert any("Maximum grade" in w for w in result.warnings)
 
 
+def _rescale(grading_folder):
+    # 1.1 graded out of 4, counts 2; 2.1a out of 5, counts 10
+    (grading_folder / "rubric.yml").write_text(
+        "parts:\n- 1.1: 4 -> 2\n- 1.2: 2.5\n- 2.1a: 5 -> 10\n")
+
+
+def test_rescaled_export(grading_folder):
+    _rescale(grading_folder)
+    store = _seed_grades(grading_folder)
+    store.update("Roe-Rick", 1, {"score": 3})
+    _write_worksheet(grading_folder, max_grade="14.50")
+    result = build_feedback(grading_folder)
+    assert not any("Maximum grade" in w for w in result.warnings)
+    html = (result.out_dir / "feedback" / "Doe-Jane" /
+            "feedback.html").read_text()
+    assert "Total: 4 / 14.5" in html             # 4→2 of 2, plus 2 of 2.5
+    assert '<span class="pscore">2 / 2</span>' in html
+    assert '<span class="pscore">2 / 2.5</span>' in html
+    rick = (result.out_dir / "feedback" / "Roe-Rick" /
+            "feedback.html").read_text()
+    assert '<span class="pscore">1.5 / 2</span>' in rick
+    assert '<span class="pscore">0 / 10</span>' in rick
+    rows = list(csv.reader((result.out_dir / "gradebook.csv").open()))
+    jane = next(r for r in rows if r[0] == "Doe-Jane")
+    assert jane[3:] == ["2", "2", "", "4", "14.5"]
+    rick = next(r for r in rows if r[0] == "Roe-Rick")
+    assert rick[3:] == ["1.5", "", "0", "1.5", "14.5"]
+    ws = list(csv.reader((result.out_dir / "grading-worksheet-upload.csv")
+                         .open(encoding="utf-8-sig")))
+    assert next(r for r in ws if r[0] == "Participant 111")[4] == "4.00"
+    # the graders' files keep the raw scores
+    raw = store.load("Doe-Jane")["parts"]
+    assert raw["1"]["score"] == 4 and raw["1"]["max"] == 4
+
+
+def test_rescaled_worksheet_max_checks_new_total(grading_folder):
+    _rescale(grading_folder)
+    _seed_grades(grading_folder)
+    _write_worksheet(grading_folder, max_grade="11.50")   # the raw total
+    result = build_feedback(grading_folder)
+    assert any("Maximum grade" in w and "totals 14.5" in w
+               for w in result.warnings)
+
+
+def test_rescaled_view_late_context(grading_folder):
+    from hwgenie.feedback import scaled_view
+    from hwgenie.grade_gui import GradingApp
+    app = GradingApp(grading_folder)
+    assert scaled_view(app) is app                  # nothing rescaled
+    _rescale(grading_folder)
+    view = scaled_view(GradingApp(grading_folder))
+    ctx, err = view.late_context()
+    assert err is None and ctx.out_of == 14.5
+
+
 def test_worksheet_bad_file_warns_not_fails(grading_folder):
     _seed_grades(grading_folder)
     (grading_folder / "Grades-bad.csv").write_text("just,some,junk\n1,2,3\n")

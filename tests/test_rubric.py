@@ -105,9 +105,12 @@ def test_payload_and_save(tmp_path):
                                       {"label": "2.1", "max": "", "ec": True}]})
     assert d["exists"] and d["due"] == "2026-09-11 23:59"
     assert d["timezone"] == "America/New_York"
-    assert d["parts"] == [{"label": "1.1", "max": 4.0, "ec": False},
-                          {"label": "1.2", "max": 2.5, "ec": False},
-                          {"label": "2.1", "max": 5.0, "ec": True}]
+    assert d["parts"] == [{"label": "1.1", "max": 4.0, "ec": False,
+                           "worth": None},
+                          {"label": "1.2", "max": 2.5, "ec": False,
+                           "worth": None},
+                          {"label": "2.1", "max": 5.0, "ec": True,
+                           "worth": None}]
     assert "- 2.1: 5 ec" in d["text"]
     # a partial file is padded with defaults for the missing parts
     (g / "rubric.yml").write_text("parts:\n- 1.1: 3\n")
@@ -353,6 +356,42 @@ def test_base_total_skips_ec():
              {"label": "2", "max": 5, "ec": True},
              {"label": "3", "max": 2.5, "ec": False}]
     assert rubric_mod.base_total(parts) == 7.5
+
+
+def test_rescaled_parts_roundtrip(tmp_path):
+    g = _manifest(tmp_path / "g", 3)
+    (g / "rubric.yml").write_text(
+        "parts:\n- 1.1: 5 -> 3\n- 1.2: 5\n- 2.1: 5 -> 2.5 ec\n")
+    rub = load_rubric(g, 3)
+    assert [(rp.max, rp.worth, rp.out_of, rp.ec) for rp in rub] == [
+        (5.0, 3.0, 3.0, False), (5.0, None, 5.0, False),
+        (5.0, 2.5, 2.5, True)]
+    d = rubric_mod.payload(g)
+    assert [p["worth"] for p in d["parts"]] == [3.0, None, 2.5]
+    assert rubric_mod.base_total(d["parts"]) == 8       # 3 + 5, EC out
+    assert rubric_mod.base_total(rub) == 8
+    # the panel sends worth as text; blank = not rescaled
+    d = rubric_mod.save(g, {"parts": [
+        {"label": "1.1", "max": "5", "worth": "4"},
+        {"label": "1.2", "max": "5", "worth": ""},
+        {"label": "2.1", "max": "5", "worth": "2.5", "ec": True}]})
+    assert "- 1.1: 5 -> 4\n- 1.2: 5\n- 2.1: 5 -> 2.5 ec\n" in d["text"]
+    assert [p["worth"] for p in d["parts"]] == [4.0, None, 2.5]
+
+
+@pytest.mark.parametrize("line", ["- 1.1: 5 -> x", "- 1.1: 5 ->",
+                                  "- 1.1: 5 -> -2"])
+def test_rescaled_part_bad_points(tmp_path, line):
+    (tmp_path / "rubric.yml").write_text(f"parts:\n{line}\n")
+    with pytest.raises(GradeError, match="bad export points"):
+        load_rubric(tmp_path, 1)
+
+
+def test_save_rejects_bad_worth(tmp_path):
+    g = _manifest(tmp_path / "g", 3)
+    with pytest.raises(GradeError, match="bad export points"):
+        rubric_mod.save(g, {"parts": [{"label": "a", "worth": "x"},
+                                      {"label": "b"}, {"label": "c"}]})
 
 
 def test_collect_warns_on_moodle_max(tmp_path, capsys):

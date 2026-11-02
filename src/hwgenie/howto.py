@@ -160,10 +160,17 @@ __NAV__
       and exports them separately &mdash; see
       <a href="#ec">section 6</a>. EC parts show an
       <b class="ui">EC</b> badge while grading.</li>
+    <li><code>- 2.1: 5 -&gt; 3</code> &mdash; <b>rescaled</b>: graders
+      score part 2.1 out of 5, and the export counts it out of 3 (a 4
+      becomes 2.4). Use it to reweight a set after grading has started:
+      the feedback, the worksheet, extra credit, the late penalty and the
+      course gradebook all use the rescaled points. In the panel this is
+      the <b class="ui">Counts as</b> column (blank = the max).</li>
   </ul>
   <div class="note">The Moodle assignment&rsquo;s
   <b class="ui">Maximum grade</b> must equal the rubric&rsquo;s total
-  <em>excluding</em> EC parts. Moodle sets it to 100 on a new assignment
+  <em>excluding</em> EC parts (with rescaled parts at their
+  <b class="ui">Counts as</b> points). Moodle sets it to 100 on a new assignment
   and never changes it from an upload, so set it in the assignment&rsquo;s
   <b class="ui">Settings &rarr; Grade</b>. If grades are already
   uploaded, choose <b class="ui">Rescale existing grades: No</b>. The
