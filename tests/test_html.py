@@ -447,3 +447,12 @@ def test_ties_become_nowrap_spans():
     # Fragments are handled too.
     conv, _ = convert("x")
     assert conv.convert_fragment("Lemma~2") == '<span class="nw">Lemma 2</span>'
+
+
+def test_url_keeps_tilde_and_dashes():
+    # \url and \href read their URL literally; a tilde used to be dropped.
+    _c, html = convert("See \\url{https://example.org/~user/a--b.pdf}.")
+    assert 'href="https://example.org/~user/a--b.pdf"' in html
+    assert ">https://example.org/~user/a--b.pdf</a>" in html
+    _c, html = convert("\\href{https://example.org/~user/}{home}")
+    assert '<a href="https://example.org/~user/">home</a>' in html

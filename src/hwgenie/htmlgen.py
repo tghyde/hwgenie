@@ -1307,11 +1307,17 @@ def _matrix_colspec_to_array(tex: str) -> str:
 # ------------------------------------------------------------------- helpers
 
 def _group_text(group) -> str:
-    """Raw-ish text of a group node (chars and simple macros only)."""
+    """Raw-ish text of a group node (chars, specials and simple macros).
+
+    Specials such as `~` and `--` are kept as typed: this text is a URL, a
+    label key, a color or a file name, where TeX reads them literally
+    (\\url{https://host/~user/} must keep its tilde)."""
     out = []
     for c in group.nodelist or []:
         if isinstance(c, LatexCharsNode):
             out.append(c.chars)
+        elif isinstance(c, LatexSpecialsNode):
+            out.append(c.specials_chars)
         elif isinstance(c, LatexMacroNode) and c.macroname in CHAR_MACROS:
             out.append({"&amp;": "&"}.get(CHAR_MACROS[c.macroname], CHAR_MACROS[c.macroname]))
     return "".join(out)
