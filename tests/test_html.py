@@ -426,3 +426,24 @@ def test_wrapper_edge_spaces_survive():
     assert "<strong>Hint:</strong> the formula." in html
     _c, html = convert("a\\emph{b}c")
     assert "a<em>b</em>c" in html
+
+
+def test_ties_become_nowrap_spans():
+    # Charter draws &nbsp; twice as wide as a space on macOS, so a tie is a
+    # no-wrap span around the tied words with an ordinary space.
+    _c, html = convert(
+        "\\newtheorem{theorem}{Theorem}[section]\n"
+        "\\begin{theorem}\\label{thm: a}A.\\end{theorem}\n"
+        "By Theorem~\\ref{thm: a}, see p.~490 and Formula~($\\ast$)."
+    )
+    assert '<span class="nw">Theorem <a ' in html
+    assert '<span class="nw">p. 490</span>' in html
+    # hwgenie already keeps "$\\ast$)." together; no space separates the spans.
+    assert '<span class="nw">Formula (</span><span class="nw">$\\ast$).</span>' in html
+    assert "&nbsp;" not in html
+    # A tie that would cut inline math in two keeps its &nbsp;.
+    _c, html = convert("Take~$a + b$ here.")
+    assert "Take&nbsp;$a + b$" in html
+    # Fragments are handled too.
+    conv, _ = convert("x")
+    assert conv.convert_fragment("Lemma~2") == '<span class="nw">Lemma 2</span>'

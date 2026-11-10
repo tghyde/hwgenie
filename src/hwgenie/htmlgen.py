@@ -257,7 +257,7 @@ class HtmlConverter:
                 '\n<section class="footnotes"><hr class="sep">'
                 f"<ol>\n{items}\n</ol></section>"
             )
-        return html
+        return _nowrap_ties(html)
 
     def convert_fragment(self, s: str) -> str:
         """Convert a standalone LaTeX fragment; returns inline-ish HTML."""
@@ -268,7 +268,7 @@ class HtmlConverter:
         sub.walk(nodes, flow)
         self.warnings.extend(sub.warnings)
         self.images.extend(sub.images)
-        return _unwrap_single_p(flow.result())
+        return _nowrap_ties(_unwrap_single_p(flow.result()))
 
     # ---------------------------------------------------------------- walker
 
@@ -1340,6 +1340,46 @@ def _edge_spaces(nodes) -> Tuple[str, str]:
 def _unwrap_single_p(html: str) -> str:
     m = re.fullmatch(r"<p>(.*)</p>", html, re.DOTALL)
     return m.group(1) if m and "<p>" not in m.group(1) else html
+
+
+# A TeX tie `~` becomes &nbsp; (SPECIALS_MAP), but Charter, the default body
+# font, draws U+00A0 twice as wide as its ordinary space on macOS, so
+# "Theorem~\ref{...}" showed a double-width gap.  _nowrap_ties puts the two
+# tied words in a no-wrap span with an ordinary space instead, which keeps
+# them on one line in any font.  (A word joiner after a plain space does not
+# work: Chrome still breaks after the space.)  The right side may be a link,
+# as \ref produces.  A tie whose neighbor is not a plain word or link, or
+# whose words hold an odd number of `$` (wrapping them would cut inline math
+# in two), keeps its &nbsp;.
+_TIE_WORD = r"(?:(?!&nbsp;)[^\s<>\"=])+"
+_TIE_RE = re.compile(
+    rf"(?<![^\s>])({_TIE_WORD})((?:&nbsp;(?:<a\b[^>]*>[^<]*</a>|{_TIE_WORD}))+)"
+)
+_TIE_OPAQUE_RE = re.compile(
+    r"(<script\b.*?</script>|<style\b.*?</style>|<pre\b.*?</pre>)", re.S
+)
+
+
+def _nowrap_ties(html: str) -> str:
+    def text_only(chunk: str) -> str:
+        out, pos = [], 0
+        for m in _TIE_RE.finditer(chunk):
+            # Skip a tie inside a tag (an attribute value) or one that would
+            # cut inline math in two.
+            if (chunk.rfind("<", 0, m.start()) > chunk.rfind(">", 0, m.start())
+                    or re.sub(r"<[^>]*>", "", m.group(0)).count("$") % 2):
+                continue
+            joined = m.group(1) + m.group(2).replace("&nbsp;", " ")
+            out += [chunk[pos:m.start()], f'<span class="nw">{joined}</span>']
+            pos = m.end()
+        return "".join(out) + chunk[pos:]
+
+    if "&nbsp;" not in html:
+        return html
+    # split() alternates text and opaque blocks.
+    return "".join(
+        p if i % 2 else text_only(p)
+        for i, p in enumerate(_TIE_OPAQUE_RE.split(html)))
 
 
 def _anchor_slug(s: Optional[str]) -> str:
