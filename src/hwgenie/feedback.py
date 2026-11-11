@@ -39,6 +39,7 @@ from pathlib import Path
 from .grade import GradeError, RubricPart, scale_score, split_preamble
 from .htmlgen import HtmlConverter
 from .htmltemplate import FOLD_JS, KATEX_VERSION
+from . import prerender
 from .katexmacros import extract_macros
 from . import late as late_mod
 from . import rubric as rubric_mod
@@ -345,8 +346,17 @@ def _late_sentence(st, out_of: float) -> str:
 
 
 def _feedback_html(app, unit: dict, data: dict, title: str,
-                   stmts: dict, tmacros: dict, st=None) -> str:
+                   stmts: dict, tmacros: dict, st=None,
+                   renderer=None) -> str:
+    """The student's feedback page.  With a prerender.Renderer the markers
+    are placed and the math typeset here, so the file shows its math with
+    no network and no JavaScript (a phone's file preview); without one the
+    page does both in the browser with KaTeX from the CDN."""
     slug = unit["slug"]
+    if renderer is not None:
+        renderer.rendered = []
+        renderer.failed = []
+        tregion = renderer.region("t", tmacros)
     total, ec_total = _split_totals(app, data)
     out_of = _base_out_of(app)
     raw_total = total
@@ -375,26 +385,38 @@ def _feedback_html(app, unit: dict, data: dict, title: str,
                        'see your submitted PDF.)</p>')
         comments = _ordered_comments(pay["tex"], p["comments"])
         cdata[str(n)] = {"comments": comments, "macros": pay["macros"]}
+        stmt = stmts.get(n)
+        region = None
+        if renderer is not None:
+            region = renderer.region(f"p{n}", pay["macros"])
+            content = renderer.typeset(
+                prerender.place_markers(content, comments), region)
+            if stmt:
+                stmt = renderer.typeset(stmt, tregion)
         clist = ""
         if comments:
             items = "".join(
                 f'<li><span class="cmark">{i + 1}</span>'
                 f"<div>{html_mod.escape(c['text'], quote=False)}</div></li>"
                 for i, c in enumerate(comments))
+            items = (renderer.typeset(items, region) if region else items)
             clist = ('<div class="fbcard"><div class="fbhead">Feedback</div>'
                      f'<ul class="clist">{items}</ul></div>')
         score = _fmt_score(p["score"])
         mx = _fmt_score(rp.max)
-        stmt = stmts.get(n)
-        stoggle = ('<button class="stoggle">▸ Problem</button>'
+        # a checkbox + label rather than a scripted button, so the problem
+        # statement opens in previews that run no JavaScript
+        stck = (f'<input type="checkbox" class="stck" id="st-{n}">'
+                if stmt else "")
+        stoggle = (f'<label class="stoggle" for="st-{n}">Problem</label>'
                    if stmt else "")
-        pstmt = (f'<div class="pstmt" hidden>{stmt}</div>' if stmt else "")
+        pstmt = (f'<div class="pstmt">{stmt}</div>' if stmt else "")
         ecb = (' <span class="ecbadge" title="Extra credit — counted '
                'separately from the assignment total">extra credit</span>'
                if rp.ec else "")
         sections.append(f"""
   <section class="part" data-n="{n}" id="part-{n}">
-    <div class="part-head">
+    {stck}<div class="part-head">
       <span class="plabel">Problem {html_mod.escape(rp.label)}</span>{ecb}
       {stoggle}
       <span class="sp"></span>
@@ -417,8 +439,20 @@ def _feedback_html(app, unit: dict, data: dict, title: str,
         f'<a class="jump" href="#part-{n}">{html_mod.escape(rp.label)}'
         f'{_pie_svg(_part_pct(app, data, n))}</a>'
         for n, rp in enumerate(app.rubric, start=1))
+    body = "\n".join(sections)
+    if renderer is None:
+        head = KATEX_CDN.replace("__KATEX__", KATEX_VERSION)
+        static = "0"
+    else:
+        head = f"<style>{prerender.katex_style(renderer.rendered)}</style>"
+        # foldeq displays refit to the screen when scripts run; that needs
+        # KaTeX itself (the pre-rendered fold stands in otherwise)
+        if 'class="foldeq"' in body:
+            head += f"\n<script>{prerender.katex_script()}</script>"
+        static = "1"
     return FEEDBACK_PAGE \
-        .replace("__KATEX__", KATEX_VERSION) \
+        .replace("__KATEXHEAD__", head) \
+        .replace("__STATIC__", static) \
         .replace("__FOLDJS__", FOLD_JS) \
         .replace("__TITLE__", html_mod.escape(title)) \
         .replace("__NAME__", html_mod.escape(display_name(slug))) \
@@ -429,7 +463,7 @@ def _feedback_html(app, unit: dict, data: dict, title: str,
         .replace("__RECON__", recon) \
         .replace("__OVERVIEW__", _score_overview(app, data)) \
         .replace("__JUMPS__", jumps) \
-        .replace("__SECTIONS__", "\n".join(sections)) \
+        .replace("__SECTIONS__", body) \
         .replace("__CDATA__", json.dumps(cdata))
 
 
@@ -551,6 +585,14 @@ def build_feedback(folder: Path, out: Path | None = None, pdf: bool = False,
         for unit in app.units:
             statuses[unit["slug"]] = ctx.status(unit)
 
+    renderer = None
+    if prerender.available():
+        renderer = prerender.Renderer()
+    else:
+        warnings.append(
+            "feedback pages load KaTeX from the web (install the quickjs "
+            "package to pre-render the math): phones previewing a "
+            "downloaded page will show raw LaTeX")
     fb_root = out_dir / "feedback"
     for unit in app.units:
         slug = unit["slug"]
@@ -562,7 +604,12 @@ def build_feedback(folder: Path, out: Path | None = None, pdf: bool = False,
         udir = fb_root / slug
         udir.mkdir(parents=True, exist_ok=True)
         (udir / "feedback.html").write_text(
-            _feedback_html(app, unit, data, title, stmts, tmacros, st))
+            _feedback_html(app, unit, data, title, stmts, tmacros, st,
+                           renderer=renderer), encoding="utf-8")
+        if renderer is not None:
+            for tex in renderer.failed:
+                warnings.append(f"{slug}: KaTeX could not render "
+                                f"{tex[:60]!r}")
         if pdf:
             if not _compile_pdf(_feedback_tex(app, unit, data, title, st),
                                 udir / "feedback.pdf"):
@@ -952,15 +999,18 @@ def run_return(args: argparse.Namespace) -> int:
 # Marker placement + math rendering mirror the grader app (grade_gui.py):
 # markers go in BEFORE KaTeX renders so anchors quoted from the student's
 # tex can match raw math source, then degrade to the numbered list below.
+KATEX_CDN = """\
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@__KATEX__/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@__KATEX__/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@__KATEX__/dist/contrib/auto-render.min.js"></script>"""
+
 FEEDBACK_PAGE = r"""<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Feedback — __NAME__</title>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@__KATEX__/dist/katex.min.css">
-<script defer src="https://cdn.jsdelivr.net/npm/katex@__KATEX__/dist/katex.min.js"></script>
-<script defer src="https://cdn.jsdelivr.net/npm/katex@__KATEX__/dist/contrib/auto-render.min.js"></script>
+__KATEXHEAD__
 <style>
   :root {
     --bg: #faf9f6; --fg: #20242a; --muted: #5d646f; --accent: #24589f;
@@ -1051,8 +1101,13 @@ FEEDBACK_PAGE = r"""<!doctype html>
   .pscore { font-weight: 700; color: var(--sol-accent); }
   .stoggle { font: 600 .78rem/1.4 system-ui, sans-serif; border: none;
     cursor: pointer; background: transparent; color: var(--accent);
-    padding: .05rem .4rem; }
+    padding: .05rem .4rem; user-select: none; -webkit-user-select: none; }
+  .stoggle::before { content: "▸ "; }
   .stoggle:hover { background: var(--hover-bg); }
+  input.stck { display: none; }
+  .stck:checked + .part-head .stoggle::before { content: "▾ "; }
+  .pstmt { display: none; }
+  .stck:checked ~ .pstmt { display: block; }
   .pstmt { background: var(--bg); padding: .6rem .8rem; margin: 0 0 .8rem;
     border-left: 3px solid var(--accent); font-size: .92rem; }
   .pstmt p { margin: 0 0 .55em; }
@@ -1116,7 +1171,7 @@ FEEDBACK_PAGE = r"""<!doctype html>
     font-family: system-ui, sans-serif; margin-top: 2.5rem; }
 </style>
 </head>
-<body>
+<body data-static="__STATIC__">
 <main>
 <div id="fnav-wrap"><div id="fnav">
   __JUMPS__
@@ -1138,12 +1193,15 @@ the list under each part.</footer>
 <script>
 "use strict";
 const CDATA = JSON.parse(document.getElementById("cdata").textContent);
+// "1": markers and math were done at export (the page must read without
+// scripts); only the foldeq refit is left to do here
+const STATIC = document.body.dataset.static === "1";
 
 // KaTeX for one region: auto-render for the delimiters, then the foldeq
 // displays (empty <div class="foldeq" data-tex>) via the shared fold script
 function typeset(el, macros) {
-  if (!window.renderMathInElement) return;
-  try {
+  if (!STATIC && !window.renderMathInElement) return;
+  if (!STATIC) try {
     renderMathInElement(el, {
       macros: macros || {}, throwOnError: false, strict: false,
       delimiters: [
@@ -1247,13 +1305,11 @@ document.getElementById("totop").addEventListener("click", () =>
 document.querySelectorAll("section.part").forEach(sec => {
   const d = CDATA[sec.dataset.n] || {comments: [], macros: {}};
   const box = sec.querySelector(".pcontent");
-  placeMarkers(box, d.comments);
-  const st = sec.querySelector(".stoggle");
+  if (!STATIC) placeMarkers(box, d.comments);
+  const ck = sec.querySelector(".stck");
   const ps = sec.querySelector(".pstmt");
-  if (st && ps) st.addEventListener("click", () => {
-    ps.hidden = !ps.hidden;
-    st.textContent = (ps.hidden ? "▸" : "▾") + " Problem";
-    if (!ps.hidden) try { fitFolds(ps); } catch (e) {}
+  if (ck && ps) ck.addEventListener("change", () => {
+    if (ck.checked) try { fitFolds(ps); } catch (e) {}
   });
   const paint = () => {
     typeset(box, d.macros);
@@ -1261,7 +1317,7 @@ document.querySelectorAll("section.part").forEach(sec => {
     const cl = sec.querySelector(".clist");
     if (cl) typeset(cl, d.macros);
   };
-  if (window.renderMathInElement) paint();
+  if (STATIC || window.renderMathInElement) paint();
   else window.addEventListener("load", paint);
   sec.querySelectorAll("sup.cmark").forEach(m => {
     m.addEventListener("click", () => {
@@ -1275,10 +1331,14 @@ document.querySelectorAll("section.part").forEach(sec => {
       badge.className = "cmark";
       badge.textContent = Number(m.dataset.ci) + 1;
       const body = document.createElement("div");
-      body.textContent = c.text;
+      // the list entry below the part is the same comment, already typeset
+      const li = sec.querySelectorAll(".clist li")[Number(m.dataset.ci)];
+      const typed = li && li.querySelector("div");
+      if (typed) body.innerHTML = typed.innerHTML;
+      else body.textContent = c.text;
       pop.append(badge, body);
       m.after(pop);
-      typeset(body, d.macros);
+      if (!typed) typeset(body, d.macros);
     });
   });
 });

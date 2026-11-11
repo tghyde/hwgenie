@@ -19,6 +19,11 @@ automation arrives in Phase 3.
 
 - Math is rendered client-side by KaTeX (CDN); `\def`/`\newcommand`/
   `\DeclareMathOperator` macros are extracted from the preamble automatically.
+  The student feedback pages from `hwgenie return` / hwGrader's export are
+  the exception: their math is typeset at export by a bundled KaTeX run in
+  QuickJS (`hwgenie/prerender.py`), with the fonts embedded, so a downloaded
+  page reads correctly offline and in previews that run no JavaScript
+  (phones' Files/Messages previews).
 - Problems become numbered cards (`Problem N.k`); solutions are collapsible
   `<details>` blocks, open by default.
 - `enumerate` custom labels (`\item[2.]`, `\item[(a)]`) map to proper `<ol>`

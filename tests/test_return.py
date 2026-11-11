@@ -65,6 +65,44 @@ def test_return_outputs(returned):
     assert "transcribed from the" in rick        # reconstructed banner
 
 
+def test_feedback_page_works_offline(grading_folder):
+    """Math typeset and markers placed at export: a phone's file preview
+    (no scripts, maybe no network) shows rendered math."""
+    from hwgenie import prerender
+    if not prerender.available():
+        pytest.skip("quickjs not installed")
+    store = _seed_grades(grading_folder)
+    store.update("Doe-Jane", 1, {
+        "score": 4,
+        "comments": [{"anchor": "We have", "text": "uses $x^2$ well"}]})
+    result = build_feedback(grading_folder, pdf=False)
+    html = (result.out_dir / "feedback" / "Doe-Jane" /
+            "feedback.html").read_text()
+    assert 'data-static="1"' in html
+    assert "cdn.jsdelivr" not in html and "https://" not in html.split(
+        "<body")[0]
+    assert "data:font/woff2" in html
+    assert 'class="katex"' in html
+    # the comment's $x^2$ is typeset in the visible list
+    clist = html.split('class="clist"')[1].split("</ul>")[0]
+    assert "$x^2$" not in clist and 'class="katex"' in clist
+    # marker after its anchor in the student's work
+    assert 'We have<sup class="cmark" data-ci="0">1</sup>' in html
+    # the statement toggle needs no script
+    assert 'class="stck"' in html and 'for="st-1"' in html
+
+
+def test_feedback_page_falls_back_to_cdn(grading_folder, monkeypatch):
+    from hwgenie import prerender
+    monkeypatch.setattr(prerender, "available", lambda: False)
+    _seed_grades(grading_folder)
+    result = build_feedback(grading_folder, pdf=False)
+    html = (result.out_dir / "feedback" / "Doe-Jane" /
+            "feedback.html").read_text()
+    assert 'data-static="0"' in html and "cdn.jsdelivr" in html
+    assert any("quickjs" in w for w in result.warnings)
+
+
 def test_return_overview_and_nav(returned):
     folder, result = returned
     html = (result.out_dir / "feedback" / "Doe-Jane" /
