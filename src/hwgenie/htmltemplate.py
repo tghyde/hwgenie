@@ -277,6 +277,26 @@ pre.code {
   line-height: 1.5;
 }
 pre.code code { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+.codeblock { position: relative; }
+.codeblock > pre.code { margin-top: 0; padding-right: 4.5rem; }
+.copy-code {
+  position: absolute;
+  top: .45rem;
+  right: .45rem;
+  padding: .15rem .55rem;
+  font: inherit;
+  font-size: .75rem;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  opacity: .6;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.copy-code:hover, .copy-code:focus-visible { opacity: 1; }
+@media print { .copy-code { display: none; } }
 code {
   font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   font-size: .88em;
@@ -422,6 +442,49 @@ THEME_TOGGLE_JS = """<script>
     matchMedia("(prefers-color-scheme: dark)").addEventListener("change", icon);
   }
   icon();
+})();
+</script>"""
+
+
+# Copy buttons on code listings.  One listener on the document, so buttons
+# in blocks swapped in after load (ArithFlow's live updates) work too.
+COPY_CODE_JS = """<script>
+(function() {
+  function fallback(text) {
+    var t = document.createElement("textarea");
+    t.value = text;
+    t.setAttribute("readonly", "");
+    t.style.position = "fixed";
+    t.style.opacity = "0";
+    document.body.appendChild(t);
+    t.select();
+    var ok = false;
+    try { ok = document.execCommand("copy"); } catch (e) {}
+    t.remove();
+    return ok ? Promise.resolve() : Promise.reject();
+  }
+  document.addEventListener("click", function(ev) {
+    var b = ev.target.closest && ev.target.closest(".copy-code");
+    if (!b) return;
+    var code = b.parentElement.querySelector("pre code");
+    if (!code) return;
+    ev.preventDefault();
+    var text = code.textContent;
+    var p = navigator.clipboard && window.isSecureContext
+      ? navigator.clipboard.writeText(text).catch(function() { return fallback(text); })
+      : fallback(text);
+    p.then(function() { b.textContent = "Copied"; },
+           function() { b.textContent = "Selected"; selectCode(code); });
+    clearTimeout(b._t);
+    b._t = setTimeout(function() { b.textContent = "Copy"; }, 1500);
+  });
+  function selectCode(code) {
+    var r = document.createRange();
+    r.selectNodeContents(code);
+    var s = window.getSelection();
+    s.removeAllRanges();
+    s.addRange(r);
+  }
 })();
 </script>"""
 
@@ -1035,6 +1098,7 @@ def render_page(
 </main>
 {SCROLLBAR_JS if scrollbar else ""}
 {TOC_JS if toc else ""}
+{COPY_CODE_JS}
 {THEME_TOGGLE_JS}
 </body>
 </html>

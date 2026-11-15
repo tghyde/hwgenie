@@ -27,8 +27,12 @@ automation arrives in Phase 3.
 - Problems become numbered cards (`Problem N.k`); solutions are collapsible
   `<details>` blocks, open by default.
 - `enumerate` custom labels (`\item[2.]`, `\item[(a)]`) map to proper `<ol>`
-  numbering; `lstlisting` becomes a syntax-class-tagged code block; `tabular`
-  becomes a real HTML table (horizontally scrollable on small screens).
+  numbering; `lstlisting` becomes a syntax-class-tagged code block with a
+  Copy button; `tabular` becomes a real HTML table (horizontally scrollable
+  on small screens).
+- List entries can be referred to: `\item[(F1)]\label{f1}` makes `\ref{f1}`
+  a link reading "(F1)" (in any list), and a plain `enumerate` entry gives
+  its number. The course-template `hwgenie.sty` makes the PDF agree.
 - `align`/`gather`/`equation` are wrapped for KaTeX (as `aligned`/`gathered`;
   equation numbers are not preserved).
 - Preview locally: any static server, e.g.

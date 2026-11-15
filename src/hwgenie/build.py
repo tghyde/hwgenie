@@ -247,7 +247,7 @@ def build_html(
         result.warnings.append(tikz_warning)
     conv = HtmlConverter(variant_text, include_solutions=include_solutions,
                          section=section, extra_preamble=extra_preamble,
-                         tikz_svgs=tikz_svgs)
+                         tikz_svgs=tikz_svgs, copy_code=True)
     body = conv.convert()
     result.warnings.extend(sorted(set(conv.warnings)))
 

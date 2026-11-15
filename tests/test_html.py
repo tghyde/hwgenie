@@ -96,6 +96,74 @@ def test_lstlisting_verbatim_content():
     assert "# 100% \\end-proof &lt;html&gt; &amp; stuff" in html
 
 
+
+def test_code_copy_button_opt_in():
+    src = "\\begin{lstlisting}\nprint(1)\n\\end{lstlisting}"
+    _c, plain = convert(src)
+    assert "copy-code" not in plain
+    conv = HtmlConverter("\\begin{document}\n" + src + "\n\\end{document}",
+                         copy_code=True)
+    html = conv.convert()
+    assert '<div class="codeblock"><button type="button" class="copy-code"' in html
+    assert "<pre class=\"code\"><code>print(1)</code></pre></div>" in html
+
+
+def test_page_carries_copy_script():
+    from hwgenie.htmltemplate import COPY_CODE_JS, render_page
+    page = render_page("t", "c", "h", "<p>x</p>", {})
+    assert COPY_CODE_JS in page
+
+
+def test_ref_to_own_label_itemize_entry():
+    c, html = convert(
+        "\\begin{itemize}\n\\item[(F1)]\\label{f1} One.\n"
+        "\\item[(F2)] Two.\n\\item Three.\n\\end{itemize}\n"
+        "By~\\ref{f1}."
+    )
+    # The labels show (they were dropped before), plain entries keep a bullet.
+    assert '<li id="item-1"><span class="li-label">(F1)</span> One.</li>' in html
+    assert '<li><span class="li-label">(F2)</span> Two.</li>' in html
+    assert '<span class="li-label">\u2022</span> Three.' in html
+    assert '<a class="xref" href="#item-1">(F1)</a>' in html
+    assert not c.warnings
+
+
+def test_plain_itemize_unchanged():
+    _c, html = convert("\\begin{itemize}\n\\item a\n\\item b\n\\end{itemize}")
+    assert html.strip() == "<ul>\n<li>a</li>\n<li>b</li>\n</ul>"
+
+
+def test_ref_to_enumerate_entries():
+    c, html = convert(
+        "\\begin{enumerate}\n\\item\\label{a} x\n"
+        "\\item y\n\\begin{enumerate}\n\\item p\n\\item\\label{b} q\n"
+        "\\end{enumerate}\n\\end{enumerate}\n"
+        "See \\ref{a} and \\ref{b}."
+    )
+    assert '<a class="xref" href="#item-1">1</a>' in html
+    assert '<a class="xref" href="#item-4">2b</a>' in html
+    assert '<li id="item-4">q</li>' in html
+    assert not c.warnings
+
+
+def test_same_item_label_in_two_lists_links_each():
+    _c, html = convert(
+        "\\begin{itemize}\\item[(a)]\\label{x} p\\end{itemize}\n"
+        "\\begin{itemize}\\item[(a)]\\label{y} q\\end{itemize}\n"
+        "\\ref{x} \\ref{y}"
+    )
+    assert 'href="#item-1">(a)</a> <a class="xref" href="#item-2">(a)</a>' in html
+
+
+def test_label_in_plain_itemize_entry_names_theorem():
+    _c, html = convert(
+        "\\newtheorem{theorem}{Theorem}\n"
+        "\\begin{theorem}\n\\begin{itemize}\\item\\label{t} p\\end{itemize}\n"
+        "\\end{theorem}\n\\ref{t}"
+    )
+    assert 'href="#item-' not in html
+
+
 def test_tabular_to_table():
     _c, html = convert(
         "\\begin{center}\n\\begin{tabular}{|c|l|}\n\\hline\n"

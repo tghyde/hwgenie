@@ -149,8 +149,12 @@ class Flow:
 class HtmlConverter:
     def __init__(self, text: str, include_solutions: bool = True,
                  section: Optional[str] = None, extra_preamble: str = "",
-                 tikz_svgs: Optional[Dict[int, str]] = None):
+                 tikz_svgs: Optional[Dict[int, str]] = None,
+                 copy_code: bool = False):
         self.text = text
+        # Give each code listing a Copy button (pages built by render_page,
+        # which carries the button's script and style).
+        self.copy_code = copy_code
         self.extra_preamble = extra_preamble  # e.g. a shared hwgenie.sty
         # {offset of \begin{tikzpicture|tikzcd} -> inline SVG markup}
         self.tikz_svgs = tikz_svgs or {}
@@ -167,6 +171,13 @@ class HtmlConverter:
         self.counters: Dict[str, int] = defaultdict(int)
         self.eq_counter = 0
         self._label_ctx: List[Tuple[str, str]] = []
+        # \label keys that name a list entry -> that entry's anchor id (an
+        # entry's display, like "(a)", repeats across lists, so its anchor
+        # cannot be derived from the display the way a theorem's is).
+        self.label_anchors: Dict[str, str] = {}
+        self._item_ids: List[str] = []    # anchors of the entries being walked
+        self._enum_vals: List[int] = []   # counter of each enclosing enumerate
+        self.item_counter = 0
         self._collecting = False
         self._saw_qedhere = False
         self._in_solution = False
@@ -225,6 +236,9 @@ class HtmlConverter:
         self.counters = defaultdict(int)
         self.eq_counter = 0
         self._label_ctx = []
+        self._item_ids = []
+        self._enum_vals = []
+        self.item_counter = 0
         self.problem_anchors = []
         self.sections = []
         self.outline = []
@@ -263,6 +277,7 @@ class HtmlConverter:
         """Convert a standalone LaTeX fragment; returns inline-ish HTML."""
         sub = HtmlConverter(s, self.include_solutions, self.section)
         sub.labels = self.labels
+        sub.label_anchors = self.label_anchors
         nodes = texscan.parse_nodes(texscan.mask_verbatim(s))
         flow = Flow()
         sub.walk(nodes, flow)
@@ -538,6 +553,10 @@ class HtmlConverter:
                 key = _group_text(args[0]).strip()
                 if self._label_ctx:
                     self.labels[key] = self._label_ctx[-1]
+                    if self._label_ctx[-1][0] == "item":
+                        self.label_anchors[key] = self._item_ids[-1]
+                    else:
+                        self.label_anchors.pop(key, None)
                 elif self._last_sec:
                     # LaTeX semantics: a bare \label binds to the current
                     # sectional unit.
@@ -558,8 +577,13 @@ class HtmlConverter:
                 flow.inline("(??)" if name == "eqref" else "??")
                 return j
             kind, display = target
-            anchor = f"{kind}-{_anchor_slug(display)}"
-            link = f'<a class="xref" href="#{anchor}">{esc(display)}</a>'
+            item_anchor = self.label_anchors.get(key)
+            if item_anchor:
+                # A list entry's display is already HTML (it may hold math).
+                link = f'<a class="xref" href="#{item_anchor}">{display}</a>'
+            else:
+                anchor = f"{kind}-{_anchor_slug(display)}"
+                link = f'<a class="xref" href="#{anchor}">{esc(display)}</a>'
             flow.inline(f"({link})" if name == "eqref" else link)
             return j
         if name == "footnote":
@@ -869,31 +893,75 @@ class HtmlConverter:
                 items[-1][1].append(child)
             # content before the first \item (whitespace, comments) is dropped
 
-        def li_body(item_nodes) -> str:
+        # What a \label inside each entry refers to, as in LaTeX: an entry
+        # with its own label (\item[(F1)]) is referred to by that label, and
+        # a plain entry of an enumerate by its number; a plain itemize entry
+        # is no target, so a \label there names the enclosing unit.
+        targets: List[Optional[str]] = []
+        if ordered:
+            level = len(self._enum_vals) + 1
+            outer = list(self._enum_vals)
+            self._enum_vals.append(0)
+        count = 0
+        for label, _nl in items:
+            if label is not None:
+                targets.append(label)
+            elif ordered:
+                count += 1
+                targets.append(_enum_ref(outer + [count], level))
+            else:
+                targets.append(None)
+
+        def li(k: int, attrs: str = "", marker: str = "") -> str:
+            label, item_nodes = items[k]
+            target = targets[k]
+            if ordered and label is None:
+                self._enum_vals[-1] = sum(
+                    1 for lb, _ in items[: k + 1] if lb is None)
+            id_attr = ""
+            if target is not None:
+                self.item_counter += 1
+                anchor = f"item-{self.item_counter}"
+                self._label_ctx.append(("item", target))
+                self._item_ids.append(anchor)
+                if anchor in self.label_anchors.values():
+                    id_attr = f' id="{anchor}"'
             inner = Flow()
-            self.walk(item_nodes, inner)
-            return _unwrap_single_p(inner.result())
+            try:
+                self.walk(item_nodes, inner)
+            finally:
+                if target is not None:
+                    self._label_ctx.pop()
+                    self._item_ids.pop()
+            return f"<li{id_attr}{attrs}>{marker}{_unwrap_single_p(inner.result())}</li>"
 
-        if not ordered:
-            lis = "\n".join(f"<li>{li_body(nl)}</li>" for _label, nl in items)
-            return f"<ul>\n{lis}\n</ul>"
+        try:
+            if not ordered:
+                if all(label is None for label, _ in items):
+                    lis = "\n".join(li(k) for k in range(len(items)))
+                    return f"<ul>\n{lis}\n</ul>"
+            else:
+                parsed = [_parse_item_label(label) for label, _ in items]
+                if all(p is not None for p in parsed) and items:
+                    list_type = parsed[0][0]
+                    lis = []
+                    for k, (typ, value) in enumerate(parsed):
+                        val = f' value="{value}"' if value is not None else ""
+                        lis.append(li(k, val))
+                    type_attr = f' type="{list_type}"' if list_type != "1" else ""
+                    return f"<ol{type_attr}>\n" + "\n".join(lis) + "\n</ol>"
 
-        parsed = [_parse_item_label(label) for label, _ in items]
-        if all(p is not None for p in parsed) and items:
-            list_type = parsed[0][0]
+            # Own labels in an itemize, or mixed/unparseable ones in an
+            # enumerate: a definition-style list showing each label.
             lis = []
-            for (typ, value), (_label, nl) in zip(parsed, items):
-                val = f' value="{value}"' if value is not None else ""
-                lis.append(f"<li{val}>{li_body(nl)}</li>")
-            type_attr = f' type="{list_type}"' if list_type != "1" else ""
-            return f"<ol{type_attr}>\n" + "\n".join(lis) + "\n</ol>"
-
-        # Mixed/unparseable labels: definition-style list.
-        lis = []
-        for (label, nl) in items:
-            marker = f'<span class="li-label">{label}</span> ' if label else ""
-            lis.append(f"<li>{marker}{li_body(nl)}</li>")
-        return '<ul class="no-marker">\n' + "\n".join(lis) + "\n</ul>"
+            for k, (label, _nl) in enumerate(items):
+                shown = label if label is not None else ("" if ordered else "•")
+                marker = f'<span class="li-label">{shown}</span> ' if shown else ""
+                lis.append(li(k, "", marker))
+            return '<ul class="no-marker">\n' + "\n".join(lis) + "\n</ul>"
+        finally:
+            if ordered:
+                self._enum_vals.pop()
 
     # ------------------------------------------------------------- fig/table
 
@@ -1032,7 +1100,15 @@ class HtmlConverter:
         lm = re.search(r"language\s*=\s*([A-Za-z0-9+]+)", m.group(1) or "")
         if lm:
             lang = f' class="language-{lm.group(1).lower()}"'
-        return f'<pre class="code"><code{lang}>{esc(content)}</code></pre>'
+        pre = f'<pre class="code"><code{lang}>{esc(content)}</code></pre>'
+        if not self.copy_code:
+            return pre
+        return (
+            '<div class="codeblock">'
+            '<button type="button" class="copy-code" '
+            'aria-label="Copy code to clipboard" title="Copy code">Copy</button>'
+            f"{pre}</div>"
+        )
 
     def _theorem_html(self, n) -> str:
         spec = self.theorems[n.environmentname]
@@ -1409,6 +1485,34 @@ def _apply_accent(inner: str, combining: str) -> str:
 def _alt_from_filename(fname: str) -> str:
     stem = re.sub(r"\.[A-Za-z0-9]+$", "", fname.rsplit("/", 1)[-1])
     return stem.replace("_", " ").replace("-", " ")
+
+
+def _roman(n: int) -> str:
+    out = ""
+    for value, numeral in ((1000, "m"), (900, "cm"), (500, "d"), (400, "cd"),
+                           (100, "c"), (90, "xc"), (50, "l"), (40, "xl"),
+                           (10, "x"), (9, "ix"), (5, "v"), (4, "iv"), (1, "i")):
+        while n >= value:
+            out += numeral
+            n -= value
+    return out
+
+
+def _alph(n: int) -> str:
+    return chr(ord("a") + n - 1) if 1 <= n <= 26 else str(n)
+
+
+def _enum_ref(vals: List[int], level: int) -> str:
+    """What \\ref prints for a plain enumerate entry, with LaTeX's default
+    counters: 3 at the top level, then 3b, 3(b)ii and 3(b)iiD below it."""
+    vals = (vals + [0, 0, 0, 0])[:4]
+    if level <= 1:
+        return str(vals[0])
+    if level == 2:
+        return f"{vals[0]}{_alph(vals[1])}"
+    if level == 3:
+        return f"{vals[0]}({_alph(vals[1])}){_roman(vals[2])}"
+    return f"{vals[0]}({_alph(vals[1])}){_roman(vals[2])}{_alph(vals[3]).upper()}"
 
 
 def _parse_item_label(label: Optional[str]) -> Optional[Tuple[str, Optional[int]]]:
