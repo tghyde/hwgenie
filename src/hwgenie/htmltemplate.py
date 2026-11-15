@@ -278,24 +278,31 @@ pre.code {
 }
 pre.code code { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
 .codeblock { position: relative; }
-.codeblock > pre.code { margin-top: 0; padding-right: 4.5rem; }
+.codeblock > pre.code { margin-top: 0; padding-right: 3rem; }
 .copy-code {
   position: absolute;
   top: .45rem;
   right: .45rem;
-  padding: .15rem .55rem;
-  font: inherit;
-  font-size: .75rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.9rem;
+  height: 1.9rem;
+  padding: 0;
   color: var(--fg);
   background: var(--bg);
-  border: 1px solid currentColor;
-  border-radius: 4px;
+  border: 1px solid color-mix(in srgb, currentColor 35%, transparent);
+  border-radius: 6px;
   opacity: .6;
   cursor: pointer;
   user-select: none;
   -webkit-user-select: none;
 }
-.copy-code:hover, .copy-code:focus-visible { opacity: 1; }
+.copy-code svg { display: block; }
+.copy-code .icon-done { display: none; }
+.copy-code.copied .icon-copy { display: none; }
+.copy-code.copied .icon-done { display: block; }
+.copy-code:hover, .copy-code:focus-visible, .copy-code.copied { opacity: 1; }
 @media print { .copy-code { display: none; } }
 code {
   font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
@@ -473,10 +480,19 @@ COPY_CODE_JS = """<script>
     var p = navigator.clipboard && window.isSecureContext
       ? navigator.clipboard.writeText(text).catch(function() { return fallback(text); })
       : fallback(text);
-    p.then(function() { b.textContent = "Copied"; },
-           function() { b.textContent = "Selected"; selectCode(code); });
+    function say(label) {
+      b.title = label;
+      b.setAttribute("aria-label", label);
+    }
+    p.then(function() { b.classList.add("copied"); say("Copied"); },
+           function() { say("Code selected; press ⌘C or Ctrl+C to copy");
+                        selectCode(code); });
     clearTimeout(b._t);
-    b._t = setTimeout(function() { b.textContent = "Copy"; }, 1500);
+    b._t = setTimeout(function() {
+      b.classList.remove("copied");
+      b.title = "Copy code";
+      b.setAttribute("aria-label", "Copy code to clipboard");
+    }, 1500);
   });
   function selectCode(code) {
     var r = document.createRange();

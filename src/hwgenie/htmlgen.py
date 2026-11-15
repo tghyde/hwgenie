@@ -1106,7 +1106,8 @@ class HtmlConverter:
         return (
             '<div class="codeblock">'
             '<button type="button" class="copy-code" '
-            'aria-label="Copy code to clipboard" title="Copy code">Copy</button>'
+            'aria-label="Copy code to clipboard" title="Copy code">'
+            f"{COPY_ICON}{DONE_ICON}</button>"
             f"{pre}</div>"
         )
 
@@ -1485,6 +1486,19 @@ def _apply_accent(inner: str, combining: str) -> str:
 def _alt_from_filename(fname: str) -> str:
     stem = re.sub(r"\.[A-Za-z0-9]+$", "", fname.rsplit("/", 1)[-1])
     return stem.replace("_", " ").replace("-", " ")
+
+
+# The code listings' Copy button: the usual two-sheets icon, and a check
+# shown for a moment once the code is on the clipboard.
+_ICON_ATTRS = ('viewBox="0 0 24 24" width="16" height="16" fill="none" '
+               'stroke="currentColor" stroke-width="2" stroke-linecap="round" '
+               'stroke-linejoin="round" aria-hidden="true" focusable="false"')
+COPY_ICON = (f'<svg class="icon-copy" {_ICON_ATTRS}>'
+             '<rect x="9" y="9" width="13" height="13" rx="2"/>'
+             '<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>'
+             '</svg>')
+DONE_ICON = (f'<svg class="icon-done" {_ICON_ATTRS}>'
+             '<path d="M20 6 9 17l-5-5"/></svg>')
 
 
 def _roman(n: int) -> str:

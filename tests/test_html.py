@@ -105,6 +105,8 @@ def test_code_copy_button_opt_in():
                          copy_code=True)
     html = conv.convert()
     assert '<div class="codeblock"><button type="button" class="copy-code"' in html
+    assert '<svg class="icon-copy"' in html and '<svg class="icon-done"' in html
+    assert ">Copy<" not in html
     assert "<pre class=\"code\"><code>print(1)</code></pre></div>" in html
 
 
