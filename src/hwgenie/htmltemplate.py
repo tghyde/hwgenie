@@ -250,6 +250,9 @@ figure.fig figcaption {
   color: var(--muted);
   margin-top: .4rem;
 }
+figure.fig .cap-label { font-weight: 600; color: var(--fg); }
+figure.tablefig .table-wrap { margin: 0 auto; }
+figure.tablefig.cap-above figcaption { margin: 0 0 .5rem; }
 
 /* Inline TikZ diagrams (pre-rendered SVG).  Black strokes/fills were
    rewritten to currentColor, so the diagram follows the theme.  White is

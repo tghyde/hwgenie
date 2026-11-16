@@ -166,6 +166,51 @@ def test_label_in_plain_itemize_entry_names_theorem():
     assert 'href="#item-' not in html
 
 
+def test_table_caption_numbered_and_linked():
+    c, html = convert(
+        "\\begin{table}[h]\n\\centering\n\\begin{tabular}{lc}\na & b \\\\\n"
+        "c & d\n\\end{tabular}\n\\caption{Proportions.}\\label{tab:p}\n"
+        "\\end{table}\nSee Table~\\ref{tab:p}."
+    )
+    assert '<figure class="fig tablefig" id="table-1">' in html
+    # Caption below the table, as in the source.
+    assert html.index("<table>") < html.index("<figcaption>")
+    assert '<span class="cap-label"><span class="nw">Table 1:</span></span> Proportions.</figcaption>' in html
+    assert '<a class="xref" href="#table-1">1</a>' in html
+    assert not c.warnings
+
+
+def test_table_caption_above_and_short_form():
+    _c, html = convert(
+        "\\begin{table}\\caption[Short]{Long $x$.}\\label{t}\n"
+        "\\begin{tabular}{l}\nz\n\\end{tabular}\n\\end{table}\n"
+        "\\begin{table}\\begin{tabular}{l}\nq\n\\end{tabular}\\caption{B}\\end{table}"
+    )
+    assert 'class="fig tablefig cap-above" id="table-1"' in html
+    assert html.index("<figcaption>") < html.index("<table>")
+    assert "Short" not in html and "Long" in html
+    assert 'id="table-2"' in html
+
+
+def test_table_without_caption_is_unnumbered():
+    c, html = convert("\\begin{table}\\begin{tabular}{l}\nq\n\\end{tabular}\\end{table}")
+    assert "figure" not in html and "Table" not in html
+    assert not c.warnings
+
+
+def test_figure_caption_numbered_and_linked():
+    _c, html = convert(
+        "\\begin{figure}\\centering\\includegraphics{a.png}"
+        "\\caption{A picture.}\\label{fig:a}\\end{figure}\n"
+        "\\begin{figure}\\includegraphics{b.png}\\end{figure}\n"
+        "Figure~\\ref{fig:a}."
+    )
+    assert '<figure class="fig" id="figure-1"><img src="a.png"' in html
+    assert '<span class="nw">Figure 1:</span></span> A picture.</figcaption>' in html
+    assert '<figure class="fig"><img src="b.png"' in html
+    assert '<a class="xref" href="#figure-1">1</a>' in html
+
+
 def test_tabular_to_table():
     _c, html = convert(
         "\\begin{center}\n\\begin{tabular}{|c|l|}\n\\hline\n"

@@ -188,5 +188,6 @@ def test_figure_embedded_tikz_uses_svg():
     conv = HtmlConverter(text, tikz_svgs={pos: "<svg>W</svg>"})
     html = conv.convert()
     assert '<div class="tikz-figure"><svg>W</svg></div>' in html
-    assert "<figcaption>A wheel</figcaption>" in html
+    assert '<span class="nw">Figure 1:</span></span> A wheel</figcaption>' in html
+    assert '<figure class="fig" id="figure-1">' in html
     assert "see the PDF" not in html

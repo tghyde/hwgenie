@@ -33,6 +33,9 @@ automation arrives in Phase 3.
 - List entries can be referred to: `\item[(F1)]\label{f1}` makes `\ref{f1}`
   a link reading "(F1)" (in any list), and a plain `enumerate` entry gives
   its number. The course-template `hwgenie.sty` makes the PDF agree.
+- A `table` or `figure` with a `\caption` is numbered as in LaTeX ("Table 1:",
+  "Figure 1:", the caption above or below as in the source), and a `\label`
+  inside it makes `\ref` link to it. Without a caption it stays unnumbered.
 - `align`/`gather`/`equation` are wrapped for KaTeX (as `aligned`/`gathered`;
   equation numbers are not preserved).
 - Preview locally: any static server, e.g.

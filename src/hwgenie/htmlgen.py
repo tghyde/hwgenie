@@ -178,6 +178,10 @@ class HtmlConverter:
         self._item_ids: List[str] = []    # anchors of the entries being walked
         self._enum_vals: List[int] = []   # counter of each enclosing enumerate
         self.item_counter = 0
+        # Captioned table and figure environments, numbered as LaTeX does
+        # (one counter each for the whole document).
+        self.float_counts: Dict[str, int] = defaultdict(int)
+        self._in_float = 0
         self._collecting = False
         self._saw_qedhere = False
         self._in_solution = False
@@ -239,6 +243,8 @@ class HtmlConverter:
         self._item_ids = []
         self._enum_vals = []
         self.item_counter = 0
+        self.float_counts = defaultdict(int)
+        self._in_float = 0
         self.problem_anchors = []
         self.sections = []
         self.outline = []
@@ -547,6 +553,9 @@ class HtmlConverter:
             return i + 1
         if name in ACCENT_MACROS:
             return self._accent(nodes, i, flow)
+        if name == "caption" and self._in_float:
+            _arg, j = self._caption_arg(nodes, i)
+            return j          # placed by the enclosing table/figure
         if name == "label":
             args, j = self._macro_args(nodes, i, 1)
             if args:
@@ -820,6 +829,8 @@ class HtmlConverter:
                 flow.block(f'<div class="center">\n{content}\n</div>')
         elif name in ("figure", "figure*"):
             flow.block(self._figure_html(n))
+        elif name in ("table", "table*"):
+            flow.block(self._table_html(n))
         elif name in ("tabular", "tabular*"):
             flow.block(self._tabular_html(n))
         elif name in CODE_ENVS:
@@ -965,44 +976,139 @@ class HtmlConverter:
 
     # ------------------------------------------------------------- fig/table
 
+    def _find_caption(self, nodes) -> Optional[Tuple[List, int]]:
+        """The first \\caption among `nodes` or inside their environments
+        and groups, as (node list, index)."""
+        for k, c in enumerate(nodes or []):
+            if isinstance(c, LatexMacroNode) and c.macroname == "caption":
+                return nodes, k
+            if isinstance(c, (LatexEnvironmentNode, LatexGroupNode)):
+                found = self._find_caption(c.nodelist)
+                if found:
+                    return found
+        return None
+
+    def _caption_arg(self, nodes, k: int) -> Tuple[Optional[LatexGroupNode], int]:
+        """The long-form argument of the \\caption at nodes[k] (skipping a
+        [short] form) and the index after it.  pylatexenc has no argument
+        spec for \\caption, so the [short] form is read off the text."""
+        n = nodes[k]
+        parsed = self._parsed_group_args(n)
+        if parsed:
+            longs = [a for a in parsed
+                     if getattr(a, "delimiters", ("{", "}"))[0] == "{"]
+            return (longs or parsed)[-1], k + 1
+        t, p = self.text, n.pos + n.len
+        while p < len(t) and t[p] in " \t\n":
+            p += 1
+        if p < len(t) and t[p] == "[":
+            depth, q = 0, p
+            while q < len(t) and not (t[q] == "]" and depth == 0):
+                depth += {"{": 1, "}": -1}.get(t[q], 0)
+                q += 1
+            p = q + 1
+        j = k + 1
+        while j < len(nodes) and nodes[j].pos is not None and nodes[j].pos < p:
+            j += 1
+        groups, j = self._take_groups(nodes, j, 1)
+        return (groups[0] if groups else None), j
+
+    def _caption_html(self, found: Tuple[List, int]) -> str:
+        arg, _j = self._caption_arg(*found)
+        return self.convert_inline(arg.nodelist).strip() if arg else ""
+
+    def _start_float(self, kind: str, nodes) -> Tuple[Optional[str], str]:
+        """Number a table or figure that has a caption, as LaTeX does, and
+        make \\label inside it name it.  Returns (number, caption html);
+        the caller pops the label context when the number is not None."""
+        found = self._find_caption(nodes)
+        if not found:
+            return None, ""
+        self.float_counts[kind] += 1
+        num = str(self.float_counts[kind])
+        self._label_ctx.append((kind, num))
+        return num, self._caption_html(found)
+
+    @staticmethod
+    def _figcaption(name: str, num: Optional[str], caption: str) -> str:
+        if num is None:
+            return f"<figcaption>{caption}</figcaption>" if caption else ""
+        return (f'<figcaption><span class="cap-label">{name}&nbsp;{num}:</span>'
+                f"{' ' + caption if caption else ''}</figcaption>")
+
+    def _table_html(self, n) -> str:
+        kids = [c for c in (n.nodelist or []) if c is not None]
+        num, caption = self._start_float("table", kids)
+        self._in_float += 1
+        inner = Flow()
+        try:
+            self.walk(kids, inner)
+        finally:
+            self._in_float -= 1
+            if num is not None:
+                self._label_ctx.pop()
+        body = inner.result()
+        if num is None:
+            return f'<div class="center">\n{body}\n</div>' if body else ""
+        # The caption goes where the source puts it: above the table when
+        # \\caption comes before it, below otherwise.
+        found = self._find_caption(kids)
+        cap_pos = found[0][found[1]].pos
+        content = [c.pos for c in kids
+                   if not (isinstance(c, LatexCharsNode) and not c.chars.strip())
+                   and not (isinstance(c, LatexMacroNode) and c.macroname in
+                            ("caption", "label", "centering", "small",
+                             "footnotesize", "scriptsize"))
+                   and not isinstance(c, LatexCommentNode)]
+        above = bool(content) and cap_pos < min(content)
+        cap = self._figcaption("Table", num, caption)
+        parts = [cap, body] if above else [body, cap]
+        cls = "fig tablefig cap-above" if above else "fig tablefig"
+        return (f'<figure class="{cls}" id="table-{num}">\n'
+                + "\n".join(parts) + "\n</figure>")
+
     def _figure_html(self, n) -> str:
         imgs: List[str] = []
-        caption = ""
-        i = 0
         nl = [c for c in (n.nodelist or []) if c is not None]
-        while i < len(nl):
-            c = nl[i]
-            if isinstance(c, LatexMacroNode) and c.macroname == "includegraphics":
-                args, i = self._macro_args(nl, i, 2)
-                for a in reversed(args):
-                    t = _group_text(a).strip()
-                    if t and "=" not in t:
-                        imgs.append(t)
-                        break
-                continue
-            if isinstance(c, LatexMacroNode) and c.macroname == "caption":
-                args, i = self._macro_args(nl, i, 1)
-                if args:
-                    caption = self.convert_inline(args[0].nodelist)
-                continue
-            i += 1
+        num, caption = self._start_float("figure", nl)
+        try:
+            i = 0
+            while i < len(nl):
+                c = nl[i]
+                if isinstance(c, LatexMacroNode) and c.macroname == "includegraphics":
+                    args, i = self._macro_args(nl, i, 2)
+                    for a in reversed(args):
+                        t = _group_text(a).strip()
+                        if t and "=" not in t:
+                            imgs.append(t)
+                            break
+                    continue
+                if isinstance(c, LatexMacroNode) and c.macroname == "label":
+                    # Registers the label against this figure.
+                    i = self.macro(nl, i, Flow())
+                    continue
+                i += 1
+        finally:
+            if num is not None:
+                self._label_ctx.pop()
+        id_attr = f' id="figure-{num}"' if num is not None else ""
+        cap = self._figcaption("Figure", num, caption)
         self.images.extend(imgs)
         if not imgs and "tikzpicture" in self.text[n.pos : n.pos + n.len]:
             # A pre-rendered SVG for the embedded tikzpicture, if any.
             svgs = [self.tikz_svgs[p] for p in sorted(self.tikz_svgs)
                     if n.pos <= p < n.pos + n.len]
             if svgs:
-                cap = f"<figcaption>{caption}</figcaption>" if caption else ""
                 body = "".join(f'<div class="tikz-figure">{s}</div>'
                                for s in svgs)
-                return f'<figure class="fig">{body}{cap}</figure>'
+                return f'<figure class="fig"{id_attr}>{body}{cap}</figure>'
             if not self._collecting:
                 self.warnings.append(
                     "figure with tikzpicture rendered as a see-the-PDF "
                     "placeholder."
                 )
             return (
-                '<div class="thmblock" style="text-align:center">'
+                f'<div class="thmblock" style="text-align:center"{id_attr}>'
                 "<em>(diagram — see the PDF version)</em></div>"
             )
         parts = [
@@ -1010,8 +1116,7 @@ class HtmlConverter:
             f'alt="{html_mod.escape(_alt_from_filename(f))}">'
             for f in imgs
         ]
-        cap = f"<figcaption>{caption}</figcaption>" if caption else ""
-        return f'<figure class="fig">{"".join(parts)}{cap}</figure>'
+        return f'<figure class="fig"{id_attr}>{"".join(parts)}{cap}</figure>'
 
     _DISPLAY_TABULAR_RE = re.compile(
         r"^\s*(?:\\(?:small|footnotesize|scriptsize|normalsize|large|"
