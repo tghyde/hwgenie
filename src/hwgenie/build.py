@@ -18,7 +18,7 @@ from typing import Dict, List, Optional
 
 from . import compile as texcompile
 from . import texscan, tikzsvg, transforms
-from .courseconfig import find_course_config, load_course_config
+from .courseconfig import find_course_config, lesson_labels, load_course_config
 from .htmlgen import HtmlConverter
 from .htmltemplate import DEFAULT_THEME_CSS, render_page, scrollbar_html, toc_html
 from .katexmacros import extract_macros
@@ -56,14 +56,14 @@ def read_preamble(sty_dir: Path) -> str:
 
 
 def merge_course_config(meta: Metadata, source_dir: Path) -> Metadata:
-    """Fill missing course/semester from a course.yml found near the source."""
-    if meta.course and meta.semester:
-        return meta
+    """Fill missing course/semester (and the lesson label) from a course.yml
+    found near the source."""
     cfg_path = find_course_config(source_dir)
     if cfg_path:
         cfg = load_course_config(cfg_path)
         meta.course = meta.course or cfg.get("course")
         meta.semester = meta.semester or cfg.get("semester")
+        meta.lesson_label = lesson_labels(cfg)[0]
     return meta
 
 
@@ -251,7 +251,7 @@ def build_html(
     body = conv.convert()
     result.warnings.extend(sorted(set(conv.warnings)))
 
-    label = {"lesson": f"Lesson {meta.number}",
+    label = {"lesson": f"{meta.lesson_label} {meta.number}",
              "syllabus": "",
              "handout": f"Handout {meta.number}".strip() if meta.number else "",
              }.get(meta.doc_type, f"Problem Set {meta.number}")
@@ -275,7 +275,7 @@ def build_html(
     # problems in document order.  Wide viewports show it as a sidebar that
     # also carries the back link and page label; narrow ones tuck it behind
     # the sticky bar's "Contents" button.
-    kind = {"lesson": "Lesson", "syllabus": "Syllabus",
+    kind = {"lesson": meta.lesson_label, "syllabus": "Syllabus",
             "handout": "Handout"}.get(meta.doc_type, "PS")
     bar_label = f"{kind} {meta.number}".strip()
     if include_solutions and meta.doc_type in ("problemset", "handout"):
@@ -342,6 +342,7 @@ def build(
     cfg = load_course_config(cfg_path) if cfg_path else {}
     meta.course = meta.course or cfg.get("course")
     meta.semester = meta.semester or cfg.get("semester")
+    meta.lesson_label = lesson_labels(cfg)[0]
     sty_dir = cfg_path.parent if cfg_path else source_path.parent
     extra_preamble = read_preamble(sty_dir)
     theme = theme_from_config(cfg)

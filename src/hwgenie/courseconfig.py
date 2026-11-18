@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 LINE = re.compile(r"^([A-Za-z][\w.-]*)\s*:\s*(.*)$")
 
@@ -31,6 +31,18 @@ def parse_course_config(text: str) -> Dict[str, str]:
         if value:
             cfg[m.group(1).lower()] = value
     return cfg
+
+
+def lesson_labels(cfg: Dict[str, str]) -> Tuple[str, str]:
+    """(singular, plural) name for lesson-type documents.
+
+    course.yml ``lesson_label: Chapter`` renames them everywhere on the site
+    ("Chapter 4", "Chapters", "Chapter PDF"); the plural is the label + "s"
+    unless ``lesson_label_plural`` says otherwise.  Default: Lesson/Lessons.
+    """
+    single = (cfg.get("lesson_label") or "").strip() or "Lesson"
+    plural = (cfg.get("lesson_label_plural") or "").strip() or single + "s"
+    return single, plural
 
 
 def find_course_config(start_dir: Path, max_up: int = 4) -> Optional[Path]:

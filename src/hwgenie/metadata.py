@@ -54,6 +54,7 @@ class Metadata:
     fmt: str = "v2"      # "v2" or "legacy"
     span: Tuple[int, int] = (0, 0)  # char span of the block (for removal)
     raw: dict = field(default_factory=dict)
+    lesson_label: str = "Lesson"  # course.yml lesson_label (e.g. "Chapter")
 
 
 def _line_spans(text: str):

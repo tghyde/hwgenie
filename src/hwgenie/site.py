@@ -45,7 +45,7 @@ from .build import (
 )
 import json
 
-from .courseconfig import load_course_config
+from .courseconfig import lesson_labels, load_course_config
 from .htmltemplate import (
     CSS,
     FOOTER_HTML,
@@ -162,7 +162,8 @@ def _tag(meta: Metadata) -> str:
 
 def _page_pdf_name(meta: Metadata, n: str, solutions: bool = False) -> str:
     if meta.doc_type == "lesson":
-        return f"Lesson{n}-{_tag(meta)}.pdf"
+        stem = re.sub(r"[^A-Za-z0-9]+", "", meta.lesson_label) or "Lesson"
+        return f"{stem}{n}-{_tag(meta)}.pdf"
     if meta.doc_type == "handout":
         if meta.number:
             stem = f"Handout{_slug(meta.number)}"
@@ -341,6 +342,7 @@ def _build_assignment(
     meta = parse_metadata(texscan.mask_verbatim(text))
     meta.course = meta.course or cfg.get("course")
     meta.semester = meta.semester or cfg.get("semester")
+    meta.lesson_label = lesson_labels(cfg)[0]
     require_course_fields(meta)
     if meta.doc_type not in ("problemset", "lesson", "syllabus", "handout"):
         result.warnings.append(
@@ -874,10 +876,11 @@ def render_index(
     if len(reading_cards) > 1:
         reading_cards.append("</tbody>\n</table>")
 
+    lesson_word, lessons_word = lesson_labels(cfg)
     lesson_cards = []
     for a in lessons:
         num = e(a.meta.number)
-        label = f"Lesson {num}"
+        label = f"{e(lesson_word)} {num}"
         if a.meta.title:
             label += f": {e(latex_plain(a.meta.title))}"
         slug = _slug(a.meta.number)
@@ -886,8 +889,8 @@ def render_index(
             f'<div class="assignment">\n'
             f'<h2><a href="{a.rel_url}">{label}</a>{due_span(a)}</h2>\n'
             f'<div class="links">'
-            f'{view_box(a.rel_url, f"Lesson {num}")} '
-            f'{file_box(f"{a.rel_url}{pdf}", "Lesson PDF")}</div>\n</div>'
+            f'{view_box(a.rel_url, f"{e(lesson_word)} {num}")} '
+            f'{file_box(f"{a.rel_url}{pdf}", f"{e(lesson_word)} PDF")}</div>\n</div>'
         )
 
     cards = []
@@ -930,7 +933,7 @@ def render_index(
         )
     if lesson_cards:
         sections.append(
-            '<h2 class="index-head" id="lessons">Lessons</h2>\n'
+            f'<h2 class="index-head" id="lessons">{e(lessons_word)}</h2>\n'
             + "\n".join(lesson_cards)
         )
     if cards:
@@ -948,7 +951,7 @@ def render_index(
     if reading_cards:
         jumps.append(("Readings", "readings"))
     if lesson_cards:
-        jumps.append(("Lessons", "lessons"))
+        jumps.append((lessons_word, "lessons"))
     if cards:
         jumps.append(("Problem Sets", "problem-sets"))
     toc = toc_html([(1, "", e(name), anchor) for name, anchor in jumps])
